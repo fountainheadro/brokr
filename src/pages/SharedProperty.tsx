@@ -113,6 +113,13 @@ export const SharedProperty: React.FC = () => {
     };
   }, []);
 
+  useEffect(() => {
+    if (lead) {
+      const pageTitle = lead.title || lead.extractedData?.crmData?.descriere?.titlu || "Proprietate imobiliară";
+      document.title = `${pageTitle} • brokr.`;
+    }
+  }, [lead]);
+
   if (loading) {
     return (
       <div className="fixed inset-0 overflow-y-auto bg-gray-50 flex flex-col items-center justify-center p-6 text-center">

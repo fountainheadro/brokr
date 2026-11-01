@@ -1,8 +1,13 @@
 // Automated Real Estate CRM Versioning System
-// Format: X.YY.ZZZ (e.g. 1.42.123)
+// Format: X.Y.ZZZ (e.g. 0.0.001)
 // Rules:
-// - Third group (Z): numbered from 1 to 1000.
-// - Second group (Y): increments by 1 whenever third group increases by 1% (10 units out of 1000).
+// - Base reset version: 0.0.001
+// - Third group (Z): numbered from 1 to 1000, zero-padded to 3 digits (e.g. 001, 010, 123).
+// - Each distinct modification or addition in user requests adds points to group 3:
+//   * Small changes: 1 - 10 points
+//   * Medium changes: 10 - 100 points
+//   * Large/massive changes: 100 - 1000 points
+// - Second group (Y): increments by 1 point whenever third group advances by 1% (10 points out of 1000).
 //   When Y reaches 100, Y resets to 0 and first group (X) increments by 1.
 // - Followed by the last update date and time in parentheses: (DD.MM.YYYY, HH:mm).
 
@@ -13,19 +18,21 @@ export interface VersionData {
   lastUpdated: string; // ISO string
 }
 
-const STORAGE_KEY = "brokr_app_version_state";
+export type UpdateComplexity = 'small' | 'medium' | 'large' | number;
 
-// Initial base state matching the user's reference: 1.42.123
+const STORAGE_KEY = "brokr_app_version_state_v8";
+
+// Initial version state updated (+25 pts to group 3)
 const DEFAULT_VERSION: VersionData = {
-  major: 1,
-  minor: 42,
-  patch: 123,
-  lastUpdated: "2026-10-30T16:10:00.000Z"
+  major: 0,
+  minor: 11,
+  patch: 116, // formats to "116"
+  lastUpdated: new Date().toISOString()
 };
 
 /**
  * Normalizes version data to ensure all mathematical rules hold:
- * - If patch exceeds 1000, it resets to 1 and increments minor.
+ * - If patch exceeds 1000, it wraps around from 1 to 1000 and increments minor.
  * - If minor reaches 100, minor resets to 0 and major increments.
  */
 function normalizeVersion(data: VersionData): VersionData {
@@ -34,7 +41,7 @@ function normalizeVersion(data: VersionData): VersionData {
   if (patch > 1000) {
     const overflow = Math.floor((patch - 1) / 1000);
     patch = ((patch - 1) % 1000) + 1;
-    minor += overflow * 10;
+    minor += overflow * 100;
   }
 
   if (minor >= 100) {
@@ -49,13 +56,24 @@ export function getCurrentVersion(): {
   major: number;
   minor: number;
   patch: number;
-  versionCode: string; // "1.42.123"
-  dateFormatted: string; // "30.10.2026, 16:10"
-  fullDisplay: string; // "1.42.123 (30.10.2026, 16:10)"
+  versionCode: string; // "0.0.001"
+  dateFormatted: string; // "01.11.2026, 11:15"
+  fullDisplay: string; // "0.0.001 (01.11.2026, 11:15)"
 } {
   let stored: VersionData = DEFAULT_VERSION;
 
   try {
+    // Clear legacy keys if any
+    if (localStorage.getItem("brokr_app_version_state")) {
+      localStorage.removeItem("brokr_app_version_state");
+    }
+    if (localStorage.getItem("brokr_app_version_state_v2")) {
+      localStorage.removeItem("brokr_app_version_state_v2");
+    }
+    if (localStorage.getItem("brokr_app_version_state_v3")) {
+      localStorage.removeItem("brokr_app_version_state_v3");
+    }
+
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       stored = normalizeVersion(JSON.parse(raw));
@@ -67,7 +85,7 @@ export function getCurrentVersion(): {
     stored = DEFAULT_VERSION;
   }
 
-  const d = new Date(stored.lastUpdated);
+  const d = new Date(stored.lastUpdated || Date.now());
   const day = String(d.getDate()).padStart(2, "0");
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = d.getFullYear();
@@ -75,8 +93,10 @@ export function getCurrentVersion(): {
   const minutes = String(d.getMinutes()).padStart(2, "0");
   const dateFormatted = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
-  const versionCode = `${stored.major}.${stored.minor}.${stored.patch}`;
-  const fullDisplay = `${versionCode} (${dateFormatted})`;
+  // Third group is zero-padded to 3 digits (e.g. 001)
+  const patchFormatted = String(stored.patch).padStart(3, "0");
+  const versionCode = `${stored.major}.${stored.minor}.${patchFormatted}`;
+  const fullDisplay = `${versionCode} / 145 ${dateFormatted}`;
 
   return {
     major: stored.major,
@@ -89,12 +109,40 @@ export function getCurrentVersion(): {
 }
 
 /**
- * Registers an update event, automatically calculating the new version and timestamp.
- * - increments patch by step (default 1).
- * - every 10 points (1% of 1000) in patch, minor advances by 1.
- * - when minor reaches 100, minor resets to 0 and major advances by 1.
+ * Resets version explicitly to 0.0.001
  */
-export function recordUpdate(step = 1): ReturnType<typeof getCurrentVersion> {
+export function resetVersionToInitial(): ReturnType<typeof getCurrentVersion> {
+  const reset: VersionData = {
+    major: 0,
+    minor: 0,
+    patch: 1,
+    lastUpdated: new Date().toISOString()
+  };
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(reset));
+  } catch {}
+  return getCurrentVersion();
+}
+
+/**
+ * Registers an update event, calculating points by complexity or direct number:
+ * - small: 1-10 points (default: 3)
+ * - medium: 10-100 points (default: 25)
+ * - large: 100-1000 points (default: 200)
+ * - number: exact points added
+ */
+export function recordUpdate(complexity: UpdateComplexity = 1): ReturnType<typeof getCurrentVersion> {
+  let step = 1;
+  if (typeof complexity === 'number') {
+    step = Math.max(1, complexity);
+  } else if (complexity === 'small') {
+    step = 5;
+  } else if (complexity === 'medium') {
+    step = 25;
+  } else if (complexity === 'large') {
+    step = 200;
+  }
+
   let stored = DEFAULT_VERSION;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -105,7 +153,7 @@ export function recordUpdate(step = 1): ReturnType<typeof getCurrentVersion> {
   let minor = stored.minor;
   let major = stored.major;
 
-  // Check 1% thresholds (1% of 1000 = 10 units)
+  // Check 1% thresholds (every 10 points in patch = 1% of 1000, so minor increments by 1)
   const prevPercent = Math.floor(stored.patch / 10);
   const newPercent = Math.floor(patch / 10);
   const percentDelta = newPercent - prevPercent;

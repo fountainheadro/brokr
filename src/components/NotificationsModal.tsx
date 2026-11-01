@@ -12,7 +12,9 @@ import {
   Compass, 
   Trash2,
   Search,
-  Filter
+  Filter,
+  ClipboardList,
+  Building2
 } from "lucide-react";
 import { Notification, notificationsService } from "../services/notificationsService";
 import { useNotifications } from "./NotificationProvider";
@@ -21,6 +23,7 @@ interface NotificationsModalProps {
   isOpen: boolean;
   onClose: () => void;
   notifications: Notification[];
+  onSelectNotification?: (notification: Notification) => void;
 }
 
 type FilterType = 'toate' | 'necitite' | 'lead' | 'viewing' | 'system';
@@ -28,7 +31,8 @@ type FilterType = 'toate' | 'necitite' | 'lead' | 'viewing' | 'system';
 export const NotificationsModal: React.FC<NotificationsModalProps> = ({ 
   isOpen, 
   onClose, 
-  notifications 
+  notifications,
+  onSelectNotification
 }) => {
   const { openSettings } = useNotifications();
   const [activeFilter, setActiveFilter] = useState<FilterType>('toate');
@@ -96,6 +100,20 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
 
   const getItemVisuals = (type: string) => {
     switch (type) {
+      case 'cerere':
+        return {
+          icon: <ClipboardList size={15} className="text-amber-700" />,
+          boxStyle: "bg-amber-50 text-amber-700 border border-amber-200",
+          badgeStyle: "border-amber-200 bg-amber-50 text-amber-700",
+          label: "Cerere"
+        };
+      case 'proprietate':
+        return {
+          icon: <Building2 size={15} className="text-[#051D35]" />,
+          boxStyle: "bg-[#051D35]/10 text-[#051D35] border border-[#051D35]/20",
+          badgeStyle: "border-[#051D35]/20 bg-[#051D35]/5 text-[#051D35]",
+          label: "Imobil"
+        };
       case 'lead':
         return {
           icon: <Inbox size={15} className="text-emerald-700" />,
@@ -246,7 +264,11 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                   return (
                     <div
                       key={notification.id || idx}
-                      onClick={() => handleMarkAsRead(notification)}
+                      onClick={() => {
+                        handleMarkAsRead(notification);
+                        onSelectNotification?.(notification);
+                        onClose();
+                      }}
                       className={`group w-full px-4 py-3 flex items-start justify-between transition-colors cursor-pointer select-none text-left relative ${
                         notification.read 
                           ? 'bg-white hover:bg-gray-50/70 opacity-75' 

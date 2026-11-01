@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { X, Globe, Zap, Loader2, Building2 } from "lucide-react";
 import { leadsService } from "../services/leadsService";
 import { notificationsService } from "../services/notificationsService";
+import { auth } from "../lib/firebase";
 import toast from "react-hot-toast";
 
 interface AddLeadModalProps {
@@ -58,6 +59,10 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
 
       // 2. Save directly using crawler-extracted data (Zero AI spend, instant & robust)
       setStatus("Salvare...");
+      const currentUser = auth.currentUser;
+      const creatorName = currentUser?.displayName || (currentUser?.email ? currentUser.email.split('@')[0] : "Consilier Imobiliar");
+      const creatorEmail = currentUser?.email || "";
+
       await leadsService.addLead({
         url: url.trim(),
         title: title || "Fără titlu",
@@ -67,9 +72,13 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
         ownerPhone: ownerPhone || "Nespecificat",
         transactionType: (transactionType as any) || (leadRole === 'Chirias' ? 'Închiriere' : 'Vânzare'),
         categoria: categoria || "Apartament",
-        status: "Nevalidata",
+        status: "Noi",
         leadType: leadRole,
         coverImage: coverImage || null,
+        createdByName: creatorName,
+        createdByEmail: creatorEmail,
+        author: creatorName,
+        agent: creatorName,
         extractedData: crmData ? {
           crmData: crmData,
           markdownMarketing: crmData.descriere?.continut || "",

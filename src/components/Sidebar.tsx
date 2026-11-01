@@ -73,8 +73,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Compute live item counts based on leads, contacts, and personal
   const counts = React.useMemo(() => {
     const isCerere = (l: Lead) => isCerereLead(l);
-    const isLeadItem = (l: Lead) => l.status !== 'Sterse';
-    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Sterse';
+    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && (l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
+    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Noi' && l.status !== 'Pierdute' && l.status !== 'Sterse';
 
     return {
       leads: leads.filter(isLeadItem).length,
@@ -135,27 +135,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Main navigation container: Lead-uri, Cereri, Proprietăți, Clienți, Personal */}
-      <div className="flex-1 overflow-y-auto no-scrollbar p-2 space-y-1">
+      {/* Main navigation container: Lead-uri, Cereri, Imobile, Contacte, Personal */}
+      <div className="flex-1 overflow-y-auto no-scrollbar p-0 divide-y divide-gray-100 font-sans">
         {!isCollapsed ? (
           <>
             {/* Lead-uri */}
             <button
               type="button"
               onClick={() => handleItemClick('Lead-uri')}
-              className={`w-full flex items-center justify-between px-3 py-2 text-[12px] rounded-md transition-colors cursor-pointer select-none text-left ${
+              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 activeSubItem === 'Lead-uri' && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-white font-medium shadow-xs'
-                  : 'text-gray-600 hover:text-[#051D35] hover:bg-gray-100/70'
+                  ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
             >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Inbox size={14} className={activeSubItem === 'Lead-uri' && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-400'} />
-                <span className="truncate">Lead-uri</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <Inbox size={18} className={activeSubItem === 'Lead-uri' && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-500'} />
+                <span className="text-[13px] font-sans font-medium truncate">Lead-uri</span>
               </div>
               {counts.leads > 0 && (
-                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                  activeSubItem === 'Lead-uri' && location.pathname !== '/calendar' ? 'bg-white/15 text-[#BE9662]' : 'bg-gray-100 text-gray-500'
+                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                  activeSubItem === 'Lead-uri' && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.leads}
                 </span>
@@ -166,19 +166,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Cereri')}
-              className={`w-full flex items-center justify-between px-3 py-2 text-[12px] rounded-md transition-colors cursor-pointer select-none text-left ${
+              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 activeSubItem === 'Cereri' && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-white font-medium shadow-xs'
-                  : 'text-gray-600 hover:text-[#051D35] hover:bg-gray-100/70'
+                  ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
             >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <ClipboardList size={14} className={activeSubItem === 'Cereri' && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-400'} />
-                <span className="truncate">Cereri</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <ClipboardList size={18} className={activeSubItem === 'Cereri' && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-500'} />
+                <span className="text-[13px] font-sans font-medium truncate">Cereri</span>
               </div>
               {counts.cereri > 0 && (
-                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                  activeSubItem === 'Cereri' && location.pathname !== '/calendar' ? 'bg-white/15 text-[#BE9662]' : 'bg-gray-100 text-gray-500'
+                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                  activeSubItem === 'Cereri' && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.cereri}
                 </span>
@@ -189,19 +189,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Imobile')}
-              className={`w-full flex items-center justify-between px-3 py-2 text-[12px] rounded-md transition-colors cursor-pointer select-none text-left ${
+              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 isImobileActive && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-white font-medium shadow-xs'
-                  : 'text-gray-600 hover:text-[#051D35] hover:bg-gray-100/70'
+                  ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
             >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Building2 size={14} className={isImobileActive && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-400'} />
-                <span className="truncate">Imobile</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <Building2 size={18} className={isImobileActive && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-500'} />
+                <span className="text-[13px] font-sans font-medium truncate">Imobile</span>
               </div>
               {counts.proprietati > 0 && (
-                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                  isImobileActive && location.pathname !== '/calendar' ? 'bg-white/15 text-[#BE9662]' : 'bg-gray-100 text-gray-500'
+                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                  isImobileActive && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.proprietati}
                 </span>
@@ -212,19 +212,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Contacte')}
-              className={`w-full flex items-center justify-between px-3 py-2 text-[12px] rounded-md transition-colors cursor-pointer select-none text-left ${
+              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 isContacteActive && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-white font-medium shadow-xs'
-                  : 'text-gray-600 hover:text-[#051D35] hover:bg-gray-100/70'
+                  ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
             >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Users size={14} className={isContacteActive && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-400'} />
-                <span className="truncate">Contacte</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <Users size={18} className={isContacteActive && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-500'} />
+                <span className="text-[13px] font-sans font-medium truncate">Contacte</span>
               </div>
               {counts.clienti > 0 && (
-                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                  isContacteActive && location.pathname !== '/calendar' ? 'bg-white/15 text-[#BE9662]' : 'bg-gray-100 text-gray-500'
+                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                  isContacteActive && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.clienti}
                 </span>
@@ -235,19 +235,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Personal')}
-              className={`w-full flex items-center justify-between px-3 py-2 text-[12px] rounded-md transition-colors cursor-pointer select-none text-left ${
+              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 activeSubItem === 'Personal' && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-white font-medium shadow-xs'
-                  : 'text-gray-600 hover:text-[#051D35] hover:bg-gray-100/70'
+                  ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
             >
-              <div className="flex items-center gap-2.5 min-w-0">
-                <UserCheck size={14} className={activeSubItem === 'Personal' && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-400'} />
-                <span className="truncate">Personal</span>
+              <div className="flex items-center gap-3 min-w-0">
+                <UserCheck size={18} className={activeSubItem === 'Personal' && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-500'} />
+                <span className="text-[13px] font-sans font-medium truncate">Personal</span>
               </div>
               {counts.personal > 0 && (
-                <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded ${
-                  activeSubItem === 'Personal' && location.pathname !== '/calendar' ? 'bg-white/15 text-[#BE9662]' : 'bg-gray-100 text-gray-500'
+                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                  activeSubItem === 'Personal' && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.personal}
                 </span>
@@ -255,67 +255,67 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </>
         ) : (
-          /* Collapsed View: Compact vertical icon actions with 36px x 36px (w-9 h-9) buttons */
-          <div className="flex flex-col items-center space-y-2 py-1">
+          /* Collapsed View: 64px full-width icon buttons with border-b */
+          <div className="flex flex-col w-full divide-y divide-gray-100 font-sans">
             <button
               type="button"
               onClick={() => handleItemClick('Lead-uri')}
-              className={`w-9 h-9 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
+              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
                 activeSubItem === 'Lead-uri' && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-[#BE9662]'
-                  : 'text-gray-500 hover:text-[#051D35] hover:bg-gray-100'
+                  ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
               title={`Lead-uri (${counts.leads})`}
             >
-              <Inbox size={16} />
+              <Inbox size={18} />
             </button>
             <button
               type="button"
               onClick={() => handleItemClick('Cereri')}
-              className={`w-9 h-9 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
+              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
                 activeSubItem === 'Cereri' && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-[#BE9662]'
-                  : 'text-gray-500 hover:text-[#051D35] hover:bg-gray-100'
+                  ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
               title={`Cereri (${counts.cereri})`}
             >
-              <ClipboardList size={16} />
+              <ClipboardList size={18} />
             </button>
             <button
               type="button"
               onClick={() => handleItemClick('Imobile')}
-              className={`w-9 h-9 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
+              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
                 isImobileActive && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-[#BE9662]'
-                  : 'text-gray-500 hover:text-[#051D35] hover:bg-gray-100'
+                  ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
               title={`Imobile (${counts.proprietati})`}
             >
-              <Building2 size={16} />
+              <Building2 size={18} />
             </button>
             <button
               type="button"
               onClick={() => handleItemClick('Contacte')}
-              className={`w-9 h-9 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
+              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
                 isContacteActive && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-[#BE9662]'
-                  : 'text-gray-500 hover:text-[#051D35] hover:bg-gray-100'
+                  ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
               title={`Contacte (${counts.clienti})`}
             >
-              <Users size={16} />
+              <Users size={18} />
             </button>
             <button
               type="button"
               onClick={() => handleItemClick('Personal')}
-              className={`w-9 h-9 rounded-md flex items-center justify-center transition-colors cursor-pointer ${
+              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
                 activeSubItem === 'Personal' && location.pathname !== '/calendar'
-                  ? 'bg-[#051D35] text-[#BE9662]'
-                  : 'text-gray-500 hover:text-[#051D35] hover:bg-gray-100'
+                  ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
               title={`Personal (${counts.personal})`}
             >
-              <UserCheck size={16} />
+              <UserCheck size={18} />
             </button>
           </div>
         )}
@@ -324,26 +324,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Bottom Footer: Automated Version & Update Info (replaces collapse button) */}
       <div className="shrink-0 border-t border-gray-200 bg-gray-50/80 select-none">
         {!isCollapsed ? (
-          <div className="px-3 py-2.5 flex flex-col gap-0.5">
-            <div className="flex items-center gap-1.5">
-              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-              <span className="text-[11px] font-mono font-bold text-gray-800 tracking-tight leading-tight">
-                {versionInfo.versionCode}
-              </span>
-            </div>
-            <span className="text-[10px] text-gray-400 font-mono leading-tight pl-3 truncate">
-              ({versionInfo.dateFormatted})
+          <div className="h-[48px] px-5 flex items-center justify-between gap-2 font-sans">
+            <span className="text-[12px] font-sans font-semibold text-gray-800 tracking-tight shrink-0">
+              {versionInfo.versionCode} / 145
+            </span>
+            <span className="text-[11px] text-gray-500 font-sans truncate">
+              {versionInfo.dateFormatted}
             </span>
           </div>
         ) : (
           <div 
-            className="py-2.5 px-1 flex flex-col items-center justify-center cursor-default"
-            title={versionInfo.fullDisplay}
+            className="h-[48px] px-1 flex flex-col items-center justify-center cursor-default font-sans text-center"
+            title={`${versionInfo.versionCode} / 145 ${versionInfo.dateFormatted}`}
           >
-            <span className="text-[9px] font-mono font-bold text-gray-600 leading-tight">
+            <span className="text-[10px] font-sans font-bold text-gray-700 leading-tight">
               v{versionInfo.major}.{versionInfo.minor}
             </span>
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1" />
+            <span className="text-[9px] font-sans text-gray-400 leading-tight mt-0.5">
+              /145
+            </span>
           </div>
         )}
       </div>

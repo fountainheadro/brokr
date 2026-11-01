@@ -14,7 +14,12 @@ import {
   Tag, 
   MapPin, 
   Home, 
-  FileText 
+  FileText,
+  Building2,
+  ClipboardList,
+  XCircle,
+  RotateCcw,
+  Plus
 } from "lucide-react";
 import { Lead } from "../services/leadsService";
 import { CATEGORIA_OPTIONS, ORAS_OPTIONS } from "../constants";
@@ -25,7 +30,11 @@ interface NevalidataDetailsModalProps {
   isOpen: boolean;
   lead: Lead | null;
   onClose: () => void;
-  onMoveToCalificata: (leadId: string, updatedData: Partial<Lead>) => Promise<void>;
+  onMoveToCalificata?: (leadId: string, updatedData: Partial<Lead>) => Promise<void>;
+  onConvertToImobil?: (leadId: string, updatedData: Partial<Lead>) => Promise<void>;
+  onConvertToCerere?: (leadId: string, updatedData: Partial<Lead>) => Promise<void>;
+  onMarkAsLost?: (leadId: string) => Promise<void>;
+  onReactivate?: (leadId: string) => Promise<void>;
   onDeleteLead: (leadId: string) => Promise<void>;
   onSaveLead: (leadId: string, updatedData: Partial<Lead>) => Promise<void>;
 }
@@ -35,6 +44,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
   lead,
   onClose,
   onMoveToCalificata,
+  onConvertToImobil,
+  onConvertToCerere,
+  onMarkAsLost,
+  onReactivate,
   onDeleteLead,
   onSaveLead
 }) => {
@@ -175,16 +188,71 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
     }
   };
 
-  const handlePromote = async () => {
+  const handleConvertToImobil = async () => {
     setSaving(true);
     try {
       const payload = getUpdatedLeadPayload();
-      await onMoveToCalificata(lead.id!, payload);
-      toast.success("Proprietatea a fost mutată în Calificată!");
+      if (onConvertToImobil) {
+        await onConvertToImobil(lead.id!, payload);
+      } else if (onMoveToCalificata) {
+        await onMoveToCalificata(lead.id!, payload);
+      }
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("Eroare la promovare!");
+      toast.error("Eroare la concretizarea în imobil!");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleConvertToCerere = async () => {
+    setSaving(true);
+    try {
+      const payload = getUpdatedLeadPayload();
+      if (onConvertToCerere) {
+        await onConvertToCerere(lead.id!, payload);
+      }
+      onClose();
+    } catch (e) {
+      console.error(e);
+      toast.error("Eroare la concretizarea în cerere!");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleMarkAsLost = async () => {
+    setSaving(true);
+    try {
+      if (onMarkAsLost) {
+        await onMarkAsLost(lead.id!);
+      } else {
+        await onSaveLead(lead.id!, { status: 'Pierdute' });
+      }
+      toast.success("Leadul a fost marcat ca Pierdut.");
+      onClose();
+    } catch (e) {
+      console.error(e);
+      toast.error("Eroare la mutarea în Pierdute!");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleReactivate = async () => {
+    setSaving(true);
+    try {
+      if (onReactivate) {
+        await onReactivate(lead.id!);
+      } else {
+        await onSaveLead(lead.id!, { status: 'Noi' });
+      }
+      toast.success("Leadul a fost reactivat ca Nou.");
+      onClose();
+    } catch (e) {
+      console.error(e);
+      toast.error("Eroare la reactivarea leadului!");
     } finally {
       setSaving(false);
     }
@@ -228,11 +296,17 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
               </div>
               <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-semibold text-gray-900 leading-tight truncate">
-                  Scanează și Validează URL
+                  Detalii Lead {lead.propertyId ? `#${lead.propertyId}` : ""}
                 </h3>
-                <p className="text-[10px] font-bold text-gray-400 tracking-wider uppercase mt-0.5">
-                  STATUS: NEVALIDATE
-                </p>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className={`text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.2 rounded border ${
+                    lead.status === 'Pierdute' 
+                      ? 'bg-rose-50 text-rose-700 border-rose-200' 
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  }`}>
+                    STATUS: {lead.status === 'Pierdute' ? 'PIERDUT' : 'NOU'}
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -466,58 +540,86 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
           </div>
 
           {/* Footer Bar */}
-          <div className="px-5 py-3.5 flex items-center justify-between border-t border-gray-100 bg-gray-50/50 shrink-0">
-            {showConfirmDelete ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-red-600 flex items-center gap-1">
-                  <AlertTriangle size={13} />
-                  Sigur?
-                </span>
+          <div className="px-5 py-3.5 flex items-center justify-between border-t border-gray-100 bg-gray-50/50 shrink-0 gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5">
+              {showConfirmDelete ? (
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-semibold text-red-600 flex items-center gap-1">
+                    <AlertTriangle size={13} />
+                    Sigur?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleDelete}
+                    className="h-8 px-2.5 bg-red-600 hover:bg-red-700 text-white rounded-md text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    Da, șterge
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmDelete(false)}
+                    className="h-8 px-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-md text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    Nu
+                  </button>
+                </div>
+              ) : (
                 <button
                   type="button"
-                  onClick={handleDelete}
-                  className="h-8 px-2.5 bg-red-600 hover:bg-red-700 text-white rounded-md text-xs font-semibold transition-colors cursor-pointer"
+                  onClick={() => setShowConfirmDelete(true)}
+                  className="h-8 px-2.5 text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-md transition-colors cursor-pointer text-xs font-semibold flex items-center gap-1.5"
+                  title="Șterge lead"
                 >
-                  Da, șterge
+                  <Trash2 size={13} />
+                  <span>Șterge</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setShowConfirmDelete(false)}
-                  className="h-8 px-2.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 rounded-md text-xs font-medium transition-colors cursor-pointer"
-                >
-                  Nu
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setShowConfirmDelete(true)}
-                className="h-8 px-2.5 text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-md transition-colors cursor-pointer text-xs font-semibold flex items-center gap-1.5"
-                title="Șterge lead"
-              >
-                <Trash2 size={13} />
-                <span>Șterge</span>
-              </button>
-            )}
+              )}
 
-            <div className="flex items-center gap-2">
+              {lead.status === 'Pierdute' ? (
+                <button
+                  type="button"
+                  onClick={handleReactivate}
+                  disabled={saving}
+                  className="h-8 px-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  title="Re-activează leadul ca Nou"
+                >
+                  <RotateCcw size={12} className="text-amber-600" />
+                  <span>Reactivează ca Nou</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleMarkAsLost}
+                  disabled={saving}
+                  className="h-8 px-2.5 bg-white hover:bg-rose-50 border border-gray-200 hover:border-rose-200 text-gray-600 hover:text-rose-700 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  title="Marchează leadul ca Pierdut dacă nu se concretizează"
+                >
+                  <XCircle size={12} className="text-gray-400 group-hover:text-rose-600" />
+                  <span>Pierdut</span>
+                </button>
+              )}
+            </div>
+
+            <div className="flex items-center gap-1.5 flex-wrap justify-end">
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="h-8 px-3.5 border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-md transition-colors shadow-2xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="h-8 px-3 border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-md transition-colors shadow-2xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
                 <Save size={13} />
                 <span>Salvează</span>
               </button>
+
               <button
                 type="button"
-                onClick={handlePromote}
+                onClick={handleConvertToImobil}
                 disabled={saving}
-                className="h-8 px-4 bg-[#051D35] hover:bg-[#0a2b4a] text-white font-medium rounded-md transition-colors shadow-xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="h-8 px-3.5 bg-[#051D35] hover:bg-[#0a2b4a] text-white font-medium rounded-md transition-colors shadow-xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                title="Concretizează leadul într-un Imobil nou pe piață"
               >
-                <ArrowUpRight size={13} className="text-[#BE9662]" />
-                <span>Mută în Calificată</span>
+                <Plus size={14} className="text-[#BE9662]" />
+                <span>Adaugă Imobil</span>
               </button>
             </div>
           </div>

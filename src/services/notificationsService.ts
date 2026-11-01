@@ -17,7 +17,11 @@ export interface Notification {
   id?: string;
   title: string;
   message: string;
-  type: 'lead' | 'viewing' | 'system';
+  type: 'lead' | 'viewing' | 'system' | 'cerere' | 'proprietate';
+  entityId?: string;
+  propertyId?: string;
+  targetType?: 'lead' | 'property' | 'cerere' | 'viewing' | 'contact';
+  url?: string;
   createdAt: any;
   read: boolean;
   userId: string;

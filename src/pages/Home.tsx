@@ -8,6 +8,7 @@ import { AddLeadModal } from "../components/AddLeadModal";
 import { LeadList } from "../components/LeadList";
 import { LeadCard } from "../components/LeadCard";
 import { leadsService, Lead, LeadStatus, LeadRole, getLeadRole, CERERI_STATUSES, PROPRIETATI_STATUSES, isCerereLead } from "../services/leadsService";
+import { entityIdService } from "../services/entityIdService";
 import { contactsService, Contact } from "../services/contactsService";
 import { personalService, PersonalMember } from "../services/personalService";
 import { viewingsService, Viewing } from "../services/viewingsService";
@@ -79,6 +80,8 @@ import { NevalidataDetailsModal } from "../components/NevalidataDetailsModal";
 import { CalificataDetailsModal } from "../components/CalificataDetailsModal";
 
 const TABS: LeadStatus[] = [
+  "Noi",
+  "Pierdute",
   "Nevalidata", 
   "Calificata", 
   "Noua", 
@@ -97,11 +100,15 @@ const TABS: LeadStatus[] = [
   "Sterse"
 ];
 
+const LEADS_TABS: LeadStatus[] = ["Noi", "Pierdute"];
+
 const CERERI_TABS: LeadStatus[] = ["Noua", "Calificare", "Matching", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
 const PROPRIETATI_TABS: LeadStatus[] = ["Noua", "Prospectare", "Colaborare", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
 const STATUS_LABELS: Record<string, string> = {
+  "Noi": "Noi",
+  "Pierdute": "Pierdute",
   "Nevalidata": "Nevalidate",
   "Calificata": "Calificate",
   "Noua": "Nouă",
@@ -323,6 +330,7 @@ export const Home: React.FC = () => {
     const normalized = subItem === 'Proprietăți' ? 'Imobile' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
+      setActiveTab('Noi');
       setLeadRoleFilter('Toate');
     } else if (normalized === 'Cereri') {
       setActiveTab('Noua');
@@ -351,8 +359,8 @@ export const Home: React.FC = () => {
   // Compute live counts matching the sidebar definition
   const counts = useMemo(() => {
     const isCerere = (l: Lead) => isCerereLead(l);
-    const isLeadItem = (l: Lead) => l.status !== 'Sterse';
-    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Sterse';
+    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && (l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
+    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Noi' && l.status !== 'Pierdute' && l.status !== 'Sterse';
 
     return {
       leads: leads.filter(isLeadItem).length,
@@ -363,10 +371,10 @@ export const Home: React.FC = () => {
     };
   }, [leads, contacts, personal]);
 
-  // Specific tabs for each section - Lead-uri has no status tabs (removed as requested)
+  // Specific tabs for each section: Lead-uri (Noi, Pierdute), Cereri, Imobile
   const sectionTabs = useMemo<LeadStatus[]>(() => {
     if (activeSidebarItem === 'Lead-uri') {
-      return [];
+      return LEADS_TABS;
     }
     if (activeSidebarItem === 'Cereri') {
       return CERERI_TABS;
@@ -913,11 +921,15 @@ export const Home: React.FC = () => {
         if (activeSidebarItem === 'Lead-uri') {
           if (isCerereLead(lead)) return false;
           if (lead.status === 'Sterse') return false;
-          return true;
+          if (activeTab === 'Pierdute') {
+            return lead.status === 'Pierdute';
+          }
+          // Default tab 'Noi' (includes newly added leads and legacy unpromoted leads)
+          return lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata';
         }
         // Proprietăți: exclude cereri and non-property items
         if (isCerereLead(lead)) return false;
-        if (lead.status === 'Nevalidata' || lead.status === 'Calificata' || lead.status === 'Sterse') return false;
+        if (lead.status === 'Nevalidata' || lead.status === 'Calificata' || lead.status === 'Sterse' || lead.status === 'Noi' || lead.status === 'Pierdute') return false;
         if (activeTab === 'Noua') {
           return lead.status === 'Noua' || lead.status === 'Activa';
         }
@@ -1034,7 +1046,7 @@ export const Home: React.FC = () => {
   }, [leads, activeTab, activeSidebarItem, sortOption, transactionFilter, leadRoleFilter, categoryFilter, searchQuery]);
 
   const handleLeadClick = React.useCallback((lead: Lead) => {
-    if (lead.status === "Nevalidata") {
+    if (lead.status === "Nevalidata" || lead.status === "Noi" || lead.status === "Pierdute") {
       setSelectedNevalidatLead(lead);
       return;
     }
@@ -1467,6 +1479,69 @@ export const Home: React.FC = () => {
     }
   };
 
+  const handleConvertToImobil = async (leadId: string, updatedData: Partial<Lead>) => {
+    try {
+      const newPropId = await entityIdService.getNextId('property');
+      const finalPayload: Partial<Lead> = {
+        ...updatedData,
+        propertyId: newPropId,
+        status: "Noua" as LeadStatus,
+        lastMovedAt: new Date()
+      };
+      await leadsService.updateLeadData(leadId, finalPayload);
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
+      toast.success(`Leadul a fost concretizat în Imobilul #${newPropId}!`);
+    } catch (e) {
+      console.error("Failed to convert lead to imobil:", e);
+      toast.error("Eroare la crearea imobilului!");
+      throw e;
+    }
+  };
+
+  const handleConvertToCerere = async (leadId: string, updatedData: Partial<Lead>) => {
+    try {
+      const newCerereId = await entityIdService.getNextId('cerere');
+      const finalPayload: Partial<Lead> = {
+        ...updatedData,
+        propertyId: newCerereId,
+        status: "Noua" as LeadStatus,
+        title: updatedData.title?.toLowerCase().startsWith('cerere') ? updatedData.title : `Cerere: ${updatedData.title || 'Proprietate'}`,
+        lastMovedAt: new Date()
+      };
+      await leadsService.updateLeadData(leadId, finalPayload);
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
+      toast.success(`Leadul a fost concretizat în Cererea #${newCerereId}!`);
+    } catch (e) {
+      console.error("Failed to convert lead to cerere:", e);
+      toast.error("Eroare la crearea cererii!");
+      throw e;
+    }
+  };
+
+  const handleMarkAsLost = async (leadId: string) => {
+    try {
+      await leadsService.updateLeadStatus(leadId, 'Pierdute');
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'Pierdute' } : l));
+      toast.success("Leadul a fost marcat ca Pierdut.");
+    } catch (e) {
+      console.error("Failed to mark lead as lost:", e);
+      toast.error("Eroare la mutarea în Pierdute!");
+      throw e;
+    }
+  };
+
+  const handleReactivateLead = async (leadId: string) => {
+    try {
+      await leadsService.updateLeadStatus(leadId, 'Noi');
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'Noi' } : l));
+      toast.success("Leadul a fost reactivat ca Nou.");
+    } catch (e) {
+      console.error("Failed to reactivate lead:", e);
+      toast.error("Eroare la reactivarea leadului!");
+      throw e;
+    }
+  };
+
   const handleMoveToCalificata = async (leadId: string, updatedData: Partial<Lead>) => {
     try {
       const finalPayload = {
@@ -1681,53 +1756,63 @@ export const Home: React.FC = () => {
                 <div className="bg-white border-b border-gray-200 shrink-0 px-6 h-[40px] flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
                   {/* Left: Filter Tabs with counts */}
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {activeSidebarItem !== 'Lead-uri' && (
-                      sectionTabs.map((tab) => {
-                        const tabCount = leads.filter(l => {
-                          if (activeSidebarItem === 'Cereri') {
-                            if (!isCerereLead(l)) return false;
-                            if (tab === 'Noua') return l.status === 'Noua' || l.status === 'AreInteres';
-                            return l.status === tab;
-                          }
-                          // Proprietăți
+                    {sectionTabs.map((tab) => {
+                      const tabCount = leads.filter(l => {
+                        if (activeSidebarItem === 'Lead-uri') {
                           if (isCerereLead(l)) return false;
-                          if (l.status === 'Nevalidata' || l.status === 'Calificata' || l.status === 'Sterse') return false;
-                          if (tab === 'Noua') return l.status === 'Noua' || l.status === 'Activa';
+                          if (l.status === 'Sterse') return false;
+                          if (tab === 'Pierdute') return l.status === 'Pierdute';
+                          return l.status === 'Noi' || l.status === 'Nevalidata' || l.status === 'Calificata';
+                        }
+                        if (activeSidebarItem === 'Cereri') {
+                          if (!isCerereLead(l)) return false;
+                          if (tab === 'Noua') return l.status === 'Noua' || l.status === 'AreInteres';
                           return l.status === tab;
-                        }).length;
-                        const hasNew = leads.some(lead => {
-                          const isMatch = activeSidebarItem === 'Cereri'
-                            ? (isCerereLead(lead) && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'AreInteres' : lead.status === tab))
-                            : (!isCerereLead(lead) && lead.status !== 'Nevalidata' && lead.status !== 'Calificata' && lead.status !== 'Sterse' && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'Activa' : lead.status === tab));
-                          if (!isMatch) return false;
-                          const itemTime = getTimestampMs(lead.lastMovedAt) || getTimestampMs(lead.updatedAt) || getTimestampMs(lead.createdAt);
-                          return tab !== activeTab && itemTime > (lastVisitedTimes[tab] || 0);
-                        });
-                        const isSelected = activeTab === tab;
+                        }
+                        // Proprietăți
+                        if (isCerereLead(l)) return false;
+                        if (l.status === 'Nevalidata' || l.status === 'Calificata' || l.status === 'Sterse' || l.status === 'Noi' || l.status === 'Pierdute') return false;
+                        if (tab === 'Noua') return l.status === 'Noua' || l.status === 'Activa';
+                        return l.status === tab;
+                      }).length;
 
-                        return (
-                          <button
-                            key={tab}
-                            onClick={() => setActiveTab(tab)}
-                            className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                              isSelected
-                                ? "bg-[#051D35] text-white font-medium shadow-xs"
-                                : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
-                            }`}
-                          >
-                            <span>{STATUS_LABELS[tab]}</span>
-                            <span className={`text-[10px] font-mono px-1 rounded ${
-                              isSelected ? "bg-white/15 text-[#BE9662]" : "bg-gray-100 text-gray-500"
-                            }`}>
-                              {tabCount}
-                            </span>
-                            {hasNew && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662] animate-pulse ml-0.5" />
-                            )}
-                          </button>
-                        );
-                      })
-                    )}
+                      const hasNew = leads.some(lead => {
+                        let isMatch = false;
+                        if (activeSidebarItem === 'Lead-uri') {
+                          isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && (tab === 'Pierdute' ? lead.status === 'Pierdute' : (lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata'));
+                        } else if (activeSidebarItem === 'Cereri') {
+                          isMatch = isCerereLead(lead) && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'AreInteres' : lead.status === tab);
+                        } else {
+                          isMatch = !isCerereLead(lead) && lead.status !== 'Nevalidata' && lead.status !== 'Calificata' && lead.status !== 'Sterse' && lead.status !== 'Noi' && lead.status !== 'Pierdute' && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'Activa' : lead.status === tab);
+                        }
+                        if (!isMatch) return false;
+                        const itemTime = getTimestampMs(lead.lastMovedAt) || getTimestampMs(lead.updatedAt) || getTimestampMs(lead.createdAt);
+                        return tab !== activeTab && itemTime > (lastVisitedTimes[tab] || 0);
+                      });
+                      const isSelected = activeTab === tab;
+
+                      return (
+                        <button
+                          key={tab}
+                          onClick={() => setActiveTab(tab)}
+                          className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                            isSelected
+                              ? "bg-[#051D35] text-white font-medium shadow-xs"
+                              : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                          }`}
+                        >
+                          <span>{STATUS_LABELS[tab] || tab}</span>
+                          <span className={`text-[10px] font-mono px-1 rounded ${
+                            isSelected ? "bg-white/15 text-[#BE9662]" : "bg-gray-100 text-gray-500"
+                          }`}>
+                            {tabCount}
+                          </span>
+                          {hasNew && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662] animate-pulse ml-0.5" />
+                          )}
+                        </button>
+                      );
+                    })}
                   </div>
 
                   {/* Right: Lead Role pills (in Lead-uri) or Transaction pills (Imobile/Cereri), Category & Sort dropdowns */}
@@ -1974,9 +2059,24 @@ export const Home: React.FC = () => {
 
               <div className="flex items-center gap-2 shrink-0">
                 {/* Share Link Button */}
+                {/* Share Link Button - Native device share */}
                 <button
                   onClick={async () => {
                     const shareUrl = getPublicShareUrl(selectedLead.id!);
+                    const shareTitle = selectedLead.title || selectedLead.extractedData?.crmData?.descriere?.titlu || "Proprietate imobiliară";
+                    const shareText = `${shareTitle} - ${selectedLead.price || ""} | ${selectedLead.zone || ""}`;
+                    if (typeof navigator !== "undefined" && navigator.share) {
+                      try {
+                        await navigator.share({
+                          title: shareTitle,
+                          text: shareText,
+                          url: shareUrl
+                        });
+                        return;
+                      } catch (err: any) {
+                        if (err?.name === "AbortError") return;
+                      }
+                    }
                     try {
                       await navigator.clipboard.writeText(shareUrl);
                       toast.success("Linkul public al proprietății a fost copiat!");
@@ -1985,7 +2085,7 @@ export const Home: React.FC = () => {
                     }
                   }}
                   className="h-8 px-2.5 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                  title="Copiază link public de prezentare"
+                  title="Distribuie proprietatea prin aplicația nativă sau copiază linkul"
                 >
                   <Share2 size={13} className="text-[#BE9662]" />
                   <span className="hidden sm:inline">Distribuie</span>
@@ -2062,6 +2162,49 @@ export const Home: React.FC = () => {
         isOpen={isNotificationsOpen} 
         onClose={() => setIsNotificationsOpen(false)} 
         notifications={notifications}
+        onSelectNotification={(notification) => {
+          if (notification.type === 'viewing' || notification.message?.toLowerCase().includes('vizionare programată')) {
+            setIsCalendarOpen(true);
+            return;
+          }
+
+          let targetLead = leads.find(l => 
+            (notification.entityId && l.id === notification.entityId) ||
+            (notification.propertyId && l.propertyId === notification.propertyId)
+          );
+
+          if (!targetLead) {
+            const idMatch = `${notification.title} ${notification.message}`.match(/#([PRL][0-9]+)/i);
+            if (idMatch && idMatch[1]) {
+              const extractedId = idMatch[1].toUpperCase();
+              targetLead = leads.find(l => l.propertyId?.toUpperCase() === extractedId);
+            }
+          }
+
+          if (!targetLead && notification.title) {
+            targetLead = leads.find(l => l.title && (notification.title.includes(l.title) || notification.message?.includes(l.title)));
+          }
+
+          if (targetLead) {
+            if (isCerereLead(targetLead)) {
+              handleSelectSidebarItem('Cereri');
+            } else if (targetLead.status === 'Noi' || targetLead.status === 'Pierdute' || targetLead.status === 'Nevalidata' || targetLead.status === 'Calificata') {
+              handleSelectSidebarItem('Lead-uri');
+            } else {
+              handleSelectSidebarItem('Imobile');
+            }
+            setSelectedLead(targetLead);
+            return;
+          }
+
+          if (notification.type === 'cerere' || notification.title?.toLowerCase().includes('cerere')) {
+            handleSelectSidebarItem('Cereri');
+          } else if (notification.type === 'lead') {
+            handleSelectSidebarItem('Lead-uri');
+          } else {
+            handleSelectSidebarItem('Imobile');
+          }
+        }}
       />
 
       <CalendarDrawer 
@@ -2136,6 +2279,10 @@ export const Home: React.FC = () => {
         onClose={() => setSelectedNevalidatLead(null)}
         onSaveLead={handleSaveNevalidatLead}
         onMoveToCalificata={handleMoveToCalificata}
+        onConvertToImobil={handleConvertToImobil}
+        onConvertToCerere={handleConvertToCerere}
+        onMarkAsLost={handleMarkAsLost}
+        onReactivate={handleReactivateLead}
         onDeleteLead={handleDeleteNevalidatLead}
       />
 

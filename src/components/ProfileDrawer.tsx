@@ -64,19 +64,13 @@ export const ProfileDrawer: React.FC<ProfileDrawerProps> = ({
           className="fixed inset-y-0 right-0 w-full max-w-[360px] bg-white shadow-2xl z-[301] flex flex-col border-l border-gray-200"
         >
           {/* Header */}
-          <div className="h-[50px] px-5 border-b border-gray-200 flex items-center justify-between shrink-0 bg-white">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-md bg-[#051D35]/5 border border-[#051D35]/15 flex items-center justify-center text-[#BE9662]">
-                <User size={13} />
-              </div>
-              <span className="text-xs font-bold text-gray-900 tracking-tight">Meniu Utilizator</span>
-            </div>
+          <div className="h-[50px] px-5 border-b border-gray-100 flex items-center justify-end shrink-0 bg-white">
             <button
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors cursor-pointer"
               title="Închide meniul"
             >
-              <X size={15} />
+              <X size={16} />
             </button>
           </div>
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Lead, getLeadRole } from "../services/leadsService";
+import { Lead, getLeadRole, leadsService } from "../services/leadsService";
 import { Contact } from "../services/contactsService";
+import { notificationsService } from "../services/notificationsService";
 import { 
   FileText, 
   MapPin, 
@@ -35,10 +36,12 @@ import {
   Maximize2,
   User,
   Lock,
-  Copy
+  Copy,
+  Bookmark
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { auth } from "../lib/firebase";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -55,7 +58,7 @@ interface NavSection {
 }
 
 const NAV_SECTIONS: NavSection[] = [
-  { id: "descriere", label: "Descriere", icon: FileText },
+  { id: "introducere", label: "Introducere", icon: FileText },
   { id: "apartament", label: "Apartament", icon: Home },
   { id: "bloc", label: "Bloc", icon: Building2 },
   { id: "imprejurimi", label: "Împrejurimi", icon: Compass },
@@ -65,6 +68,69 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "tranzactie", label: "Preț & Comision", icon: BadgePercent }
 ];
 
+interface AttributeRowProps {
+  label: string;
+  value: React.ReactNode;
+  copyValue?: string;
+  isLast?: boolean;
+}
+
+const AttributeRow: React.FC<AttributeRowProps> = ({ label, value, copyValue, isLast = false }) => {
+  const [copied, setCopied] = useState(false);
+  const textToCopy = copyValue || (typeof value === "string" ? value : "");
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!textToCopy) return;
+    navigator.clipboard.writeText(textToCopy);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+    toast.success(`Copiat: ${label}`);
+  };
+
+  return (
+    <div className={`group/row relative flex items-start sm:items-center justify-between py-2.5 px-3.5 hover:bg-gray-50/80 transition-colors font-sans ${
+      isLast ? "" : "border-b border-gray-100"
+    }`}>
+      <div className="flex flex-col sm:flex-row sm:items-baseline w-full gap-1 sm:gap-4 pr-8">
+        <span className="text-[12px] font-medium text-gray-900 w-full sm:w-[24%] sm:min-w-[140px] shrink-0 font-sans select-text">
+          {label}:
+        </span>
+        <span className="text-[12px] text-gray-600 leading-relaxed flex-1 font-sans select-text break-words">
+          {value}
+        </span>
+      </div>
+
+      {textToCopy && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="opacity-0 group-hover/row:opacity-100 flex items-center justify-center w-6 h-6 rounded-md bg-white border border-gray-200 text-gray-400 hover:text-[#051D35] hover:border-gray-300 shadow-2xs transition-all active:scale-90 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer z-10"
+          title={`Copiază ${label}`}
+        >
+          {copied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+        </button>
+      )}
+    </div>
+  );
+};
+
+const SubCategoryHeader: React.FC<{ title: string; count?: string }> = ({ title, count }) => (
+  <div className="h-8 flex items-center justify-between px-3.5 bg-gray-50/70 border-y border-gray-100 select-none">
+    <div className="flex items-center gap-2">
+      <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
+      <span className="text-[11px] font-bold uppercase tracking-wider text-[#051D35] font-sans">
+        {title}
+      </span>
+    </div>
+    {count && (
+      <span className="text-[10px] font-mono text-gray-400 font-medium">
+        {count}
+      </span>
+    )}
+  </div>
+);
+
 export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   lead,
   isPublicShared = false,
@@ -72,9 +138,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onOpenEditForm,
   showTopNavbar = false
 }) => {
-  const [activeSection, setActiveSection] = useState<string>("descriere");
+  const [activeSection, setActiveSection] = useState<string>("introducere");
   const [isCopied, setIsCopied] = useState<boolean>(false);
-  const [isFavorite, setIsFavorite] = useState<boolean>(false);
+  
+  // Persistent favorite stored in browser localStorage
+  const favoriteStorageKey = `brokr_fav_prop_${lead.propertyId || lead.id || "default"}`;
+  const [isFavorite, setIsFavorite] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(favoriteStorageKey) === "true";
+    } catch {
+      return false;
+    }
+  });
+
   const [copiedOwnerPhone, setCopiedOwnerPhone] = useState<boolean>(false);
   
   // Lightbox Modal state
@@ -93,6 +169,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const [formSent, setFormSent] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const isManualScrollingRef = useRef(false);
+  const scrollTimeoutRef = useRef<any>(null);
 
   // Pre-fill enquiry form message
   useEffect(() => {
@@ -115,7 +193,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     return window;
   };
 
-  // Track active jump link section on scroll across any scroll container
+  // Track active jump link section on scroll with early activation (before header disappears)
   useEffect(() => {
     let scrollContainer: HTMLElement | Window = window;
     let p = containerRef.current?.parentElement;
@@ -128,18 +206,47 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       p = p.parentElement;
     }
 
+    const stickyOffset = showTopNavbar ? 116 : 108;
+
     const handleScroll = () => {
-      const headerOffset = showTopNavbar ? 160 : 140;
+      // Don't override active tab during programmatic smooth scroll
+      if (isManualScrollingRef.current) return;
+
+      // Check if user is scrolled to the absolute bottom of the container
+      if (scrollContainer instanceof HTMLElement) {
+        const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
+        if (isAtBottom) {
+          setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
+          return;
+        }
+      } else {
+        const isAtBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40;
+        if (isAtBottom) {
+          setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
+          return;
+        }
+      }
+
+      const containerTop = scrollContainer instanceof HTMLElement 
+        ? scrollContainer.getBoundingClientRect().top 
+        : 0;
+      
+      // Trigger line: 100px below the sticky header bar so section activates early before its header is occluded
+      const triggerLine = containerTop + stickyOffset + 100;
+
+      // Find the last section whose top has reached or passed the trigger line
+      let currentSectionId = NAV_SECTIONS[0].id;
       for (const sect of NAV_SECTIONS) {
         const el = document.getElementById(sect.id);
         if (el) {
           const rect = el.getBoundingClientRect();
-          if (rect.top <= headerOffset && rect.bottom > 90) {
-            setActiveSection(sect.id);
-            break;
+          if (rect.top <= triggerLine) {
+            currentSectionId = sect.id;
           }
         }
       }
+
+      setActiveSection(currentSectionId);
     };
 
     if (scrollContainer instanceof HTMLElement) {
@@ -152,6 +259,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         scrollContainer.removeEventListener("scroll", handleScroll);
       }
       window.removeEventListener("scroll", handleScroll);
+      if (scrollTimeoutRef.current) {
+        clearTimeout(scrollTimeoutRef.current);
+      }
     };
   }, [showTopNavbar]);
 
@@ -166,15 +276,21 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     const el = document.getElementById(sectionId);
     if (!el) return;
 
+    // Immediately set active section and lock it to prevent scroll bounceback
     setActiveSection(sectionId);
+    isManualScrollingRef.current = true;
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
+    }
+    scrollTimeoutRef.current = setTimeout(() => {
+      isManualScrollingRef.current = false;
+    }, 850);
 
     // Find the scrollable ancestor container (div or window)
     const scrollContainer = getScrollContainer(el);
 
-    // Header offset for sticky navigation:
-    // SharedProperty: Top header (56px) + Jump links (48px) + margin = ~116px
-    // Home.tsx: Top header (50px) + Jump links (48px) + margin = ~110px
-    const stickyOffset = showTopNavbar ? 116 : 110;
+    // Header offset for sticky navigation
+    const stickyOffset = (showTopNavbar ? 116 : 108) + 12;
 
     if (scrollContainer instanceof HTMLElement) {
       const containerRect = scrollContainer.getBoundingClientRect();
@@ -195,6 +311,36 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
   };
 
+  const handleNativeShare = async () => {
+    const currentUrl = lead.id ? getPublicShareUrl(lead.id) : window.location.href;
+    const shareData = {
+      title: displayTitle,
+      text: `${displayTitle} • ${formattedPrice} • brokr.`,
+      url: currentUrl
+    };
+
+    if (navigator.share) {
+      try {
+        await navigator.share(shareData);
+        toast.success("Partajat cu succes!");
+        return;
+      } catch (err: any) {
+        if (err.name === "AbortError") {
+          return;
+        }
+      }
+    }
+
+    try {
+      await navigator.clipboard.writeText(currentUrl);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2500);
+      toast.success("Linkul public al proprietății a fost copiat în clipboard!");
+    } catch {
+      toast.error("Vă rugăm să copiați linkul manual.");
+    }
+  };
+
   const handleCopyLink = async () => {
     const currentUrl = lead.id ? getPublicShareUrl(lead.id) : window.location.href;
     try {
@@ -203,19 +349,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       setTimeout(() => setIsCopied(false), 2500);
       toast.success("Linkul public al proprietății a fost copiat!");
     } catch {
-      try {
-        const tempInput = document.createElement("input");
-        tempInput.value = currentUrl;
-        document.body.appendChild(tempInput);
-        tempInput.select();
-        document.execCommand("copy");
-        document.body.removeChild(tempInput);
-        setIsCopied(true);
-        setTimeout(() => setIsCopied(false), 2500);
-        toast.success("Linkul public a fost copiat!");
-      } catch {
-        toast.error("Vă rugăm să copiați linkul manual.");
-      }
+      toast.error("Vă rugăm să copiați linkul manual.");
     }
   };
 
@@ -226,25 +360,88 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const handleToggleFavorite = () => {
     const next = !isFavorite;
     setIsFavorite(next);
-    if (next) {
-      toast.success("Proprietatea a fost adăugată la favorite!");
-    } else {
-      toast("Proprietatea a fost eliminată din favorite.");
+    try {
+      if (next) {
+        localStorage.setItem(favoriteStorageKey, "true");
+        const isMac = typeof navigator !== "undefined" && (navigator.platform?.toUpperCase().indexOf("MAC") >= 0 || navigator.userAgent?.toUpperCase().indexOf("MAC") >= 0);
+        const isMobile = typeof window !== "undefined" && window.innerWidth < 768;
+
+        if (isMobile) {
+          toast.success("Salvat în favorite! Poți salva și din meniul browserului (⋮ sau Partajare) > Adaugă la semne de carte.", {
+            duration: 5000,
+            icon: "⭐"
+          });
+        } else if (isMac) {
+          toast.success("Salvat în favorite! Apasă ⌘ + D pentru a adăuga proprietatea în semnele de carte ale browserului.", {
+            duration: 5000,
+            icon: "⭐"
+          });
+        } else {
+          toast.success("Salvat în favorite! Apasă Ctrl + D pentru a adăuga proprietatea în semnele de carte ale browserului.", {
+            duration: 5000,
+            icon: "⭐"
+          });
+        }
+      } else {
+        localStorage.removeItem(favoriteStorageKey);
+        toast("Proprietatea a fost eliminată din favorite.");
+      }
+    } catch {
+      if (next) toast.success("Salvat în favorite!");
     }
   };
 
-  const handleInquirySubmit = (e: React.FormEvent) => {
+  const handleInquirySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formName.trim() || !formPhone.trim()) {
       toast.error("Vă rugăm să introduceți numele și numărul de telefon.");
       return;
     }
     setFormSubmitting(true);
-    setTimeout(() => {
-      setFormSubmitting(false);
+    try {
+      const isRentTransaction = String(lead.transactionType || "").toLowerCase().includes("închir") || String(lead.transactionType || "").toLowerCase().includes("inchir");
+      const assignedAgent = leadAuthor.name || "Consilier Imobiliar";
+      const notesContent = `Cerere vizionare trimisă de pe fișa proprietății #${internalCode} (${displayTitle}).\nClient: ${formName.trim()}\nTelefon: ${formPhone.trim()}${formEmail.trim() ? `\nEmail: ${formEmail.trim()}` : ""}${formMessage.trim() ? `\nMesaj client: ${formMessage.trim()}` : ""}\nAgent asignat: ${assignedAgent}`;
+
+      const cerereDoc = await leadsService.addLead({
+        url: lead.id ? getPublicShareUrl(lead.id) : (lead.url || ""),
+        title: `Cerere vizionare: ${displayTitle}`,
+        zone: lead.zone || "București",
+        price: lead.price || "N/A",
+        ownerName: formName.trim(),
+        ownerPhone: formPhone.trim(),
+        transactionType: lead.transactionType || (isRentTransaction ? "Închiriere" : "Vânzare"),
+        categoria: lead.categoria || "Apartament",
+        status: "Noua",
+        leadType: isRentTransaction ? "Chirias" : "Cumparator",
+        agent: assignedAgent,
+        author: assignedAgent,
+        createdByName: assignedAgent,
+        notes: notesContent
+      });
+
+      const cerereDocId = (cerereDoc as any)?.id;
+
+      await notificationsService.addNotification({
+        title: `Cerere Nouă de Vizionare (#${internalCode})`,
+        message: `${formName.trim()} (${formPhone.trim()}) a solicitat o vizionare pentru #${internalCode} - ${displayTitle}. Agent: ${assignedAgent}.`,
+        type: 'cerere' as any,
+        entityId: cerereDocId || lead.id,
+        propertyId: internalCode,
+        targetType: 'cerere'
+      });
+
       setFormSent(true);
-      toast.success("Mesajul a fost transmis agentului! Vă vom contacta în scurt timp.");
-    }, 600);
+      toast.success("Solicitarea dumneavoastră a fost trimisă cu succes! A fost creată o cerere nouă asignată agentului.", {
+        duration: 5000,
+        icon: "📋"
+      });
+    } catch (err: any) {
+      console.error("[PropertyDetailView] Error submitting inquiry:", err);
+      toast.error("A apărut o problemă la înregistrarea cererii. Vă rugăm să contactați direct agentul prin apel telefonic sau WhatsApp.");
+    } finally {
+      setFormSubmitting(false);
+    }
   };
 
   const handleCopyOwnerPhone = async () => {
@@ -288,6 +485,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const displayTitle = crmData?.descriere?.titlu || lead?.title || "Proprietate Rezidențială";
   const internalCode = lead?.propertyId || (lead?.id ? `P${lead.id.slice(0, 4)}` : "P41");
   const categoria = crmData?.detaliiGenerale?.categoria || lead?.categoria || "Apartament";
+
+  // Sync document title with property title
+  useEffect(() => {
+    if (displayTitle) {
+      document.title = `${displayTitle} • brokr.`;
+    }
+  }, [displayTitle]);
 
   // Address card values: Oras, Sector, Zona, Strada
   const addressDetails = useMemo(() => {
@@ -350,148 +554,154 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const garantie = crmData?.pret?.detalii?.garantie || (isRent ? `${crmData?.pret?.detalii?.pret || "775"} €` : "-");
   const avans = crmData?.pret?.detalii?.avans || (isRent ? "1 lună" : "15%");
 
-  // Extracts ONLY the introductory narrative text where the property is described as a summary,
-  // strictly removing anything related to proprietar, comision 0%, exact street and number, complex names, etc.
+  // Natural summary generated from crawler data:
+  // Strictly includes only: number of rooms, surface (mp), construction year, partitioning (decomandat/semidecomandat/etc.),
+  // presented naturally and attractively without sales pitch clichés or prohibited terms.
   const summaryDescription = useMemo(() => {
     const raw = crmData?.descriere?.continut || (lead as any)?.description || lead?.notes || "";
-    if (!raw) {
-      return `Apartament cu ${camere} camere, situat în zona ${addressDetails.zona}, ${addressDetails.sector}. Este complet mobilat și utilat, beneficiază de centrală proprie și încălzire în pardoseală, precum și de vedere către spații verzi.\n\nProprietate deosebită, pregătită pentru mutare imediată. Compartimentarea este de tip ${compartimentare}, optimizată inteligent pentru a oferi un confort maxim și spații generoase de depozitare.`;
+    
+    // Technical parameters strictly limited to the user's specification:
+    // - număr camere
+    // - suprafață (mp)
+    // - anul construcției
+    // - compartimentare
+    const techCamere = camere ? `${camere} camere` : "camere bine proporționate";
+    const techSuprafata = suprafataUtila ? `${suprafataUtila} mp utili` : "";
+    const techCompartimentare = compartimentare || "decomandat";
+    const techAn = (anConstructie && anConstructie !== "după 2000" && anConstructie !== "-") 
+      ? `construit în anul ${anConstructie}` 
+      : (anConstructie === "după 2000" ? "construcție recentă" : "");
+    const zonaLoc = addressDetails.zona ? `în zona ${addressDetails.zona}` : "într-o zonă accesibilă";
+
+    // Clean crawler narrative paragraphs if available
+    let crawlerIntro = "";
+    if (raw) {
+      const lines = raw.split("\n");
+      const introLines: string[] = [];
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (
+          line.includes("━━━━") ||
+          line.includes("----") ||
+          line.startsWith("⭐") ||
+          line.startsWith("🛋️") ||
+          line.startsWith("📍") ||
+          line.startsWith("💰") ||
+          line.startsWith("🤝") ||
+          line.startsWith("🛠️") ||
+          line.startsWith("💼") ||
+          line.toUpperCase().startsWith("AVANTAJE") ||
+          line.toUpperCase().startsWith("PUNCTE CHEIE") ||
+          line.toUpperCase().startsWith("DOTĂRI") ||
+          line.toUpperCase().startsWith("LOCAȚIE") ||
+          line.toUpperCase().startsWith("CONDIȚII")
+        ) {
+          break;
+        }
+
+        if (
+          line.startsWith("📌") ||
+          line.startsWith("🏡") ||
+          line.startsWith("🏢") ||
+          line.toLowerCase().startsWith("titlu:") ||
+          line.toLowerCase().startsWith("id:") ||
+          line.toLowerCase().startsWith("cod intern:")
+        ) {
+          continue;
+        }
+
+        const lower = line.toLowerCase();
+        if (
+          lower.includes("comision 0") ||
+          lower.includes("0% comision") ||
+          lower.includes("0 euro comision") ||
+          lower.includes("proprietar") ||
+          lower.includes("strada ") ||
+          lower.includes("str. ") ||
+          lower.includes("nr. ") ||
+          lower.includes("numar") ||
+          lower.includes("bloc ") ||
+          lower.includes("scara ") ||
+          lower.includes("chilipir") ||
+          lower.includes("ofertă unică") ||
+          lower.includes("super ofertă") ||
+          lower.includes("nu ratați") ||
+          lower.includes("apartament de vis")
+        ) {
+          continue;
+        }
+
+        introLines.push(line);
+      }
+      crawlerIntro = introLines.join(" ").trim();
     }
 
-    const lines = raw.split("\n");
-    const introLines: string[] = [];
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim();
-
-      // Stop once we hit a section divider or major subsection header
-      if (
-        line.includes("━━━━") ||
-        line.includes("----") ||
-        line.includes("====") ||
-        line.startsWith("⭐") ||
-        line.startsWith("🛋️") ||
-        line.startsWith("📍") ||
-        line.startsWith("💰") ||
-        line.startsWith("🤝") ||
-        line.startsWith("🛠️") ||
-        line.startsWith("💼") ||
-        line.toUpperCase().startsWith("AVANTAJE") ||
-        line.toUpperCase().startsWith("PUNCTE CHEIE") ||
-        line.toUpperCase().startsWith("DOTĂRI") ||
-        line.toUpperCase().startsWith("DOTARI") ||
-        line.toUpperCase().startsWith("LOCAȚIE") ||
-        line.toUpperCase().startsWith("LOCATIE") ||
-        line.toUpperCase().startsWith("APARTAMENT") ||
-        line.toUpperCase().startsWith("BLOC") ||
-        line.toUpperCase().startsWith("CONDIȚII") ||
-        line.toUpperCase().startsWith("CONDITII") ||
-        line.toUpperCase().startsWith("SUPORT") ||
-        line.toUpperCase().startsWith("CARACTERISTICI:") ||
-        line.toUpperCase().startsWith("FINISAJE:") ||
-        line.toUpperCase().startsWith("MOBILARE:") ||
-        line.toUpperCase().startsWith("TRANSPORT") ||
-        line.toUpperCase().startsWith("PARCARE")
-      ) {
-        break;
-      }
-
-      // Skip initial title/header/id lines
-      if (
-        line.startsWith("📌") ||
-        line.startsWith("🏡") ||
-        line.startsWith("🏢") ||
-        line.toLowerCase().startsWith("titlu:") ||
-        line.toLowerCase().startsWith("id:") ||
-        line.toLowerCase().startsWith("id ") ||
-        line.toLowerCase().startsWith("cod intern:")
-      ) {
-        continue;
-      }
-
-      // Skip lines with prohibited terms:
-      const lower = line.toLowerCase();
-      if (
-        lower.includes("comision 0") ||
-        lower.includes("0% comision") ||
-        lower.includes("0 euro comision") ||
-        lower.includes("0 comision") ||
-        lower.includes("comision zero") ||
-        lower.includes("fără comision") ||
-        lower.includes("fara comision") ||
-        lower.includes("proprietar") ||
-        lower.includes("nr. ") ||
-        lower.includes("strada ") ||
-        lower.includes("str. ") ||
-        lower.includes("numărul ") ||
-        lower.includes("numar ") ||
-        lower.includes("scara ") ||
-        lower.includes("bloc ") ||
-        (lower.includes("ap. ") && /\d/.test(lower))
-      ) {
-        continue;
-      }
-
-      introLines.push(lines[i]);
-    }
-
-    let cleanedText = introLines.join("\n").trim();
-
-    // Fallback to first 2 paragraphs if empty
-    if (!cleanedText || cleanedText.length < 20) {
-      const paragraphs = raw.split(/\n\s*\n/);
-      const candidates = paragraphs
-        .map(p => p.trim())
-        .filter(p => 
-          p && 
-          !p.includes("━━━━") && 
-          !p.startsWith("📌") && 
-          !p.startsWith("🏡") && 
-          !p.startsWith("🏢") &&
-          !p.toLowerCase().includes("comision 0") &&
-          !p.toLowerCase().includes("0% comision") &&
-          !p.toLowerCase().includes("proprietar")
-        );
-      if (candidates.length > 0) {
-        cleanedText = candidates.slice(0, 2).join("\n\n");
-      }
-    }
-
-    // Clean any remaining street number mentions or comision 0 patterns using regex
-    cleanedText = cleanedText
-      .replace(/(\b(?:strada|str\.|calea|bulevardul|bd\.)\s+[a-zăîșțâ\s]+)\s+(?:nr\.|numărul|numar)\s*\d+[a-z]?/gi, "$1")
+    // Clean remaining regex noise
+    crawlerIntro = crawlerIntro
+      .replace(/(\b(?:strada|str\.|calea|bulevardul|bd\.)\s+[a-zăîșțâ\s]+)\s+(?:nr\.|numărul|numar)\s*\d+[a-z]?/gi, "")
       .replace(/(?:comision\s*0%|0%\s*comision|comision\s*zero|fără\s*comision)/gi, "")
       .replace(/(?:închiriere|vânzare)\s+direct\s+de\s+la\s+proprietar/gi, "")
       .replace(/\s{2,}/g, " ")
       .trim();
 
-    return cleanedText || (
-      `Apartament cu ${camere} camere, situat în zona ${addressDetails.zona}, ${addressDetails.sector}. Este complet mobilat și utilat, beneficiază de centrală proprie și încălzire în pardoseală, precum și de vedere către spații verzi.`
-    );
-  }, [crmData?.descriere?.continut, (lead as any)?.description, lead?.notes, camere, addressDetails.zona, addressDetails.sector, compartimentare]);
+    // If crawler has a solid descriptive sentence, merge it naturally with the strict technical specs
+    if (crawlerIntro && crawlerIntro.length > 30) {
+      return `${crawlerIntro}\n\nProprietatea dispune de o suprafață utilă de ${techSuprafata || "suprafață optimă"}, configurare ${techCompartimentare} cu ${techCamere}${techAn ? `, într-un imobil ${techAn}` : ""}, oferind un cadru locativ aerisit și funcțional ${zonaLoc}.`;
+    }
 
-  // Agency agent contact info (strictly used in public share so owner info is never leaked!)
-  const agencyBroker = {
-    name: "Alexandru Popa",
-    phone: "0720 000 000",
-    role: "Consilier Imobiliar Senior • brokr.",
-    agency: "Agenția Imobiliară brokr.",
-    email: "contact@brokr.ro"
-  };
+    // Default natural, appealing presentation without sales hype
+    return `Proprietatea propusă este un apartament cu ${techCamere}, cu o suprafață utilă de ${techSuprafata || "spațioasă"}, compartimentat ${techCompartimentare}${techAn ? `, situat într-o clădire ${techAn}` : ""} ${zonaLoc}.\n\nSpațiul este organizat echilibrat, oferă o luminozitate naturală plăcută pe tot parcursul zilei și o atmosferă primitoare, fiind adaptat unui stil de viață confortabil cu acces facil către mijloacele de transport și facilitățile urbane.`;
+  }, [crmData?.descriere?.continut, (lead as any)?.description, lead?.notes, camere, suprafataUtila, compartimentare, anConstructie, addressDetails.zona]);
+
+  // Real author of the lead generation (the user who initialized importing the data)
+  const leadAuthor = useMemo(() => {
+    const l = lead as any;
+    let name = l.createdByName || l.author || l.agent || l.assignedTo || "";
+    let email = l.createdByEmail || "";
+    let phone = l.authorPhone || l.agentPhone || "";
+    let role = l.authorRole || "Consilier Imobiliar • brokr.";
+
+    if (!name && l.createdBy) {
+      const s = String(l.createdBy);
+      if (s.includes("@")) {
+        email = s;
+        name = s.split("@")[0];
+        name = name.charAt(0).toUpperCase() + name.slice(1);
+      } else {
+        name = s;
+      }
+    }
+
+    if (!name && auth.currentUser) {
+      name = auth.currentUser.displayName || (auth.currentUser.email ? auth.currentUser.email.split("@")[0] : "");
+      if (name) name = name.charAt(0).toUpperCase() + name.slice(1);
+      email = auth.currentUser.email || "";
+      if (auth.currentUser.phoneNumber) phone = auth.currentUser.phoneNumber;
+    }
+
+    if (!name) {
+      name = "Consilier brokr.";
+    }
+
+    return {
+      name,
+      email: email || "contact@brokr.ro",
+      phone: phone || "0700 000 000",
+      role,
+      agency: "Agenția Imobiliară brokr."
+    };
+  }, [lead]);
 
   return (
     <div ref={containerRef} className="w-full bg-[#F8F9FA] text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20">
       
-      {/* Top Navbar (only for standalone public share page) */}
+      {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
       {showTopNavbar && (
-        <nav className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-14 flex items-center justify-between gap-4">
+        <nav className="sticky top-0 z-40 bg-white border-b border-gray-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-[50px] flex items-center justify-between gap-4">
             <div className="flex items-center gap-1.5 focus:outline-none">
-              <span className="text-xl font-black tracking-tight text-[#051D35]">
+              <span className="font-extrabold text-base tracking-tight text-[#051D35] font-sans flex items-center">
                 brokr<span className="text-[#BE9662]">.</span>
-              </span>
-              <span className="hidden sm:inline-block ml-2 px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-gray-100 text-gray-600 border border-gray-200">
-                Fișă Prezentare
               </span>
             </div>
 
@@ -499,21 +709,21 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={handleToggleFavorite}
-                className={`h-8 px-3 rounded-md text-xs font-medium border transition-colors flex items-center gap-1.5 ${
+                className={`h-8 px-3 rounded-md text-xs font-medium border transition-colors flex items-center gap-1.5 cursor-pointer ${
                   isFavorite 
-                    ? "bg-rose-50 border-rose-200 text-rose-600" 
+                    ? "bg-amber-50 border-[#BE9662]/40 text-[#BE9662]" 
                     : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
                 }`}
-                title="Salvează la favorite"
+                title={isFavorite ? "Elimină din favoritele browserului" : "Salvează ca favorit în browser (Ctrl+D / Cmd+D)"}
               >
-                <Heart size={14} className={isFavorite ? "fill-rose-500 text-rose-500" : "text-gray-400"} />
-                <span className="hidden sm:inline">{isFavorite ? "Salvat" : "Favorite"}</span>
+                <Bookmark size={14} className={isFavorite ? "fill-[#BE9662] text-[#BE9662]" : "text-gray-400"} />
+                <span className="hidden sm:inline">{isFavorite ? "Salvat" : "Salvează favorit"}</span>
               </button>
 
               <button
                 type="button"
                 onClick={handlePrint}
-                className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5"
+                className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer"
                 title="Tipărește oferta"
               >
                 <Printer size={14} className="text-gray-400" />
@@ -522,16 +732,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
               <button
                 type="button"
-                onClick={handleCopyLink}
-                className={`h-8 px-3.5 rounded-md text-xs font-semibold transition-all flex items-center gap-1.5 shadow-xs ${
-                  isCopied 
-                    ? "bg-emerald-600 text-white" 
-                    : "bg-[#051D35] text-white hover:bg-[#0a2b4a]"
-                }`}
-                title="Copiază link-ul ofertei"
+                onClick={handleNativeShare}
+                className="h-8 px-3.5 rounded-md text-xs font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
               >
-                {isCopied ? <Check size={14} /> : <Share2 size={14} className="text-[#BE9662]" />}
-                <span>{isCopied ? "Link copiat!" : "Distribuie"}</span>
+                <Share2 size={14} className="text-[#BE9662]" />
+                <span>Distribuie</span>
               </button>
             </div>
           </div>
@@ -542,29 +748,29 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       <section className="bg-white border-b border-gray-200 pt-5 pb-5">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
           
-          {/* Breadcrumb / Category Tags */}
-          <div className="flex items-center gap-2 text-xs text-gray-500 mb-2 font-medium flex-wrap">
+          {/* Breadcrumb / Category (Clean typography without tag boxes) */}
+          <div className="flex items-center gap-2 text-xs text-gray-500 mb-2 font-medium flex-wrap font-sans">
             <span className="text-[#051D35] font-semibold">Imobile</span>
             <span className="text-gray-300">/</span>
-            <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-gray-100 text-gray-700 border border-gray-200 uppercase tracking-wide">
+            <span className="text-gray-700 font-medium">
               {lead.transactionType || "Închiriere"}
             </span>
             <span className="text-gray-300">/</span>
-            <span className="text-gray-600">{categoria}</span>
+            <span className="text-gray-600 font-medium">{categoria}</span>
             <span className="text-gray-300">/</span>
-            <span className="font-mono text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded text-[10px] font-bold">
+            <span className="font-mono text-gray-500 text-[11px]">
               Cod #{internalCode}
             </span>
           </div>
 
           {/* Title & Price Row */}
           <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-            <div className="space-y-1.5 max-w-3xl">
-              <h1 className="text-2xl sm:text-3xl font-extrabold text-[#051D35] tracking-tight leading-tight">
+            <div className="space-y-1.5 flex-1 min-w-0 pr-4">
+              <h1 className="text-2xl sm:text-3xl font-bold font-[700] text-[#051D35] tracking-tight leading-snug font-sans break-words">
                 {displayTitle}
               </h1>
               
-              <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-600">
+              <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-600 font-sans">
                 <MapPin size={15} className="text-[#BE9662] shrink-0" />
                 <span className="font-medium text-gray-700">
                   {addressDetails.fullSummary}
@@ -572,14 +778,54 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
-            {/* Price block */}
-            <div className="shrink-0 flex md:flex-col items-baseline md:items-end justify-between md:justify-center border-t md:border-t-0 pt-3 md:pt-0 border-gray-100">
-              <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 md:mb-0.5">
-                {isRent ? "Chirie lunară" : "Preț vânzare"}
-              </span>
-              <div className="text-2xl sm:text-3xl font-black text-[#051D35] font-mono tracking-tight">
-                {formattedPrice}
+            {/* Price block & Action buttons for in-app mode */}
+            <div className="shrink-0 flex flex-col md:items-end justify-between md:justify-center border-t md:border-t-0 pt-3 md:pt-0 border-gray-100 gap-2">
+              <div className="flex md:flex-col items-baseline md:items-end justify-between w-full">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 md:mb-0.5 font-sans">
+                  {isRent ? "Chirie lunară" : "Preț vânzare"}
+                </span>
+                <div className="text-2xl sm:text-3xl font-black text-[#051D35] font-mono tracking-tight">
+                  {formattedPrice}
+                </div>
               </div>
+
+              {!showTopNavbar && (
+                <div className="flex items-center gap-2 mt-1">
+                  <button
+                    type="button"
+                    onClick={handleToggleFavorite}
+                    className={`h-8 px-3 rounded-md text-xs font-medium border transition-colors flex items-center gap-1.5 cursor-pointer font-sans ${
+                      isFavorite 
+                        ? "bg-amber-50 border-[#BE9662]/40 text-[#BE9662]" 
+                        : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                    }`}
+                    title={isFavorite ? "Elimină din favoritele browserului" : "Salvează ca favorit în browser (Ctrl+D / Cmd+D)"}
+                  >
+                    <Bookmark size={13} className={isFavorite ? "fill-[#BE9662] text-[#BE9662]" : "text-gray-400"} />
+                    <span>{isFavorite ? "Salvat" : "Salvează favorit"}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer font-sans"
+                    title="Tipărește oferta"
+                  >
+                    <Printer size={13} className="text-gray-400" />
+                    <span className="hidden sm:inline">Printează</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleNativeShare}
+                    className="h-8 px-3.5 rounded-md text-xs font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-all flex items-center gap-1.5 shadow-xs cursor-pointer font-sans"
+                    title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+                  >
+                    <Share2 size={13} className="text-[#BE9662]" />
+                    <span>Distribuie</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -691,7 +937,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       </section>
 
       {/* Horizontal Sticky Menu with Jump Links */}
-      <div className={`sticky ${showTopNavbar ? "top-14 z-30" : "top-[50px] z-20"} bg-white/95 backdrop-blur-md border-b border-gray-200 shadow-xs`}>
+      <div className="sticky top-[50px] z-30 bg-white/95 backdrop-blur-md border-b border-gray-200 shadow-xs">
         <div className="max-w-7xl mx-auto px-4 sm:px-6">
           <div className="flex items-center gap-1 sm:gap-2 overflow-x-auto no-scrollbar py-2.5">
             {NAV_SECTIONS.map((sect) => {
@@ -725,16 +971,16 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     {/* Left Column: All Content Cards (8 cols on lg) */}
           <div className="lg:col-span-8 space-y-6">
 
-            {/* #CARD "DESCRIERE" */}
-            <div id="descriere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
+            {/* #CARD "INTRODUCERE" */}
+            <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <FileText size={16} />
                   </div>
                   <div>
-                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
-                      DESCRIERE
+                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                      INTRODUCERE
                     </h2>
                     <span className="text-[11px] font-mono text-[#BE9662] font-semibold">
                       (Cod intern: {internalCode})
@@ -743,8 +989,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
 
-              <div className="p-6">
-                <div className="text-xs sm:text-sm text-gray-700 leading-relaxed space-y-3 font-normal whitespace-pre-line">
+              <div className="p-6 font-sans">
+                <div className="text-xs sm:text-sm text-gray-700 leading-relaxed space-y-3 font-normal whitespace-pre-line select-text font-sans">
                   {summaryDescription}
                 </div>
               </div>
@@ -763,424 +1009,270 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
 
-              <div className="p-6 space-y-4">
+              <div className="font-sans divide-y divide-gray-100">
                 {/* -Subcategorie "Configuratie" */}
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Configurație:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    Suprafață utilă {suprafataUtila} mp, compartimentare {compartimentare}, etaj {etaj}, an construcție {anConstructie}, {camere} camere, {bai} {Number(bai) > 1 ? "băi" : "baie"}, balcon {balcoane}
-                  </div>
-                </div>
+                <AttributeRow
+                  label="Configurație"
+                  value={`Suprafață utilă ${suprafataUtila} mp, compartimentare ${compartimentare}, etaj ${etaj}, an construcție ${anConstructie}, ${camere} camere, ${bai} ${Number(bai) > 1 ? "băi" : "baie"}, balcon ${balcoane}`}
+                />
 
                 {/* -Subcategorie "Finisaje" */}
-                <div className="py-2.5 border-b border-gray-100 space-y-2">
-                  <div className="text-xs font-bold uppercase tracking-wider text-[#051D35] flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
-                    <span>Finisaje</span>
-                  </div>
-                  <div className="space-y-1.5 pl-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Living:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">vopsea lavabilă, parchet</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Camera 1:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">vopsea lavabilă, parchet</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Camera 2:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">vopsea lavabilă, parchet</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Bucătărie:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">vopsea lavabilă, faianță și gresie</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Baie 1:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">faianță și gresie</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Baie 2:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">faianță și gresie</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Hol:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">vopsea lavabilă, parchet</div>
-                    </div>
+                <div>
+                  <SubCategoryHeader title="Finisaje" />
+                  <div className="divide-y divide-gray-100">
+                    <AttributeRow label="Living" value="vopsea lavabilă, parchet" />
+                    <AttributeRow label="Camera 1" value="vopsea lavabilă, parchet" />
+                    <AttributeRow label="Camera 2" value="vopsea lavabilă, parchet" />
+                    <AttributeRow label="Bucătărie" value="vopsea lavabilă, faianță și gresie" />
+                    <AttributeRow label="Baie 1" value="faianță și gresie" />
+                    <AttributeRow label="Baie 2" value="faianță și gresie" />
+                    <AttributeRow label="Hol" value="vopsea lavabilă, parchet" />
                   </div>
                 </div>
 
                 {/* -Subcategorie "Mobilare" */}
-                <div className="py-2.5 border-b border-gray-100 space-y-2">
-                  <div className="text-xs font-bold uppercase tracking-wider text-[#051D35] flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
-                    <span>Mobilare</span>
-                  </div>
-                  <div className="space-y-1.5 pl-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Living:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">canapea, măsuță cafea, comodă</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Camera 1:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">pat, noptiere</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Camera 2:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">pat, dulap</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Bucătărie:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">mobilată</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Baie 1:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">obiecte sanitare premium</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Baie 2:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">obiecte sanitare</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Hol:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">cuier, pantofar</div>
-                    </div>
+                <div>
+                  <SubCategoryHeader title="Mobilare" />
+                  <div className="divide-y divide-gray-100">
+                    <AttributeRow label="Living" value="canapea, măsuță cafea, comodă" />
+                    <AttributeRow label="Camera 1" value="pat, noptiere" />
+                    <AttributeRow label="Camera 2" value="pat, dulap" />
+                    <AttributeRow label="Bucătărie" value="mobilată" />
+                    <AttributeRow label="Baie 1" value="obiecte sanitare premium" />
+                    <AttributeRow label="Baie 2" value="obiecte sanitare" />
+                    <AttributeRow label="Hol" value="cuier, pantofar" />
                   </div>
                 </div>
 
                 {/* -Subcategorie "Dotari" */}
-                <div className="py-2.5 border-b border-gray-100 space-y-2">
-                  <div className="text-xs font-bold uppercase tracking-wider text-[#051D35] flex items-center gap-2">
-                    <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
-                    <span>Dotări</span>
-                  </div>
-                  <div className="space-y-1.5 pl-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Living:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">aer condiționat, smart TV</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Camera 1:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">aer condiționat, draperii</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Camera 2:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">aer condiționat, corp iluminat LED</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Bucătărie:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">frigider încorporat, mașină de spălat vase, plită, cuptor, hotă</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Baie 1:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">cadă / duș, accesorii</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Baie 2:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">cabină duș, vas WC</div>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs py-0.5">
-                      <div className="sm:col-span-3 font-medium text-gray-800">Hol:</div>
-                      <div className="sm:col-span-9 text-gray-600 leading-relaxed">interfon, tablou siguranțe</div>
-                    </div>
+                <div>
+                  <SubCategoryHeader title="Dotări" />
+                  <div className="divide-y divide-gray-100">
+                    <AttributeRow label="Living" value="aer condiționat, smart TV" />
+                    <AttributeRow label="Camera 1" value="aer condiționat, draperii" />
+                    <AttributeRow label="Camera 2" value="aer condiționat, corp iluminat LED" />
+                    <AttributeRow label="Bucătărie" value="frigider încorporat, mașină de spălat vase, plită, cuptor, hotă" />
+                    <AttributeRow label="Baie 1" value="cadă / duș, accesorii" />
+                    <AttributeRow label="Baie 2" value="cabină duș, vas WC" />
+                    <AttributeRow label="Hol" value="interfon, tablou siguranțe" />
                   </div>
                 </div>
 
                 {/* -Subcategorie "Altele" */}
-                <div className="py-2.5 last:border-0 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Altele:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    mașină de spălat rufe cu uscător, centrală proprie, încălzire în pardoseală, vedere către curtea interioară
-                  </div>
-                </div>
+                <AttributeRow
+                  label="Altele"
+                  value="mașină de spălat rufe cu uscător, centrală proprie, încălzire în pardoseală, vedere către curtea interioară"
+                  isLast
+                />
               </div>
             </div>
 
             {/* #CARD "BLOC" */}
-            <div id="bloc" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
+            <div id="bloc" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Building2 size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                     BLOC
                   </h2>
                 </div>
               </div>
 
-              <div className="p-6 space-y-3">
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Acces:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Tag magnetic, pază 24/7, interfon</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Spații:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Curte interioară, spații verzi, loc de joacă</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Dotări:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Lift silențios, supraveghere video, generator curent</div>
-                </div>
-
-                <div className="py-2.5 last:border-0 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Servicii:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Administrație dedicată, mentenanță tehnică, curățenie spații comune</div>
-                </div>
+              <div className="font-sans divide-y divide-gray-100">
+                <AttributeRow label="Acces" value="Tag magnetic, pază 24/7, interfon" />
+                <AttributeRow label="Spații" value="Curte interioară, spații verzi, loc de joacă" />
+                <AttributeRow label="Dotări" value="Lift silențios, supraveghere video, generator curent" />
+                <AttributeRow label="Servicii" value="Administrație dedicată, mentenanță tehnică, curățenie spații comune" isLast />
               </div>
             </div>
 
             {/* #CARD "IMPREJURIMI" */}
-            <div id="imprejurimi" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
+            <div id="imprejurimi" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Compass size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                     ÎMPREJURIMI
                   </h2>
                 </div>
               </div>
 
-              <div className="p-6 space-y-3">
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Educație:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Grădinițe de stat și private, școli gimnaziale, licee în proximitate</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Comerț:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Promenada Mall, Băneasa Shopping City, Mega Image, Carrefour, Lidl</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Benzinării:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Rompetrol, OMV, Petrom, Lukoil</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Sănătate:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Regina Maria, Medicover, clinici private, farmacii nonstop</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Relaxare:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Parcul Herăstrău (Regele Mihai I), alei de promenadă, spații verzi</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Divertisment:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Săli World Class, cinematograf multiplex, restaurante și cafenele</div>
-                </div>
-
-                <div className="py-2.5 last:border-0 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Obiective:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Zona de birouri Aviației, Pipera Business District, Promenada</div>
-                </div>
+              <div className="font-sans divide-y divide-gray-100">
+                <AttributeRow label="Educație" value="Grădinițe de stat și private, școli gimnaziale, licee în proximitate" />
+                <AttributeRow label="Comerț" value="Promenada Mall, Băneasa Shopping City, Mega Image, Carrefour, Lidl" />
+                <AttributeRow label="Benzinării" value="Rompetrol, OMV, Petrom, Lukoil" />
+                <AttributeRow label="Sănătate" value="Regina Maria, Medicover, clinici private, farmacii nonstop" />
+                <AttributeRow label="Relaxare" value="Parcul Herăstrău (Regele Mihai I), alei de promenadă, spații verzi" />
+                <AttributeRow label="Divertisment" value="Săli World Class, cinematograf multiplex, restaurante și cafenele" />
+                <AttributeRow label="Obiective" value="Zona de birouri Aviației, Pipera Business District, Promenada" isLast />
               </div>
             </div>
 
             {/* #CARD "TRANSPORT" */}
-            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
+            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Bus size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                     TRANSPORT
                   </h2>
                 </div>
               </div>
 
-              <div className="p-6 space-y-3">
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Tramvaie:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Liniile 16, 36</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Troleibuze:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Liniile 76, 86</div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Autobuze:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Liniile 112, 135, 301, 343</div>
-                </div>
-
-                <div className="py-2.5 last:border-0 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Metrou:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">Aurel Vlaicu, Pipera (8-10 minute mers pe jos)</div>
-                </div>
+              <div className="font-sans divide-y divide-gray-100">
+                <AttributeRow label="Tramvaie" value="Liniile 16, 36" />
+                <AttributeRow label="Troleibuze" value="Liniile 76, 86" />
+                <AttributeRow label="Autobuze" value="Liniile 112, 135, 301, 343" />
+                <AttributeRow label="Metrou" value="Aurel Vlaicu, Pipera (8-10 minute mers pe jos)" isLast />
               </div>
             </div>
 
             {/* #CARD "PARCARE" */}
-            <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
+            <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Car size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                     PARCARE
                   </h2>
                 </div>
               </div>
 
-              <div className="p-6">
-                <div className="py-2.5 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Parcare:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    Publică în zonă, loc de parcare dedicat subteran/suprateran disponibil la cerere / inclus în funcție de contract
-                  </div>
-                </div>
+              <div className="font-sans">
+                <AttributeRow
+                  label="Parcare"
+                  value="Publică în zonă, loc de parcare dedicat subteran/suprateran disponibil la cerere / inclus în funcție de contract"
+                  isLast
+                />
               </div>
             </div>
 
             {/* #CARD "ACTE & TRANZACTIE" (Juridic, Disponibilitate, Finanțare) */}
-            <div id="acte" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
+            <div id="acte" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <ShieldCheck size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                     ACTE & TRANZACȚIE
                   </h2>
                 </div>
               </div>
 
-              <div className="p-6 space-y-3">
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Situație juridică:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    Intabulat, extras CF liber de sarcini, certificat energetic clasa A
-                  </div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Disponibilitate:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    Imediată
-                  </div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Finanțare:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    Credit bancar / fonduri proprii, înregistrare ANAF
-                  </div>
-                </div>
-
-                <div className="py-2.5 last:border-0 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Disponibilitate:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    Contract pe minimum 12 luni, fără animale de companie (sau conform acordului părților)
-                  </div>
-                </div>
+              <div className="font-sans divide-y divide-gray-100">
+                <AttributeRow label="Situație juridică" value="Intabulat, extras CF liber de sarcini, certificat energetic clasa A" />
+                <AttributeRow label="Disponibilitate" value="Imediată" />
+                <AttributeRow label="Finanțare" value="Credit bancar / fonduri proprii, înregistrare ANAF" />
+                <AttributeRow label="Disponibilitate" value="Contract pe minimum 12 luni, fără animale de companie (sau conform acordului părților)" isLast />
               </div>
             </div>
 
             {/* #CARD "ACTE & TRANZACTIE" (Preț, TVA, Comision) */}
-            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
+            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <BadgePercent size={16} />
                   </div>
                   <div>
-                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
-                      ACTE & TRANZACȚIE
+                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                      PREȚ & COMISION
                     </h2>
-                    <span className="text-[11px] text-gray-500">
+                    <span className="text-[11px] text-gray-500 font-sans">
                       Preț, TVA și Comision agenție
                     </span>
                   </div>
                 </div>
               </div>
 
-              <div className="p-6 space-y-3">
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Preț:</div>
-                  <div className="sm:col-span-9 font-bold text-[#051D35] font-mono text-sm leading-relaxed">
-                    {formattedPrice}
-                  </div>
-                </div>
-
-                <div className="py-2.5 border-b border-gray-100 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">TVA:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    Scutit de TVA / conform legislației în vigoare
-                  </div>
-                </div>
-
-                <div className="py-2.5 last:border-0 grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-4 text-xs">
-                  <div className="sm:col-span-3 font-semibold text-gray-900">Comision:</div>
-                  <div className="sm:col-span-9 text-gray-700 leading-relaxed">
-                    {isRent ? "50% + TVA din contravaloarea primei chirii lunare" : "Comision standard agenție"}
-                  </div>
-                </div>
+              <div className="font-sans divide-y divide-gray-100">
+                <AttributeRow
+                  label="Preț"
+                  value={<span className="font-bold text-[#051D35] font-mono text-[13px]">{formattedPrice}</span>}
+                  copyValue={formattedPrice}
+                />
+                <AttributeRow label="TVA" value="Scutit de TVA / conform legislației în vigoare" />
+                <AttributeRow
+                  label="Comision"
+                  value={isRent ? "50% + TVA din contravaloarea primei chirii lunare" : "Comision standard agenție"}
+                  isLast
+                />
               </div>
             </div>
+
+            {/* Generous bottom spacing ensuring the last cards can scroll to the top under the jump links bar */}
+            <div className="h-[60vh] min-h-[480px] pointer-events-none" aria-hidden="true" />
 
           </div>
 
           {/* Right Column: Sticky Sidebar with clear margin below sticky horizontal menu */}
           <div className="lg:col-span-4 lg:sticky lg:top-[128px] space-y-5">
             
-            {/* AGENT CARD */}
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
+            {/* AGENT CARD - Displays the real author who initiated importing the data */}
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
               <div className="p-5 border-b border-gray-100">
                 <div className="flex items-center gap-3.5">
                   <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#051D35] to-[#BE9662] text-white flex items-center justify-center font-bold text-base shadow-sm ring-2 ring-white shrink-0">
-                    A
+                    {leadAuthor.name.charAt(0).toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#BE9662]">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#BE9662] font-sans">
                       Consilier Imobiliar
                     </span>
-                    <h3 className="text-sm font-bold text-gray-900 truncate">
-                      {agencyBroker.name}
+                    <h3 className="text-sm font-bold text-gray-900 truncate font-sans">
+                      {leadAuthor.name}
                     </h3>
-                    <p className="text-[11px] text-gray-500">
-                      {agencyBroker.role}
+                    <p className="text-[11px] text-gray-500 font-sans">
+                      {leadAuthor.role}
                     </p>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-2 gap-2 mt-4">
+                <div className="grid grid-cols-2 gap-2 mt-4 font-sans">
                   <a
-                    href={`tel:${agencyBroker.phone.replace(/[^0-9+]/g, "")}`}
-                    className="h-8 px-2.5 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                    href={`tel:${leadAuthor.phone.replace(/[^0-9+]/g, "")}`}
+                    className="h-8 px-2.5 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <Phone size={13} className="text-[#BE9662]" />
                     <span>Sună Agentul</span>
                   </a>
 
                   <a
-                    href={`https://wa.me/4${agencyBroker.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Bună ziua, sunt interesat de proprietatea #${internalCode} - ${displayTitle}`)}`}
+                    href={`https://wa.me/4${leadAuthor.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Bună ziua, sunt interesat de proprietatea #${internalCode} - ${displayTitle}`)}`}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="h-8 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors"
+                    className="h-8 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                   >
                     <MessageSquare size={13} />
                     <span>WhatsApp</span>
                   </a>
                 </div>
               </div>
+            </div>
 
-              {/* Inquiry Form */}
-              <div className="p-5">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-gray-900 mb-3 flex items-center gap-1.5">
-                  <span>Solicită o vizionare</span>
-                  <span className="text-[#BE9662]">•</span>
-                </h4>
+            {/* SOLICITĂ O VIZIONARE CARD - Standardized Card Header */}
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
+              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                    <Calendar size={16} />
+                  </div>
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                    SOLICITĂ O VIZIONARE
+                  </h2>
+                </div>
+              </div>
 
+              <div className="p-5 font-sans">
                 {formSent ? (
                   <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-center space-y-2">
                     <CheckCircle2 size={24} className="text-emerald-600 mx-auto" />
@@ -1192,9 +1284,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     </p>
                   </div>
                 ) : (
-                  <form onSubmit={handleInquirySubmit} className="space-y-3">
+                  <form onSubmit={handleInquirySubmit} className="space-y-3 font-sans">
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
                         Numele dumneavoastră *
                       </label>
                       <input 
@@ -1203,12 +1295,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         value={formName}
                         onChange={(e) => setFormName(e.target.value)}
                         placeholder="ex. Radu Popescu"
-                        className="w-full h-8 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors"
+                        className="w-full h-8 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors font-sans"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
                         Număr telefon *
                       </label>
                       <input 
@@ -1222,7 +1314,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
                         Email (opțional)
                       </label>
                       <input 
@@ -1230,26 +1322,26 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         value={formEmail}
                         onChange={(e) => setFormEmail(e.target.value)}
                         placeholder="nume@exemplu.ro"
-                        className="w-full h-8 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors"
+                        className="w-full h-8 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors font-sans"
                       />
                     </div>
 
                     <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
                         Mesaj pentru agent
                       </label>
                       <textarea 
                         rows={3}
                         value={formMessage}
                         onChange={(e) => setFormMessage(e.target.value)}
-                        className="w-full p-2.5 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors resize-none leading-relaxed"
+                        className="w-full p-2.5 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors resize-none leading-relaxed font-sans"
                       />
                     </div>
 
                     <button
                       type="submit"
                       disabled={formSubmitting}
-                      className="w-full h-9 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-70"
+                      className="w-full h-9 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-70 font-sans"
                     >
                       <Send size={13} className="text-[#BE9662]" />
                       <span>{formSubmitting ? "Se trimite..." : "Trimite Mesaj"}</span>
@@ -1259,41 +1351,48 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
-            {/* 3. OWNER CARD - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
+            {/* OWNER CARD - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
             {!isPublicShared && (
-              <div className="bg-white rounded-xl border border-amber-200 overflow-hidden shadow-xs">
-                <div className="p-3.5 bg-amber-50/80 border-b border-amber-200/80 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <User size={15} className="text-amber-800" />
-                    <span className="text-xs font-bold text-amber-900 uppercase tracking-wider">
-                      Date Proprietar (Privat CRM)
-                    </span>
+              <div className="bg-white rounded-xl border border-amber-200 overflow-hidden shadow-xs font-sans">
+                <div className="px-6 py-4 bg-amber-50/80 border-b border-amber-200 flex items-center justify-between select-none">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-900 flex items-center justify-center font-bold">
+                      <User size={16} />
+                    </div>
+                    <div>
+                      <h2 className="text-xs font-bold text-amber-950 uppercase tracking-wider font-sans">
+                        DATE PROPRIETAR
+                      </h2>
+                      <span className="text-[10px] text-amber-700 font-medium font-sans">
+                        Privat CRM • Confidențial
+                      </span>
+                    </div>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-medium text-amber-700 bg-amber-100/60 px-1.5 py-0.5 rounded border border-amber-200">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-100/70 px-2 py-0.5 rounded border border-amber-300">
                     <Lock size={10} />
                     Ascuns pe share
                   </span>
                 </div>
 
-                <div className="p-4 space-y-3 text-xs">
+                <div className="p-5 space-y-3 text-xs font-sans">
                   <div>
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5">
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
                       Nume Proprietar
                     </span>
-                    <span className="font-bold text-gray-900 text-sm">
+                    <span className="font-bold text-gray-900 text-sm font-sans">
                       {lead.ownerName || "Nespecificat"}
                     </span>
                   </div>
 
                   <div>
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5">
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
                       Telefon Direct
                     </span>
                     {lead.ownerPhone ? (
                       <div className="flex items-center gap-2">
                         <a 
                           href={`tel:${lead.ownerPhone}`}
-                          className="font-mono font-bold text-[#051D35] hover:underline flex items-center gap-1"
+                          className="font-mono font-bold text-[#051D35] hover:underline flex items-center gap-1 font-sans"
                         >
                           <Phone size={13} className="text-[#BE9662]" />
                           {lead.ownerPhone}
@@ -1301,19 +1400,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         <button
                           type="button"
                           onClick={handleCopyOwnerPhone}
-                          className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors"
+                          className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors cursor-pointer"
                           title="Copiază telefon proprietar"
                         >
                           {copiedOwnerPhone ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
                         </button>
                       </div>
                     ) : (
-                      <span className="text-gray-400 italic">Nu este specificat</span>
+                      <span className="text-gray-400 italic font-sans">Nu este specificat</span>
                     )}
                   </div>
 
                   {lead.ownerPhone && (
-                    <div className="pt-2 border-t border-gray-100 flex gap-2">
+                    <div className="pt-2 border-t border-gray-100 flex gap-2 font-sans">
                       <a
                         href={`tel:${lead.ownerPhone.replace(/[^0-9+]/g, "")}`}
                         className="flex-1 h-7 rounded bg-[#051D35] text-white font-medium text-xs flex items-center justify-center gap-1 hover:bg-[#0a2b4a] transition-colors"
@@ -1333,35 +1432,44 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     </div>
                   )}
 
-                  <p className="text-[10px] text-gray-400 italic pt-1">
+                  <p className="text-[10px] text-gray-400 italic pt-1 font-sans">
                     * Aceste date sunt confidențiale și sunt vizibile exclusiv consultanților agenției, nu apar pe link-ul distribuit clienților.
                   </p>
                 </div>
               </div>
             )}
 
-            {/* 4. Quick Share Link Box */}
-            <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-xs space-y-2">
-              <div className="flex items-center justify-between text-xs font-semibold text-gray-800">
-                <span className="flex items-center gap-1.5">
-                  <Share2 size={13} className="text-[#BE9662]" />
-                  <span>Link de acces public</span>
-                </span>
-                <span className="text-[10px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200">
-                  Fără date proprietar
-                </span>
+            {/* LINK ACCES PUBLIC - Standardized Card Header */}
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
+              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                    <Share2 size={16} />
+                  </div>
+                  <div>
+                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                      LINK ACCES PUBLIC
+                    </h2>
+                    <span className="text-[10px] text-emerald-700 font-medium font-sans">
+                      Fără date proprietar
+                    </span>
+                  </div>
+                </div>
               </div>
-              <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded p-1 pl-2">
-                <span className="text-[11px] font-mono text-gray-600 truncate flex-1 select-all">
-                  {getPublicShareUrl(lead.id || "")}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleCopyLink}
-                  className="h-6 px-2 rounded text-[11px] font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-colors shrink-0"
-                >
-                  {isCopied ? "Copiat" : "Copiază"}
-                </button>
+
+              <div className="p-5 space-y-2 font-sans">
+                <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded p-1 pl-2">
+                  <span className="text-[11px] font-mono text-gray-600 truncate flex-1 select-all font-sans">
+                    {getPublicShareUrl(lead.id || "")}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={handleCopyLink}
+                    className="h-6 px-2.5 rounded text-[11px] font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-colors shrink-0 cursor-pointer font-sans"
+                  >
+                    {isCopied ? "Copiat" : "Copiază"}
+                  </button>
+                </div>
               </div>
             </div>
 

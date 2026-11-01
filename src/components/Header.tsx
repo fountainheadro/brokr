@@ -154,9 +154,10 @@ export const Header: React.FC<HeaderProps> = ({
     };
   }, []);
 
-  // Compute search results categorized into: Proprietăți, Lead-uri, Cereri, Clienți, Personal, Documente, Vizionări
+  // Compute search results categorized into: Lead-uri, Cereri, Imobile, Clienți, Personal, Documente, Vizionări
   const { 
     matchedProperties = [], 
+    matchedLeads = [],
     matchedCereri = [], 
     matchedContacts = [], 
     matchedPersonal = [], 
@@ -168,6 +169,7 @@ export const Header: React.FC<HeaderProps> = ({
     if (!q) {
       return { 
         matchedProperties: [], 
+        matchedLeads: [],
         matchedCereri: [], 
         matchedContacts: [], 
         matchedPersonal: [], 
@@ -177,7 +179,20 @@ export const Header: React.FC<HeaderProps> = ({
       };
     }
 
-    // 1. Cereri: All client requests (#R...)
+    const CERERI_STATUS_ORDER: Record<string, number> = {
+      'Noua': 1, 'Calificare': 2, 'Matching': 3, 'Vizionare': 4, 'Ofertare': 5, 'Antecontract': 6, 'Contract': 7
+    };
+
+    const LEADS_STATUS_ORDER: Record<string, number> = {
+      'Noi': 1, 'Pierdute': 2, 'Nevalidata': 3, 'Calificata': 4
+    };
+
+    const PROPRIETATI_STATUS_ORDER: Record<string, number> = {
+      'Noua': 1, 'Prospectare': 2, 'Colaborare': 3, 'Vizionare': 4, 'Ofertare': 5, 'Antecontract': 6, 'Contract': 7,
+      'Activa': 8, 'InNegociere': 9, 'Finalizata': 10, 'Arhiva': 11, 'Sterse': 12
+    };
+
+    // 1. Cereri: All client requests (#R...), sorted by status tab order
     const cereri = allLeads.filter(l => {
       const isCerere = isCerereLead(l);
       if (!isCerere) return false;
@@ -190,12 +205,17 @@ export const Header: React.FC<HeaderProps> = ({
       const notesMatch = (l.notes || "").toLowerCase().includes(q);
       const idMatch = (l.propertyId || "").toLowerCase().includes(q);
       return titleMatch || nameMatch || phoneMatch || zoneMatch || priceMatch || notesMatch || idMatch;
+    }).sort((a, b) => {
+      const ordA = CERERI_STATUS_ORDER[a.status] || 99;
+      const ordB = CERERI_STATUS_ORDER[b.status] || 99;
+      return ordA - ordB;
     }).slice(0, 5);
 
-    // 2. Proprietăți: All active/listed leads (#P... / #L...)
-    const properties = allLeads.filter(l => {
-      const isCerere = isCerereLead(l);
-      if (isCerere) return false;
+    // 2. Lead-uri: Items in status Noi / Pierdute / Nevalidata / Calificata, sorted by status order
+    const leadsList = allLeads.filter(l => {
+      if (isCerereLead(l)) return false;
+      const isLead = l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata';
+      if (!isLead) return false;
 
       const titleMatch = (l.title || "").toLowerCase().includes(q);
       const zoneMatch = (l.zone || "").toLowerCase().includes(q);
@@ -205,9 +225,33 @@ export const Header: React.FC<HeaderProps> = ({
       const idMatch = (l.propertyId || l.id || "").toLowerCase().includes(q);
       const catMatch = (l.categoria || "").toLowerCase().includes(q);
       return titleMatch || zoneMatch || priceMatch || nameMatch || phoneMatch || idMatch || catMatch;
+    }).sort((a, b) => {
+      const ordA = LEADS_STATUS_ORDER[a.status] || 99;
+      const ordB = LEADS_STATUS_ORDER[b.status] || 99;
+      return ordA - ordB;
     }).slice(0, 5);
 
-    // 3. Clienți: Contacts list (#C...)
+    // 3. Imobile: Portofoliu imobile (Noua, Prospectare, Colaborare, etc.), sorted by status tab order
+    const properties = allLeads.filter(l => {
+      if (isCerereLead(l)) return false;
+      const isLead = l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata';
+      if (isLead) return false;
+
+      const titleMatch = (l.title || "").toLowerCase().includes(q);
+      const zoneMatch = (l.zone || "").toLowerCase().includes(q);
+      const priceMatch = (l.price || "").toLowerCase().includes(q);
+      const nameMatch = (l.ownerName || "").toLowerCase().includes(q);
+      const phoneMatch = (l.ownerPhone || "").toLowerCase().includes(q);
+      const idMatch = (l.propertyId || l.id || "").toLowerCase().includes(q);
+      const catMatch = (l.categoria || "").toLowerCase().includes(q);
+      return titleMatch || zoneMatch || priceMatch || nameMatch || phoneMatch || idMatch || catMatch;
+    }).sort((a, b) => {
+      const ordA = PROPRIETATI_STATUS_ORDER[a.status] || 99;
+      const ordB = PROPRIETATI_STATUS_ORDER[b.status] || 99;
+      return ordA - ordB;
+    }).slice(0, 5);
+
+    // 4. Clienți: Contacts list (#C...)
     const contacts = allContacts.filter(c => {
       const fullName = `${c.firstName || ""} ${c.lastName || ""}`.toLowerCase();
       const nameMatch = fullName.includes(q);
@@ -218,7 +262,7 @@ export const Header: React.FC<HeaderProps> = ({
       return nameMatch || phoneMatch || typeMatch || propIdMatch || contactIdMatch;
     }).slice(0, 5);
 
-    // 4. Personal: Staff list (#S...)
+    // 5. Personal: Staff list (#S...)
     const personal = allPersonal.filter(p => {
       const nameMatch = (p.name || "").toLowerCase().includes(q);
       const roleMatch = (p.role || "").toLowerCase().includes(q);
@@ -229,7 +273,7 @@ export const Header: React.FC<HeaderProps> = ({
       return nameMatch || roleMatch || phoneMatch || emailMatch || zoneMatch || idMatch;
     }).slice(0, 5);
 
-    // 5. Documente: Documents list (#D...)
+    // 6. Documente: Documents list (#D...)
     const documents = allDocuments.filter(d => {
       const titleMatch = (d.title || "").toLowerCase().includes(q);
       const typeMatch = (d.type || "").toLowerCase().includes(q);
@@ -239,7 +283,7 @@ export const Header: React.FC<HeaderProps> = ({
       return titleMatch || typeMatch || propMatch || clientMatch || idMatch;
     }).slice(0, 4);
 
-    // 6. Activități / Activities (#A...)
+    // 7. Activități / Activities (#A...)
     const activities = allActivities.filter(a => {
       const nameMatch = (a.clientName || "").toLowerCase().includes(q);
       const propMatch = (a.propertyId || "").toLowerCase().includes(q);
@@ -252,12 +296,13 @@ export const Header: React.FC<HeaderProps> = ({
 
     return {
       matchedProperties: properties,
+      matchedLeads: leadsList,
       matchedCereri: cereri,
       matchedContacts: contacts,
       matchedPersonal: personal,
       matchedDocuments: documents,
       matchedActivities: activities,
-      totalResults: properties.length + cereri.length + contacts.length + personal.length + documents.length + activities.length
+      totalResults: properties.length + leadsList.length + cereri.length + contacts.length + personal.length + documents.length + activities.length
     };
   }, [allLeads, allContacts, allPersonal, allDocuments, allActivities, localQuery]);
 
@@ -423,7 +468,52 @@ export const Header: React.FC<HeaderProps> = ({
                               </div>
                             </div>
                             <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700 shrink-0">
-                              Cerere
+                              {cerere.status}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 3. Lead-uri (#L...) */}
+                  {matchedLeads.length > 0 && (
+                    <div>
+                      <div className="px-4 py-1.5 bg-emerald-50/50 text-[10px] font-bold uppercase tracking-wider text-emerald-800 border-b border-emerald-100/60 flex items-center justify-between">
+                        <span className="flex items-center gap-1.5">
+                          <Inbox size={12} className="text-emerald-600" />
+                          Lead-uri ({matchedLeads.length})
+                        </span>
+                      </div>
+                      <div className="divide-y divide-gray-50">
+                        {matchedLeads.map((lead) => (
+                          <div
+                            key={lead.id}
+                            onClick={() => handleSelectProperty(lead)}
+                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-emerald-50/30 transition-colors cursor-pointer text-left select-none"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                              <div className="w-7 h-7 rounded-md bg-emerald-100/60 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
+                                <Inbox size={14} />
+                              </div>
+                              <div className="min-w-0">
+                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                  <span className="truncate">{lead.title || "Lead fără titlu"}</span>
+                                  {lead.propertyId && (
+                                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0">
+                                      #{lead.propertyId}
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
+                                  <span>{lead.zone || "Zonă nespecificată"}</span>
+                                  <span>•</span>
+                                  <span>{lead.price}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
+                              {lead.status}
                             </span>
                           </div>
                         ))}

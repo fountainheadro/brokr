@@ -16,6 +16,8 @@ import { ExtractionResult } from './geminiService';
 import { entityIdService } from './entityIdService';
 
 export type LeadStatus = 
+  | 'Noi'
+  | 'Pierdute'
   | 'Nevalidata' 
   | 'Calificata' 
   | 'Activa' 
@@ -23,7 +25,7 @@ export type LeadStatus =
   | 'Finalizata' 
   | 'Arhiva' 
   | 'Sterse' 
-  | 'AreInteres'
+  | 'AreInteres' 
   | 'Noua' 
   | 'Prospectare'
   | 'Colaborare'
@@ -33,6 +35,11 @@ export type LeadStatus =
   | 'Ofertare' 
   | 'Antecontract' 
   | 'Contract';
+
+export const LEADS_STATUSES: LeadStatus[] = [
+  'Noi',
+  'Pierdute'
+];
 
 export const PROPRIETATI_STATUSES: LeadStatus[] = [
   'Noua',
@@ -65,7 +72,7 @@ export const isCerereLead = (l?: { status?: string; title?: string; notes?: stri
 };
 
 export const mapStatus = (status: string): LeadStatus => {
-  if (status === 'Lead-uri' || status === 'Intrata') return 'Nevalidata';
+  if (status === 'Lead-uri' || status === 'Intrata' || status === 'Nevalidate' || status === 'Nevalidata') return 'Noi';
   if (status === 'Publicare') return 'Noua';
   if (status === 'Cerere') return 'Noua';
   return status as LeadStatus;
@@ -119,6 +126,10 @@ export interface Lead {
   coverImage?: string;
   notes?: string;
   extractedData?: ExtractionResult;
+  createdByName?: string;
+  createdByEmail?: string;
+  author?: string;
+  agent?: string;
   createdAt: any; // Allow serverTimestamp
   updatedAt: any;
   lastMovedAt?: any;
