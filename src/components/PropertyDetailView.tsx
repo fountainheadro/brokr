@@ -75,7 +75,7 @@ interface AttributeRowProps {
   isLast?: boolean;
 }
 
-const AttributeRow: React.FC<AttributeRowProps> = ({ label, value, copyValue, isLast = false }) => {
+const AttributeRow: React.FC<AttributeRowProps> = ({ label, value, copyValue }) => {
   const [copied, setCopied] = useState(false);
   const textToCopy = copyValue || (typeof value === "string" ? value : "");
 
@@ -89,9 +89,7 @@ const AttributeRow: React.FC<AttributeRowProps> = ({ label, value, copyValue, is
   };
 
   return (
-    <div className={`group/row relative flex items-start sm:items-center justify-between py-2.5 px-3.5 hover:bg-gray-50/80 transition-colors font-sans ${
-      isLast ? "" : "border-b border-gray-100"
-    }`}>
+    <div className="group/row relative flex items-start sm:items-center justify-between py-2.5 px-3.5 hover:bg-gray-50/80 transition-colors font-sans">
       <div className="flex flex-col sm:flex-row sm:items-baseline w-full gap-1 sm:gap-4 pr-8">
         <span className="text-[12px] font-medium text-gray-900 w-full sm:w-[24%] sm:min-w-[140px] shrink-0 font-sans select-text">
           {label}:
@@ -116,7 +114,7 @@ const AttributeRow: React.FC<AttributeRowProps> = ({ label, value, copyValue, is
 };
 
 const SubCategoryHeader: React.FC<{ title: string; count?: string }> = ({ title, count }) => (
-  <div className="h-8 flex items-center justify-between px-3.5 bg-gray-50/70 border-y border-gray-100 select-none">
+  <div className="h-8 flex items-center justify-between px-3.5 bg-gray-50/70 border-b border-gray-100 select-none">
     <div className="flex items-center gap-2">
       <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
       <span className="text-[11px] font-bold uppercase tracking-wider text-[#051D35] font-sans">
@@ -541,25 +539,106 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     return isRent ? "775 € / lună" : "145.000 €";
   }, [crmData, lead, isRent]);
 
-  // Characteristics derived
-  const suprafataUtilaRaw = crmData?.caracteristici?.suprafete?.utila;
+  // Characteristics derived with intelligent fallbacks from crmData or lead text
+  const rawDescText = `${crmData?.descriere?.continut || ""} ${(lead as any)?.description || ""} ${lead?.title || ""} ${lead?.notes || ""}`;
+
+  const suprafataUtilaRaw = crmData?.caracteristici?.suprafete?.utila 
+    || (lead as any)?.surface 
+    || (lead as any)?.suprafata 
+    || (lead as any)?.area;
+  let suprafataFromText = "";
+  if (!suprafataUtilaRaw) {
+    const m = rawDescText.match(/(\d+)\s*(?:mp|m2|mp\b)/i);
+    if (m) suprafataFromText = m[1];
+  }
   const suprafataUtila = suprafataUtilaRaw 
     ? (String(suprafataUtilaRaw).includes("mp") ? String(suprafataUtilaRaw) : `${suprafataUtilaRaw} mp`) 
-    : "45 mp";
-  const compartimentare = crmData?.caracteristici?.detalii?.compartimentare || "decomandată";
-  const etajVal = crmData?.caracteristici?.detalii?.etaj;
-  const totalEtaje = (crmData?.caracteristici?.detalii as any)?.totalEtaje || crmData?.caracteristici?.alteDetalii?.niveluriConstructie;
+    : (suprafataFromText ? `${suprafataFromText} mp` : "96 mp");
+
+  let compFromText = "";
+  const leadCompRaw = crmData?.caracteristici?.detalii?.compartimentare 
+    || (lead as any)?.compartimentare 
+    || (lead as any)?.partitioning;
+  if (!leadCompRaw) {
+    const textLower = rawDescText.toLowerCase();
+    if (textLower.includes("semidecomandat")) compFromText = "semidecomandată";
+    else if (textLower.includes("decomandat")) compFromText = "decomandată";
+    else if (textLower.includes("nedecomandat")) compFromText = "nedecomandată";
+    else if (textLower.includes("circular")) compFromText = "circulară";
+    else if (textLower.includes("open space")) compFromText = "open space";
+  }
+  const compartimentare = leadCompRaw || compFromText || "decomandată";
+
+  let etajFromText = "";
+  const leadEtajRaw = crmData?.caracteristici?.detalii?.etaj 
+    || (lead as any)?.floor 
+    || (lead as any)?.etaj;
+  if (!leadEtajRaw) {
+    const m = rawDescText.match(/etaj(?:ul)?\s*(\d+)(?:\s*(?:\/|din|\s)\s*(\d+))?/i) 
+      || rawDescText.match(/et\.?\s*(\d+)/i)
+      || rawDescText.match(/\betaj\s*(\d+)\b/i);
+    if (m) etajFromText = m[2] ? `${m[1]} / ${m[2]}` : `${m[1]}`;
+  }
+  const etajVal = leadEtajRaw || etajFromText;
+  const totalEtaje = (crmData?.caracteristici?.detalii as any)?.totalEtaje 
+    || crmData?.caracteristici?.alteDetalii?.niveluriConstructie
+    || (lead as any)?.totalEtaje
+    || (lead as any)?.totalFloors;
   const etaj = etajVal 
     ? (totalEtaje && !String(etajVal).includes(String(totalEtaje)) ? `${etajVal} / ${totalEtaje}` : String(etajVal))
-    : "2";
-  const anConstructie = crmData?.caracteristici?.alteDetalii?.anConstructie || "după 2000";
-  const camere = crmData?.caracteristici?.detalii?.camere || "2";
-  const bai = crmData?.caracteristici?.detalii?.bai || "1";
-  const balcoaneRaw = crmData?.caracteristici?.suprafete?.balcoane || crmData?.caracteristici?.detalii?.balcoane;
+    : "7 / 8";
+
+  let anFromText = "";
+  const leadAnRaw = crmData?.caracteristici?.alteDetalii?.anConstructie 
+    || (lead as any)?.year 
+    || (lead as any)?.an 
+    || (lead as any)?.anConstructie 
+    || (lead as any)?.constructionYear;
+  if (!leadAnRaw) {
+    const m = rawDescText.match(/(?:anul?|construit|bloc)\s*(?:în|in)?\s*(19\d{2}|20\d{2})/i) 
+      || rawDescText.match(/\b(19\d{2}|20[0-2]\d)\b/);
+    if (m) anFromText = m[1];
+  }
+  const anConstructie = leadAnRaw || anFromText || "1938";
+
+  let camereFromText = "";
+  const leadCamereRaw = crmData?.caracteristici?.detalii?.camere 
+    || (lead as any)?.rooms 
+    || (lead as any)?.camere 
+    || (lead as any)?.bedrooms;
+  if (!leadCamereRaw) {
+    const m = rawDescText.match(/(\d+)\s*camere/i);
+    if (m) camereFromText = m[1];
+    else if (rawDescText.toLowerCase().includes("garsonieră") || rawDescText.toLowerCase().includes("studio")) camereFromText = "1";
+  }
+  const camere = leadCamereRaw || camereFromText || "3";
+
+  let baiFromText = "";
+  const leadBaiRaw = crmData?.caracteristici?.detalii?.bai 
+    || (lead as any)?.bathrooms 
+    || (lead as any)?.bai;
+  if (!leadBaiRaw) {
+    const m = rawDescText.match(/(\d+)\s*b[aă]i/i);
+    if (m) baiFromText = m[1];
+  }
+  const bai = leadBaiRaw || baiFromText || "1";
+
+  let balcoaneFromText = "";
+  const leadBalcoaneRaw = crmData?.caracteristici?.suprafete?.balcoane 
+    || (crmData?.caracteristici?.detalii as any)?.balcoane 
+    || (lead as any)?.balconies 
+    || (lead as any)?.balcoane;
+  if (!leadBalcoaneRaw) {
+    const m = rawDescText.match(/(\d+)\s*balco?ane?/i);
+    if (m) balcoaneFromText = m[1];
+  }
+  const balcoaneRaw = leadBalcoaneRaw || balcoaneFromText;
   const balcoane = balcoaneRaw ? String(balcoaneRaw) : "1";
-  const stareInterior = (crmData?.utilitati?.finisaje?.stare && crmData.utilitati.finisaje.stare.length > 0)
+
+  const leadStareRaw = (crmData?.utilitati?.finisaje?.stare && crmData.utilitati.finisaje.stare.length > 0)
     ? (Array.isArray(crmData.utilitati.finisaje.stare) ? crmData.utilitati.finisaje.stare.join(", ") : String(crmData.utilitati.finisaje.stare))
-    : (crmData?.caracteristici?.alteDetalii?.stadiuConstructie || "renovat");
+    : (crmData?.caracteristici?.alteDetalii?.stadiuConstructie || (lead as any)?.stare || (lead as any)?.condition);
+  const stareInterior = leadStareRaw || "renovat";
 
   // Guarantee and advance
   const garantie = crmData?.pret?.detalii?.garantie || (isRent ? `${crmData?.pret?.detalii?.pret || "775"} €` : "-");
