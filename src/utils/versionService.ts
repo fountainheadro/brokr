@@ -20,13 +20,13 @@ export interface VersionData {
 
 export type UpdateComplexity = 'small' | 'medium' | 'large' | number;
 
-const STORAGE_KEY = "brokr_app_version_state_v8";
+const STORAGE_KEY = "brokr_app_version_state_v9";
 
-// Initial version state updated (+25 pts to group 3)
+// Initial version state updated (+10 pts to group 3)
 const DEFAULT_VERSION: VersionData = {
   major: 0,
-  minor: 11,
-  patch: 116, // formats to "116"
+  minor: 12,
+  patch: 126, // formats to "126"
   lastUpdated: new Date().toISOString()
 };
 

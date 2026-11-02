@@ -542,13 +542,24 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   }, [crmData, lead, isRent]);
 
   // Characteristics derived
-  const suprafataUtila = crmData?.caracteristici?.suprafete?.utila || "45";
-  const compartimentare = crmData?.caracteristici?.detalii?.compartimentare || "decomandat";
-  const etaj = crmData?.caracteristici?.detalii?.etaj || "2";
+  const suprafataUtilaRaw = crmData?.caracteristici?.suprafete?.utila;
+  const suprafataUtila = suprafataUtilaRaw 
+    ? (String(suprafataUtilaRaw).includes("mp") ? String(suprafataUtilaRaw) : `${suprafataUtilaRaw} mp`) 
+    : "45 mp";
+  const compartimentare = crmData?.caracteristici?.detalii?.compartimentare || "decomandată";
+  const etajVal = crmData?.caracteristici?.detalii?.etaj;
+  const totalEtaje = (crmData?.caracteristici?.detalii as any)?.totalEtaje || crmData?.caracteristici?.alteDetalii?.niveluriConstructie;
+  const etaj = etajVal 
+    ? (totalEtaje && !String(etajVal).includes(String(totalEtaje)) ? `${etajVal} / ${totalEtaje}` : String(etajVal))
+    : "2";
   const anConstructie = crmData?.caracteristici?.alteDetalii?.anConstructie || "după 2000";
   const camere = crmData?.caracteristici?.detalii?.camere || "2";
   const bai = crmData?.caracteristici?.detalii?.bai || "1";
-  const balcoane = crmData?.caracteristici?.suprafete?.balcoane || crmData?.caracteristici?.detalii?.balcoane || "1 balcon închis (6 mp)";
+  const balcoaneRaw = crmData?.caracteristici?.suprafete?.balcoane || crmData?.caracteristici?.detalii?.balcoane;
+  const balcoane = balcoaneRaw ? String(balcoaneRaw) : "1";
+  const stareInterior = (crmData?.utilitati?.finisaje?.stare && crmData.utilitati.finisaje.stare.length > 0)
+    ? (Array.isArray(crmData.utilitati.finisaje.stare) ? crmData.utilitati.finisaje.stare.join(", ") : String(crmData.utilitati.finisaje.stare))
+    : (crmData?.caracteristici?.alteDetalii?.stadiuConstructie || "renovat");
 
   // Guarantee and advance
   const garantie = crmData?.pret?.detalii?.garantie || (isRent ? `${crmData?.pret?.detalii?.pret || "775"} €` : "-");
@@ -1011,10 +1022,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
               <div className="font-sans divide-y divide-gray-100">
                 {/* -Subcategorie "Configuratie" */}
-                <AttributeRow
-                  label="Configurație"
-                  value={`Suprafață utilă ${suprafataUtila} mp, compartimentare ${compartimentare}, etaj ${etaj}, an construcție ${anConstructie}, ${camere} camere, ${bai} ${Number(bai) > 1 ? "băi" : "baie"}, balcon ${balcoane}`}
-                />
+                <div>
+                  <SubCategoryHeader title="Configurație" />
+                  <div className="divide-y divide-gray-100">
+                    <AttributeRow label="Suprafață utilă" value={suprafataUtila} copyValue={suprafataUtila} />
+                    <AttributeRow label="Compartimentare" value={compartimentare} copyValue={compartimentare} />
+                    <AttributeRow label="Etaj" value={etaj} copyValue={etaj} />
+                    <AttributeRow label="An construcție" value={anConstructie} copyValue={anConstructie} />
+                    <AttributeRow label="Număr camere" value={camere} copyValue={String(camere)} />
+                    <AttributeRow label="Număr băi" value={bai} copyValue={String(bai)} />
+                    <AttributeRow label="Balcon" value={balcoane} copyValue={String(balcoane)} />
+                    <AttributeRow label="Stare" value={stareInterior} copyValue={stareInterior} />
+                  </div>
+                </div>
 
                 {/* -Subcategorie "Finisaje" */}
                 <div>
