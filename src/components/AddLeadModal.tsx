@@ -81,8 +81,9 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
         agent: creatorName,
         extractedData: crmData ? {
           crmData: crmData,
+          presentationSections: crawlData.presentationSections || null,
           markdownMarketing: crmData.descriere?.continut || "",
-          summary: `${categoria || "Proprietate"} ${crmData.caracteristici?.detalii?.camere || "2"} camere în ${zone || "București"}, ${price || "N/A"}`
+          summary: crawlData.presentationSections?.introducere?.summary || `${categoria || "Proprietate"} ${crmData.caracteristici?.detalii?.camere || "2"} camere în ${zone || "București"}, ${price || "N/A"}`
         } : null
       });
 

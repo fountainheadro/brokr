@@ -151,6 +151,7 @@ export interface ExtractionResult {
   crmData: CRMData;
   markdownMarketing: string;
   summary: string;
+  presentationSections?: Record<string, Record<string, string>> | null;
 }
 
 export interface BasicLeadData {

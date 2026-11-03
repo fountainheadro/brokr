@@ -65,14 +65,14 @@ interface NavSection {
 }
 
 const NAV_SECTIONS: NavSection[] = [
-  { id: "tranzactie", label: "Preț & Comision", icon: BadgePercent },
+  { id: "tranzactie", label: "Preț", icon: BadgePercent },
   { id: "introducere", label: "Introducere", icon: FileText },
   { id: "apartament", label: "Apartament", icon: Home },
   { id: "bloc", label: "Bloc", icon: Building2 },
   { id: "imprejurimi", label: "Împrejurimi", icon: Compass },
   { id: "transport", label: "Transport", icon: Bus },
   { id: "parcare", label: "Parcare", icon: Car },
-  { id: "acte", label: "Acte & Tranzacție", icon: ShieldCheck }
+  { id: "acte", label: "Condiții", icon: ShieldCheck }
 ];
 
 interface AttributeRowProps {
@@ -700,7 +700,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   }
   const suprafataUtila = suprafataUtilaRaw 
     ? (String(suprafataUtilaRaw).includes("mp") ? String(suprafataUtilaRaw) : `${suprafataUtilaRaw} mp`) 
-    : (suprafataFromText ? `${suprafataFromText} mp` : "96 mp");
+    : (suprafataFromText ? `${suprafataFromText} mp` : "-");
 
   let compFromText = "";
   const leadCompRaw = crmData?.caracteristici?.detalii?.compartimentare 
@@ -708,13 +708,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     || (lead as any)?.partitioning;
   if (!leadCompRaw) {
     const textLower = rawDescText.toLowerCase();
-    if (textLower.includes("semidecomandat")) compFromText = "semidecomandată";
-    else if (textLower.includes("decomandat")) compFromText = "decomandată";
-    else if (textLower.includes("nedecomandat")) compFromText = "nedecomandată";
-    else if (textLower.includes("circular")) compFromText = "circulară";
-    else if (textLower.includes("open space")) compFromText = "open space";
+    if (textLower.includes("semidecomandat")) compFromText = "Semidecomandat";
+    else if (textLower.includes("decomandat")) compFromText = "Decomandat";
+    else if (textLower.includes("nedecomandat")) compFromText = "Nedecomandat";
+    else if (textLower.includes("circular")) compFromText = "Circular";
+    else if (textLower.includes("open space") || textLower.includes("openspace")) compFromText = "Open space";
   }
-  const compartimentare = leadCompRaw || compFromText || "decomandată";
+  const compartimentare = leadCompRaw || compFromText || "Decomandat";
 
   let etajFromText = "";
   const leadEtajRaw = crmData?.caracteristici?.detalii?.etaj 
@@ -733,7 +733,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     || (lead as any)?.totalFloors;
   const etaj = etajVal 
     ? (totalEtaje && !String(etajVal).includes(String(totalEtaje)) ? `${etajVal} / ${totalEtaje}` : String(etajVal))
-    : "7 / 8";
+    : "-";
 
   let anFromText = "";
   const leadAnRaw = crmData?.caracteristici?.alteDetalii?.anConstructie 
@@ -746,7 +746,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       || rawDescText.match(/\b(19\d{2}|20[0-2]\d)\b/);
     if (m) anFromText = m[1];
   }
-  const anConstructie = leadAnRaw || anFromText || "1938";
+  const anConstructie = leadAnRaw || anFromText || "-";
 
   let camereFromText = "";
   const leadCamereRaw = crmData?.caracteristici?.detalii?.camere 
@@ -758,7 +758,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     if (m) camereFromText = m[1];
     else if (rawDescText.toLowerCase().includes("garsonieră") || rawDescText.toLowerCase().includes("studio")) camereFromText = "1";
   }
-  const camere = leadCamereRaw || camereFromText || "3";
+  const camere = leadCamereRaw || camereFromText || "-";
 
   let baiFromText = "";
   const leadBaiRaw = crmData?.caracteristici?.detalii?.bai 
@@ -768,7 +768,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     const m = rawDescText.match(/(\d+)\s*b[aă]i/i);
     if (m) baiFromText = m[1];
   }
-  const bai = leadBaiRaw || baiFromText || "1";
+  const bai = leadBaiRaw || baiFromText || "-";
 
   let balcoaneFromText = "";
   const leadBalcoaneRaw = crmData?.caracteristici?.suprafete?.balcoane 
@@ -780,115 +780,103 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     if (m) balcoaneFromText = m[1];
   }
   const balcoaneRaw = leadBalcoaneRaw || balcoaneFromText;
-  const balcoane = balcoaneRaw ? String(balcoaneRaw) : "1";
+  const balcoane = balcoaneRaw ? String(balcoaneRaw) : "-";
 
   const leadStareRaw = (crmData?.utilitati?.finisaje?.stare && crmData.utilitati.finisaje.stare.length > 0)
     ? (Array.isArray(crmData.utilitati.finisaje.stare) ? crmData.utilitati.finisaje.stare.join(", ") : String(crmData.utilitati.finisaje.stare))
     : (crmData?.caracteristici?.alteDetalii?.stadiuConstructie || (lead as any)?.stare || (lead as any)?.condition);
-  const stareInterior = leadStareRaw || "renovat";
+  const stareInterior = leadStareRaw || "Buna";
+
+  // Bedroom and Bathroom dynamic counts for row filtering
+  const rawDormitoare = crmData?.caracteristici?.detalii?.dormitoare || (lead as any)?.bedrooms || (lead as any)?.dormitoare;
+  const explicitDormitoare = rawDormitoare ? parseInt(String(rawDormitoare).match(/\d+/)?.[0] || "0", 10) : 0;
+  const parsedCamere = parseInt(String(camere || "").match(/\d+/)?.[0] || "0", 10);
+  const bedroomCount = explicitDormitoare > 0 
+    ? explicitDormitoare 
+    : (parsedCamere > 1 ? parsedCamere - 1 : (parsedCamere === 1 ? 1 : 1));
+  const parsedBai = parseInt(String(bai || "").match(/\d+/)?.[0] || "0", 10);
+  const baiCount = Math.max(1, parsedBai || 1);
+
+  // Default agency commission per user rules:
+  // - Sale: 0%
+  // - Rent: 50%+TVA
+  const defaultCommission = isRent ? "50%+TVA" : "0%";
 
   // Guarantee and advance
   const garantie = crmData?.pret?.detalii?.garantie || (isRent ? `${crmData?.pret?.detalii?.pret || "775"} €` : "-");
   const avans = crmData?.pret?.detalii?.avans || (isRent ? "1 lună" : "15%");
 
   // Natural summary generated from crawler data:
-  // Strictly includes only: number of rooms, surface (mp), construction year, partitioning (decomandat/semidecomandat/etc.),
-  // presented naturally and attractively without sales pitch clichés or prohibited terms.
+  // Includes all configurare section data (suprafață utilă, compartimentare, etaj, an construcție, camere, băi, balcon, stare)
+  // and area where property is found, composed in an easy to read expression strictly <= 512 characters.
   const summaryDescription = useMemo(() => {
-    const raw = crmData?.descriere?.continut || (lead as any)?.description || lead?.notes || "";
+    const saved = (lead as any)?.extractedData?.presentationSections?.introducere?.summary;
+    if (saved && typeof saved === "string" && saved.trim().length > 15 && saved.trim().length <= 512) {
+      return saved.trim();
+    }
+
+    const camereStr = camere && camere !== "-" ? `${camere} camere` : "";
+    const suprafataStr = suprafataUtila && suprafataUtila !== "-" ? `${suprafataUtila.replace(/mp/i, "").trim()} mp utili` : "";
+    const compStr = compartimentare && compartimentare !== "-" ? compartimentare.toLowerCase() : "decomandat";
     
-    // Technical parameters strictly limited to the user's specification:
-    // - număr camere
-    // - suprafață (mp)
-    // - anul construcției
-    // - compartimentare
-    const techCamere = camere ? `${camere} camere` : "camere bine proporționate";
-    const techSuprafata = suprafataUtila ? `${suprafataUtila} mp utili` : "";
-    const techCompartimentare = compartimentare || "decomandat";
-    const techAn = (anConstructie && anConstructie !== "după 2000" && anConstructie !== "-") 
-      ? `construit în anul ${anConstructie}` 
-      : (anConstructie === "după 2000" ? "construcție recentă" : "");
-    const zonaLoc = addressDetails.zona ? `în zona ${addressDetails.zona}` : "într-o zonă accesibilă";
-
-    // Clean crawler narrative paragraphs if available
-    let crawlerIntro = "";
-    if (raw) {
-      const lines = raw.split("\n");
-      const introLines: string[] = [];
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (
-          line.includes("━━━━") ||
-          line.includes("----") ||
-          line.startsWith("⭐") ||
-          line.startsWith("🛋️") ||
-          line.startsWith("📍") ||
-          line.startsWith("💰") ||
-          line.startsWith("🤝") ||
-          line.startsWith("🛠️") ||
-          line.startsWith("💼") ||
-          line.toUpperCase().startsWith("AVANTAJE") ||
-          line.toUpperCase().startsWith("PUNCTE CHEIE") ||
-          line.toUpperCase().startsWith("DOTĂRI") ||
-          line.toUpperCase().startsWith("LOCAȚIE") ||
-          line.toUpperCase().startsWith("CONDIȚII")
-        ) {
-          break;
-        }
-
-        if (
-          line.startsWith("📌") ||
-          line.startsWith("🏡") ||
-          line.startsWith("🏢") ||
-          line.toLowerCase().startsWith("titlu:") ||
-          line.toLowerCase().startsWith("id:") ||
-          line.toLowerCase().startsWith("cod intern:")
-        ) {
-          continue;
-        }
-
-        const lower = line.toLowerCase();
-        if (
-          lower.includes("comision 0") ||
-          lower.includes("0% comision") ||
-          lower.includes("0 euro comision") ||
-          lower.includes("proprietar") ||
-          lower.includes("strada ") ||
-          lower.includes("str. ") ||
-          lower.includes("nr. ") ||
-          lower.includes("numar") ||
-          lower.includes("bloc ") ||
-          lower.includes("scara ") ||
-          lower.includes("chilipir") ||
-          lower.includes("ofertă unică") ||
-          lower.includes("super ofertă") ||
-          lower.includes("nu ratați") ||
-          lower.includes("apartament de vis")
-        ) {
-          continue;
-        }
-
-        introLines.push(line);
-      }
-      crawlerIntro = introLines.join(" ").trim();
+    let etajStr = "";
+    if (etaj && etaj !== "-") {
+      const e = etaj.trim();
+      etajStr = e.toLowerCase().startsWith("etaj") || e.toLowerCase() === "parter" || e.toLowerCase() === "demisol"
+        ? `la ${e.toLowerCase()}`
+        : `la etajul ${e}`;
     }
 
-    // Clean remaining regex noise
-    crawlerIntro = crawlerIntro
-      .replace(/(\b(?:strada|str\.|calea|bulevardul|bd\.)\s+[a-zăîșțâ\s]+)\s+(?:nr\.|numărul|numar)\s*\d+[a-z]?/gi, "")
-      .replace(/(?:comision\s*0%|0%\s*comision|comision\s*zero|fără\s*comision)/gi, "")
-      .replace(/(?:închiriere|vânzare)\s+direct\s+de\s+la\s+proprietar/gi, "")
-      .replace(/\s{2,}/g, " ")
-      .trim();
+    const anStr = anConstructie && anConstructie !== "-" && anConstructie !== "după 2000"
+      ? `într-un bloc din ${anConstructie}`
+      : "";
 
-    // If crawler has a solid descriptive sentence, merge it naturally with the strict technical specs
-    if (crawlerIntro && crawlerIntro.length > 30) {
-      return `${crawlerIntro}\n\nProprietatea dispune de o suprafață utilă de ${techSuprafata || "suprafață optimă"}, configurare ${techCompartimentare} cu ${techCamere}${techAn ? `, într-un imobil ${techAn}` : ""}, oferind un cadru locativ aerisit și funcțional ${zonaLoc}.`;
+    const stareStr = stareInterior && stareInterior !== "-"
+      ? `în stare ${stareInterior.toLowerCase()}`
+      : "în stare bună";
+
+    const baiStr = bai && bai !== "-" && bai !== "0"
+      ? (parseInt(bai) > 1 ? `${bai} băi` : "o baie")
+      : "";
+
+    let balconStr = "";
+    if (balcoane && balcoane !== "-" && balcoane !== "0") {
+      balconStr = parseInt(balcoane) > 1 ? `${balcoane} balcoane` : "balcon";
     }
 
-    // Default natural, appealing presentation without sales hype
-    return `Proprietatea propusă este un apartament cu ${techCamere}, cu o suprafață utilă de ${techSuprafata || "spațioasă"}, compartimentat ${techCompartimentare}${techAn ? `, situat într-o clădire ${techAn}` : ""} ${zonaLoc}.\n\nSpațiul este organizat echilibrat, oferă o luminozitate naturală plăcută pe tot parcursul zilei și o atmosferă primitoare, fiind adaptat unui stil de viață confortabil cu acces facil către mijloacele de transport și facilitățile urbane.`;
-  }, [crmData?.descriere?.continut, (lead as any)?.description, lead?.notes, camere, suprafataUtila, compartimentare, anConstructie, addressDetails.zona]);
+    const zonaLoc = addressDetails.zona && addressDetails.zona !== "Nespecificat"
+      ? `în zona ${addressDetails.zona}`
+      : "într-o zonă accesibilă";
+
+    const mainSpecsList = [camereStr, suprafataStr].filter(Boolean);
+    const mainSpecsText = mainSpecsList.length > 0 ? mainSpecsList.join(", ") : "spațiu generos";
+
+    let sentence1 = `Apartament cu ${mainSpecsText}, compartimentat ${compStr}${etajStr ? `, situat ${etajStr}` : ""}${anStr ? ` ${anStr}` : ""}, ${stareStr}.`;
+    
+    const extraFeatures = [baiStr, balconStr].filter(Boolean).join(" și ");
+    let sentence2 = extraFeatures
+      ? `Locuința dispune de ${extraFeatures}, fiind excelent poziționată ${zonaLoc}, aproape de transport și facilități urbane.`
+      : `Locuința este excelent poziționată ${zonaLoc}, oferind confort deosebit și acces facil către toate punctele de interes.`;
+
+    let fullSummary = `${sentence1} ${sentence2}`.trim();
+
+    if (fullSummary.length > 512) {
+      fullSummary = fullSummary.substring(0, 508).replace(/\s+[^\s]*$/, "") + "...";
+    }
+
+    return fullSummary;
+  }, [
+    (lead as any)?.extractedData?.presentationSections?.introducere?.summary,
+    camere,
+    suprafataUtila,
+    compartimentare,
+    etaj,
+    anConstructie,
+    stareInterior,
+    bai,
+    balcoane,
+    addressDetails.zona
+  ]);
 
   // Real author of the lead generation (the user who initialized importing the data)
   const leadAuthor = useMemo(() => {
@@ -951,79 +939,81 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Living": saved.finisaje?.["Living"] || "vopsea lavabilă, parchet",
         "Camera 1": saved.finisaje?.["Camera 1"] || "vopsea lavabilă, parchet",
         "Camera 2": saved.finisaje?.["Camera 2"] || "vopsea lavabilă, parchet",
+        "Camera 3": saved.finisaje?.["Camera 3"] || "vopsea lavabilă, parchet",
+        "Camera 4": saved.finisaje?.["Camera 4"] || "vopsea lavabilă, parchet",
         "Bucătărie": saved.finisaje?.["Bucătărie"] || "vopsea lavabilă, faianță și gresie",
         "Baie 1": saved.finisaje?.["Baie 1"] || "faianță și gresie",
         "Baie 2": saved.finisaje?.["Baie 2"] || "faianță și gresie",
+        "Baie 3": saved.finisaje?.["Baie 3"] || "faianță și gresie",
+        "Baie 4": saved.finisaje?.["Baie 4"] || "faianță și gresie",
         "Hol": saved.finisaje?.["Hol"] || "vopsea lavabilă, parchet",
         ...(saved.finisaje || {})
       },
       mobilare: {
         "Living": saved.mobilare?.["Living"] || "canapea, măsuță cafea, comodă",
-        "Camera 1": saved.mobilare?.["Camera 1"] || "pat, noptiere",
-        "Camera 2": saved.mobilare?.["Camera 2"] || "pat, dulap",
-        "Bucătărie": saved.mobilare?.["Bucătărie"] || "mobilată",
+        "Camera 1": saved.mobilare?.["Camera 1"] || "pat, noptiere, dulap",
+        "Camera 2": saved.mobilare?.["Camera 2"] || "pat, noptiere, dulap",
+        "Camera 3": saved.mobilare?.["Camera 3"] || "pat, noptiere, dulap",
+        "Camera 4": saved.mobilare?.["Camera 4"] || "pat, noptiere, dulap",
+        "Bucătărie": saved.mobilare?.["Bucătărie"] || "mobilă de bucatarie premium",
         "Baie 1": saved.mobilare?.["Baie 1"] || "obiecte sanitare premium",
-        "Baie 2": saved.mobilare?.["Baie 2"] || "obiecte sanitare",
+        "Baie 2": saved.mobilare?.["Baie 2"] || "obiecte sanitare premium",
+        "Baie 3": saved.mobilare?.["Baie 3"] || "obiecte sanitare premium",
+        "Baie 4": saved.mobilare?.["Baie 4"] || "obiecte sanitare premium",
         "Hol": saved.mobilare?.["Hol"] || "cuier, pantofar",
         ...(saved.mobilare || {})
       },
       dotari: {
         "Living": saved.dotari?.["Living"] || "aer condiționat, smart TV",
-        "Camera 1": saved.dotari?.["Camera 1"] || "aer condiționat, draperii",
-        "Camera 2": saved.dotari?.["Camera 2"] || "aer condiționat, corp iluminat LED",
-        "Bucătărie": saved.dotari?.["Bucătărie"] || "frigider încorporat, mașină de spălat vase, plită, cuptor, hotă",
-        "Baie 1": saved.dotari?.["Baie 1"] || "cadă / duș, accesorii",
-        "Baie 2": saved.dotari?.["Baie 2"] || "cabină duș, vas WC",
-        "Hol": saved.dotari?.["Hol"] || "interfon, tablou siguranțe",
+        "Camera 1": saved.dotari?.["Camera 1"] || "-",
+        "Camera 2": saved.dotari?.["Camera 2"] || "-",
+        "Camera 3": saved.dotari?.["Camera 3"] || "-",
+        "Camera 4": saved.dotari?.["Camera 4"] || "-",
+        "Bucătărie": saved.dotari?.["Bucătărie"] || "frigider, plită, cuptor, hotă",
+        "Baie 1": saved.dotari?.["Baie 1"] || "-",
+        "Baie 2": saved.dotari?.["Baie 2"] || "-",
+        "Hol": saved.dotari?.["Hol"] || "interfon",
+        "Altele": saved.dotari?.["Altele"] || "-",
         ...(saved.dotari || {})
       },
-      altele: {
-        "Altele": saved.altele?.["Altele"] || "mașină de spălat rufe cu uscător, centrală proprie, încălzire în pardoseală, vedere către curtea interioară",
-        ...(saved.altele || {})
-      },
       bloc: {
-        "Acces": saved.bloc?.["Acces"] || "Tag magnetic, pază 24/7, interfon",
-        "Spații": saved.bloc?.["Spații"] || "Curte interioară, spații verzi, loc de joacă",
-        "Dotări": saved.bloc?.["Dotări"] || "Lift silențios, supraveghere video, generator curent",
-        "Servicii": saved.bloc?.["Servicii"] || "Administrație dedicată, mentenanță tehnică, curățenie spații comune",
+        "Acces": saved.bloc?.["Acces"] || "Tag magnetic, interfon",
+        "Spații": saved.bloc?.["Spații"] || "-",
+        "Dotări": saved.bloc?.["Dotări"] || "Lift, supraveghere video",
+        "Servicii": saved.bloc?.["Servicii"] || "Administrație, curățenie spații comune",
         ...(saved.bloc || {})
       },
       imprejurimi: {
-        "Educație": saved.imprejurimi?.["Educație"] || "Grădinițe de stat și private, școli gimnaziale, licee în proximitate",
-        "Comerț": saved.imprejurimi?.["Comerț"] || "Promenada Mall, Băneasa Shopping City, Mega Image, Carrefour, Lidl",
-        "Benzinării": saved.imprejurimi?.["Benzinării"] || "Rompetrol, OMV, Petrom, Lukoil",
-        "Sănătate": saved.imprejurimi?.["Sănătate"] || "Regina Maria, Medicover, clinici private, farmacii nonstop",
-        "Relaxare": saved.imprejurimi?.["Relaxare"] || "Parcul Herăstrău (Regele Mihai I), alei de promenadă, spații verzi",
-        "Divertisment": saved.imprejurimi?.["Divertisment"] || "Săli World Class, cinematograf multiplex, restaurante și cafenele",
-        "Obiective": saved.imprejurimi?.["Obiective"] || "Zona de birouri Aviației, Pipera Business District, Promenada",
+        "Educație": saved.imprejurimi?.["Educație"] || "Grădinițe de stat și private, școli gimnaziale, licee în apropiere",
+        "Comerț": saved.imprejurimi?.["Comerț"] || "Numeroase magazine de proximitate.",
+        "Benzinării": saved.imprejurimi?.["Benzinării"] || "Multiple statii de alimentare.",
+        "Sănătate": saved.imprejurimi?.["Sănătate"] || "Diverse farmacii.",
+        "Relaxare": saved.imprejurimi?.["Relaxare"] || "Spatii verzi in apropiere.",
+        "Divertisment": saved.imprejurimi?.["Divertisment"] || "Restaurante, baruri si cafenele in zona.",
+        "Obiective": saved.imprejurimi?.["Obiective"] || "Diverse puncte de atracie din sector.",
         ...(saved.imprejurimi || {})
       },
-      transport: {
-        "Tramvaie": saved.transport?.["Tramvaie"] || "Liniile 16, 36",
-        "Troleibuze": saved.transport?.["Troleibuze"] || "Liniile 76, 86",
-        "Autobuze": saved.transport?.["Autobuze"] || "Liniile 112, 135, 301, 343",
-        "Metrou": saved.transport?.["Metrou"] || "Aurel Vlaicu, Pipera (8-10 minute mers pe jos)",
-        ...(saved.transport || {})
-      },
       parcare: {
-        "Parcare": saved.parcare?.["Parcare"] || "Publică în zonă, loc de parcare dedicat subteran/suprateran disponibil la cerere / inclus în funcție de contract",
+        "Parcare": saved.parcare?.["Parcare"] || "Publica in zona",
         ...(saved.parcare || {})
       },
       acte: {
-        "Situație juridică": saved.acte?.["Situație juridică"] || "Intabulat, extras CF liber de sarcini, certificat energetic clasa A",
+        "Situație juridică": saved.acte?.["Situație juridică"] || "Fara probleme",
         "Disponibilitate": saved.acte?.["Disponibilitate"] || "Imediată",
-        "Finanțare": saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii, înregistrare ANAF",
-        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "Contract pe minimum 12 luni, fără animale de companie (sau conform acordului părților)",
+        "Finanțare": saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii",
+        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "Contract pe minimum 12 luni",
+        "Avans": saved.acte?.["Avans"] || "1 lună",
+        "Garanție": saved.acte?.["Garanție"] || "1 lună",
         ...(saved.acte || {})
       },
       tranzactie: {
         "Preț": saved.tranzactie?.["Preț"] || formattedPrice,
         "TVA": saved.tranzactie?.["TVA"] || "Scutit de TVA / conform legislației în vigoare",
-        "Comision": saved.tranzactie?.["Comision"] || (isRent ? "50% + TVA din contravaloarea primei chirii lunare" : "Comision standard agenție"),
+        "Comision": saved.tranzactie?.["Comision"] || defaultCommission,
         ...(saved.tranzactie || {})
       }
     };
-  }, [lead, summaryDescription, suprafataUtila, compartimentare, etaj, anConstructie, camere, bai, balcoane, stareInterior, formattedPrice, isRent]);
+  }, [lead, summaryDescription, suprafataUtila, compartimentare, etaj, anConstructie, camere, bai, balcoane, stareInterior, formattedPrice, defaultCommission]);
 
   const [sectionData, setSectionData] = useState<Record<string, Record<string, string>>>(initialPresentationSections);
   const [editingSection, setEditingSection] = useState<string | null>(null);
@@ -1204,14 +1194,21 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       ? (draftSectionData[sectionId]?.[label] ?? originalVal) 
       : originalVal;
 
+    const valStr = typeof currentVal === "string" ? currentVal.trim() : (currentVal == null ? "" : String(currentVal).trim());
+
+    // User rule: Where there is a "-", if no data has been found on the url provided for crawling, just remove that row of data in the page.
+    if (!isSecEditing && (valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null")) {
+      return null;
+    }
+
     return (
       <AttributeRow
         key={label}
         label={label}
-        value={currentVal}
-        copyValue={typeof currentVal === "string" ? currentVal : ""}
+        value={valStr === "-" ? "" : currentVal}
+        copyValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
         isEditing={isSecEditing}
-        editValue={typeof currentVal === "string" ? currentVal : ""}
+        editValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
         onEditChange={(newVal) => handleFieldChange(sectionId, label, newVal)}
         multiline={multiline}
         isLast={isLast}
@@ -1383,7 +1380,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           {/* Left Column: All Content Cards (8 cols on lg) with clean right border */}
           <div className="lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200">
 
-            {/* #CARD 1: "PREȚ & COMISION" (First card in Column 1 per user request) */}
+            {/* #CARD 1: "PREȚ" (First card in Column 1 per user request) */}
             <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
@@ -1392,7 +1389,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </div>
                   <div>
                     <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                      PREȚ & COMISION
+                      PREȚ
                     </h2>
                     <span className="text-[11px] text-gray-500 font-sans">
                       Preț, TVA și Comision agenție
@@ -1413,7 +1410,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <div className="font-sans divide-y divide-gray-100">
                 {renderRow("tranzactie", "Preț", formattedPrice)}
                 {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
-                {renderRow("tranzactie", "Comision", isRent ? "50% + TVA din contravaloarea primei chirii lunare" : "Comision standard agenție", true)}
+                {renderRow("tranzactie", "Comision", defaultCommission, true)}
               </div>
             </div>
 
@@ -1536,11 +1533,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   />
                   <div className="divide-y divide-gray-100">
                     {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
-                    {renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
-                    {renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
                     {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
-                    {renderRow("finisaje", "Baie 1", "faianță și gresie")}
-                    {renderRow("finisaje", "Baie 2", "faianță și gresie")}
+                    {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
+                    {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
+                    {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
+                    {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
                     {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
                   </div>
                 </div>
@@ -1562,11 +1563,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   />
                   <div className="divide-y divide-gray-100">
                     {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
-                    {renderRow("mobilare", "Camera 1", "pat, noptiere")}
-                    {renderRow("mobilare", "Camera 2", "pat, dulap")}
-                    {renderRow("mobilare", "Bucătărie", "mobilată")}
-                    {renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
-                    {renderRow("mobilare", "Baie 2", "obiecte sanitare")}
+                    {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
+                    {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
+                    {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
+                    {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
+                    {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
+                    {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
+                    {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
+                    {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
+                    {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
                     {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
                   </div>
                 </div>
@@ -1588,32 +1593,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   />
                   <div className="divide-y divide-gray-100">
                     {renderRow("dotari", "Living", "aer condiționat, smart TV")}
-                    {renderRow("dotari", "Camera 1", "aer condiționat, draperii")}
-                    {renderRow("dotari", "Camera 2", "aer condiționat, corp iluminat LED")}
-                    {renderRow("dotari", "Bucătărie", "frigider încorporat, mașină de spălat vase, plită, cuptor, hotă")}
-                    {renderRow("dotari", "Baie 1", "cadă / duș, accesorii")}
-                    {renderRow("dotari", "Baie 2", "cabină duș, vas WC")}
-                    {renderRow("dotari", "Hol", "interfon, tablou siguranțe", true)}
-                  </div>
-                </div>
-
-                {/* -Subcategorie "Altele" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Altele" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "altele"}
-                        isDirty={isSectionDirty("altele")}
-                        onStartEdit={() => handleStartEditSection("altele")}
-                        onCancel={() => handleCancelEditSection("altele")}
-                        onSave={() => handleSaveSection("altele")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("altele", "Altele", "mașină de spălat rufe cu uscător, centrală proprie, încălzire în pardoseală, vedere către curtea interioară", true, true)}
+                    {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
+                    {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
+                    {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
+                    {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
+                    {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
+                    {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
+                    {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
+                    {renderRow("dotari", "Hol", "interfon")}
+                    {renderRow("dotari", "Altele", "-", true)}
                   </div>
                 </div>
               </div>
@@ -1642,10 +1630,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
 
               <div className="font-sans divide-y divide-gray-100">
-                {renderRow("bloc", "Acces", "Tag magnetic, pază 24/7, interfon")}
-                {renderRow("bloc", "Spații", "Curte interioară, spații verzi, loc de joacă")}
-                {renderRow("bloc", "Dotări", "Lift silențios, supraveghere video, generator curent")}
-                {renderRow("bloc", "Servicii", "Administrație dedicată, mentenanță tehnică, curățenie spații comune", true)}
+                {renderRow("bloc", "Acces", "Tag magnetic, interfon")}
+                {renderRow("bloc", "Spații", "-")}
+                {renderRow("bloc", "Dotări", "Lift, supraveghere video")}
+                {renderRow("bloc", "Servicii", "Administrație, curățenie spații comune", true)}
               </div>
             </div>
 
@@ -1672,43 +1660,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
 
               <div className="font-sans divide-y divide-gray-100">
-                {renderRow("imprejurimi", "Educație", "Grădinițe de stat și private, școli gimnaziale, licee în proximitate")}
-                {renderRow("imprejurimi", "Comerț", "Promenada Mall, Băneasa Shopping City, Mega Image, Carrefour, Lidl")}
-                {renderRow("imprejurimi", "Benzinării", "Rompetrol, OMV, Petrom, Lukoil")}
-                {renderRow("imprejurimi", "Sănătate", "Regina Maria, Medicover, clinici private, farmacii nonstop")}
-                {renderRow("imprejurimi", "Relaxare", "Parcul Herăstrău (Regele Mihai I), alei de promenadă, spații verzi")}
-                {renderRow("imprejurimi", "Divertisment", "Săli World Class, cinematograf multiplex, restaurante și cafenele")}
-                {renderRow("imprejurimi", "Obiective", "Zona de birouri Aviației, Pipera Business District, Promenada", true)}
-              </div>
-            </div>
-
-            {/* #CARD "TRANSPORT" */}
-            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                    <Bus size={16} />
-                  </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    TRANSPORT
-                  </h2>
-                </div>
-
-                <SectionEditButton
-                  isEditing={editingSection === "transport"}
-                  isDirty={isSectionDirty("transport")}
-                  onStartEdit={() => handleStartEditSection("transport")}
-                  onCancel={() => handleCancelEditSection("transport")}
-                  onSave={() => handleSaveSection("transport")}
-                  disabled={isPublicShared}
-                />
-              </div>
-
-              <div className="font-sans divide-y divide-gray-100">
-                {renderRow("transport", "Tramvaie", "Liniile 16, 36")}
-                {renderRow("transport", "Troleibuze", "Liniile 76, 86")}
-                {renderRow("transport", "Autobuze", "Liniile 112, 135, 301, 343")}
-                {renderRow("transport", "Metrou", "Aurel Vlaicu, Pipera (8-10 minute mers pe jos)", true)}
+                {renderRow("imprejurimi", "Educație", "Grădinițe de stat și private, școli gimnaziale, licee în apropiere")}
+                {renderRow("imprejurimi", "Comerț", "Numeroase magazine de proximitate.")}
+                {renderRow("imprejurimi", "Benzinării", "Multiple statii de alimentare.")}
+                {renderRow("imprejurimi", "Sănătate", "Diverse farmacii.")}
+                {renderRow("imprejurimi", "Relaxare", "Spatii verzi in apropiere.")}
+                {renderRow("imprejurimi", "Divertisment", "Restaurante, baruri si cafenele in zona.")}
+                {renderRow("imprejurimi", "Obiective", "Diverse puncte de atracie din sector.", true)}
               </div>
             </div>
 
@@ -1735,11 +1693,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
 
               <div className="font-sans">
-                {renderRow("parcare", "Parcare", "Publică în zonă, loc de parcare dedicat subteran/suprateran disponibil la cerere / inclus în funcție de contract", true, true)}
+                {renderRow("parcare", "Parcare", "Publica in zona", true, true)}
               </div>
             </div>
 
-            {/* #CARD "ACTE & TRANZACTIE" (Juridic, Disponibilitate, Finanțare) */}
+            {/* #CARD "CONDIȚII" */}
             <div id="acte" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
@@ -1747,7 +1705,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     <ShieldCheck size={16} />
                   </div>
                   <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    ACTE & TRANZACȚIE
+                    CONDIȚII
                   </h2>
                 </div>
 
@@ -1762,10 +1720,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
 
               <div className="font-sans divide-y divide-gray-100">
-                {renderRow("acte", "Situație juridică", "Intabulat, extras CF liber de sarcini, certificat energetic clasa A")}
-                {renderRow("acte", "Disponibilitate", "Imediată")}
-                {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii, înregistrare ANAF")}
-                {renderRow("acte", "Condiții contractuale", "Contract pe minimum 12 luni, fără animale de companie (sau conform acordului părților)", true)}
+                {isRent ? (
+                  <>
+                    {renderRow("acte", "Condiții contractuale", "Contract pe minimum 12 luni")}
+                    {renderRow("acte", "Avans", "1 lună")}
+                    {renderRow("acte", "Garanție", "1 lună", true)}
+                  </>
+                ) : (
+                  <>
+                    {renderRow("acte", "Situație juridică", "Fara probleme")}
+                    {renderRow("acte", "Disponibilitate", "Imediată")}
+                    {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
+                  </>
+                )}
               </div>
             </div>
 

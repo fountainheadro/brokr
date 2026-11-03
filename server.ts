@@ -626,356 +626,203 @@ Returnează un JSON strict cu următoarele chei:
       // Extract some basic metadata
       const title = $("title").text() || "No title found";
       
-      // Extract image URLs
-      const images: string[] = [];
+      // Extract image URLs strictly for the target property (filtering out logos, layouts, and recommendations)
       const imageExtensions = /\.(jpeg|jpg|gif|png|webp|avif)/i;
       const socialMediaBlocked = ["facebook.com", "linkedin.com", "twitter.com", "instagram.com", "youtube.com", "pinterest.com", "tiktok.com"];
       const adKeywords = ["google-analytics", "ads.", "doubleclick", "/ads/", "/banners/"];
 
-      // Filter out elements that are likely unrelated to the property (similar ads, recommendations, etc.)
-      const unrelatedSelectors = [
-        "aside", "footer", "nav", ".recommendations", ".featured-offers", ".similar-offers", 
-        ".others-ads", ".suggested-offers", "[data-testid=\"recommendations\"]", 
-        ".listing-related", ".related-ads", "#ad-recommendations", ".bottom-ads"
-      ];
-      
-      unrelatedSelectors.forEach(selector => {
-        $(selector).remove();
-      });
+      // Helper to identify and reject icons, logos, badges, layouts, avatars, maps, buttons, etc.
+      const isForbiddenGraphic = (urlStr: string): boolean => {
+        const lower = urlStr.toLowerCase();
+        const badPatterns = [
+          "logo", "avatar", "watermark-logo", "badge", "icon", "placeholder", 
+          "sprite", "layout", "banner", "staticmap", "google-map", "/map/", "maps.googleapis",
+          "favicon", "button", "arrow", "pin", "pixel", "tracking", "analytics",
+          "user", "profile", "agent", "broker", "agentie", "dezvoltator", "developer",
+          "sponsor", "promovat", "blank", "default", "spinner", "loader", ".svg",
+          "schita", "plan", "schiță", "document", "pdf", ".gif", "thumb_", "small_"
+        ];
+        return badPatterns.some(p => lower.includes(p));
+      };
 
-      $("img, a, picture source, meta[property='og:image'], [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [style*='background-image'], [data-testid='swiper-image'], [data-srcset], [data-image], [data-gallery], [data-href], [data-img], [data-url], [data-src-large], [itemprop='image'], [data-src-gallery], [data-gallery-src], [data-lazy-original], [data-img-src], [data-gallery], [data-full-img]").each((_, el) => {
-        const $el = $(el);
-        const src = $el.attr("src");
-        const dataSrc = $el.attr("data-src") || $el.attr("data-lazy") || $el.attr("data-full") || $el.attr("data-lazy-src") || $el.attr("data-srcset") || $el.attr("data-image") || $el.attr("data-gallery") || $el.attr("data-url") || $el.attr("data-src-large") || $el.attr("itemprop") || $el.attr("data-src-gallery") || $el.attr("data-gallery-src") || $el.attr("data-lazy-original") || $el.attr("data-img-src") || $el.attr("data-full-img");
-        const srcset = $el.attr("srcset") || $el.attr("data-srcset") || $el.attr("data-lazy-srcset");
-        const content = $el.attr("content"); // for meta tags
-        const originalSrc = $el.attr("data-original") || $el.attr("data-src-full") || $el.attr("data-zoom") || $el.attr("data-lazy-srcset") || $el.attr("data-img");
-        const href = ($el.prop("tagName") === "A" || $el.prop("tagName") === "LINK") ? $el.attr("href") : $el.attr("data-href");
-        const style = $el.attr("style");
-        const bgImage = style ? style.match(/url\(['"]?([^'"]+)['"]?\)/)?.[1] : null;
-        
-        let candidates = [originalSrc, dataSrc, src, href, bgImage, content];
-        
-        // Handle srcset for high-res options
-        if (srcset && typeof srcset === "string") {
-          const sources = srcset.split(",").map(s => s.trim().split(" ")[0]);
-          candidates = [...candidates, ...sources];
+      // Helper to promote known thumbnail image URLs to full/maximum resolution
+      const promoteToHighRes = (rawUrl: string): string => {
+        let cleaned = rawUrl.trim().replace(/\\/g, "");
+        if (cleaned.startsWith("//")) cleaned = "https:" + cleaned;
+
+        // Imobiliare.ro & Roamcdn high-resolution promotions
+        if (cleaned.includes("imobiliare.ro") || cleaned.includes("roamcdn")) {
+          cleaned = cleaned
+            .replace(/_(?:75x75|150x150|160x120|400x300)\.jpg/gi, "_800x600.jpg")
+            .replace(/\/thumb\//gi, "/large/")
+            .replace(/\/small\//gi, "/large/")
+            .replace(/\/medium\//gi, "/large/");
+          if (cleaned.toLowerCase().includes("roamcdn")) {
+            cleaned = cleaned.replace(/gallery-[a-zA-Z0-9]+-watermark/gi, "gallery-full-1200w-watermark");
+          }
         }
 
-        candidates.forEach(rawUrl => {
-          if (!rawUrl || typeof rawUrl !== "string") return;
-          
-          let absoluteUrl = rawUrl.trim();
-          // Handle escaped slashes in strings
-          absoluteUrl = absoluteUrl.replace(/\\/g, "");
-          
-          if (absoluteUrl.startsWith("//")) {
-            absoluteUrl = "https:" + absoluteUrl;
-          } else if (absoluteUrl.startsWith("/") && !absoluteUrl.startsWith("//")) {
-            try {
-              const urlObj = new URL(url);
-              absoluteUrl = urlObj.origin + absoluteUrl;
-            } catch (e) {}
-          }
-          
-          if (!absoluteUrl.startsWith("http")) return;
-          
-          const isSocial = socialMediaBlocked.some(s => absoluteUrl.toLowerCase().includes(s));
-          const isAd = adKeywords.some(k => absoluteUrl.toLowerCase().includes(k));
-          const hasImageExt = imageExtensions.test(absoluteUrl);
-          const isOLXApollo = 
-            (absoluteUrl.includes("apollo.olxcdn.com") || 
-             absoluteUrl.includes("olxcdn.com") || 
-             absoluteUrl.includes("akamaized.net") ||
-             absoluteUrl.includes("storia.ro")) && 
-            (absoluteUrl.includes("/files/") || absoluteUrl.includes("/image") || absoluteUrl.includes("/photos/"));
-          const isPubli24Asset = (
-            absoluteUrl.includes("publi24.ro") || 
-            absoluteUrl.includes("pstatic.ro") || 
-            absoluteUrl.includes("pcdnh.ro") || 
-            absoluteUrl.includes("pcdnh0.ro") || 
-            absoluteUrl.includes("publi24cdn.ro") || 
-            absoluteUrl.includes("static.publi24.ro")
-          ) && (absoluteUrl.includes("/small/") || absoluteUrl.includes("/medium/") || absoluteUrl.includes("/large/") || absoluteUrl.includes("/thumb/") || absoluteUrl.includes("/image/"));
-          
-          // Relaxed check for known high-quality imobiliare CDNs
-          const isImobiliareImg = absoluteUrl.toLowerCase().includes("imobiliare.ro") || absoluteUrl.toLowerCase().includes("roamcdn");
-          
-          if ((hasImageExt || isPubli24Asset || isOLXApollo || isImobiliareImg || absoluteUrl.includes("/files/") || absoluteUrl.includes("/image") || absoluteUrl.includes("/photos/")) && !isSocial && !isAd) {
-            let cleanedUrl = absoluteUrl;
-            
-            // Promote imobiliare.ro & roamcdn images
-            if (isImobiliareImg) {
-              const imobiliarePromotions = [
-                { thumb: "_75x75.jpg", high: "_800x600.jpg" },
-                { thumb: "_150x150.jpg", high: "_800x600.jpg" },
-                { thumb: "_160x120.jpg", high: "_800x600.jpg" },
-                { thumb: "_400x300.jpg", high: "_800x600.jpg" },
-                { thumb: "/small/", high: "/large/" },
-                { thumb: "/medium/", high: "/large/" },
-                { thumb: "/thumb/", high: "/large/" }
-              ];
-              imobiliarePromotions.forEach(p => {
-                if (cleanedUrl.includes(p.thumb)) cleanedUrl = cleanedUrl.replace(p.thumb, p.high);
+        // Publi24 promotions
+        if (cleaned.includes("publi24") || cleaned.includes("pstatic") || cleaned.includes("pcdnh")) {
+          cleaned = cleaned
+            .replace(/\/small\//gi, "/large/")
+            .replace(/\/medium\//gi, "/large/")
+            .replace(/\/thumb\//gi, "/large/");
+        }
+
+        // Storia / OLX Apollo / Akamaized promotions: enforce maximum 1000x700
+        if (cleaned.includes(";s=")) {
+          cleaned = cleaned.replace(/;s=\d+x\d+/, ";s=1000x700");
+        } else if (
+          (cleaned.includes("akamaized.net") || cleaned.includes("apollo") || cleaned.includes("storia.ro") || cleaned.includes("olxcdn")) &&
+          (cleaned.includes("/files/") || cleaned.includes("/image") || cleaned.includes("/photos/"))
+        ) {
+          cleaned = cleaned + (cleaned.includes('?') ? '&' : ';') + "s=1000x700";
+        }
+
+        // General small/medium/thumb to large
+        cleaned = cleaned.replace(/\/(?:small|thumb|mini)\//gi, "/large/");
+
+        return cleaned;
+      };
+
+      // Priority 1: Check __NEXT_DATA__ for the target property's dedicated photo gallery
+      let nextDataTargetImages: string[] = [];
+      const nextDataScripts = $("script#__NEXT_DATA__, script:contains('__NEXT_DATA__')");
+      if (nextDataScripts.length > 0) {
+        try {
+          const content = nextDataScripts.first().html() || "";
+          if (content) {
+            const data = JSON.parse(content);
+            const targetAd = data?.props?.pageProps?.ad || data?.props?.pageProps?.advert || data?.props?.pageProps?.offer;
+            const photoList = targetAd?.photos || targetAd?.images || targetAd?.gallery || targetAd?.media?.photos;
+            if (Array.isArray(photoList) && photoList.length > 0) {
+              photoList.forEach((item: any) => {
+                const candidate = item?.url || item?.large || item?.medium || (typeof item === 'string' ? item : null);
+                if (candidate && typeof candidate === 'string') {
+                  const promoted = promoteToHighRes(candidate);
+                  if (!isForbiddenGraphic(promoted)) {
+                    nextDataTargetImages.push(promoted);
+                  }
+                }
               });
-              if (cleanedUrl.toLowerCase().includes("roamcdn")) {
-                cleanedUrl = cleanedUrl.replace(/gallery-[a-zA-Z0-9]+-watermark/g, "gallery-full-1200w-watermark");
-              }
-            }
-
-            // General promotion
-            if (cleanedUrl.includes("/small/")) cleanedUrl = cleanedUrl.replace("/small/", "/large/");
-            if (cleanedUrl.includes("/medium/")) cleanedUrl = cleanedUrl.replace("/medium/", "/large/");
-            if (cleanedUrl.includes("/thumb/")) cleanedUrl = cleanedUrl.replace("/thumb/", "/large/");
-
-            // High res for Storia/OLX
-            if (cleanedUrl.includes(";s=")) {
-              cleanedUrl = cleanedUrl.replace(/;s=\d+x\d+/, ";s=1000x700");
-            } else if (isOLXApollo) {
-              if (cleanedUrl.includes("/files/") || cleanedUrl.includes("/image")) {
-                cleanedUrl = cleanedUrl + (cleanedUrl.includes("?") ? "&" : ";") + "s=1000x700";
-              }
-            }
-
-            const lowResKeywords = ["logo", "icon", "avatar", "150x150", "75x75", "100x100"];
-            const isLowRes = lowResKeywords.some(keyword => cleanedUrl.toLowerCase().includes(keyword));
-
-            if (!isLowRes) {
-              images.push(cleanedUrl);
             }
           }
-        });
-      });
+        } catch (e) {}
+      }
 
-      // Scan all element attributes for anything that looks like a Publi24 image URL
-      $("*").each((_, el) => {
-        const attribs = (el as any).attribs;
-        if (!attribs) return;
-        
-        Object.keys(attribs).forEach(attrName => {
-          const attrValue = attribs[attrName];
-          const isImageUrl = attrValue && typeof attrValue === 'string' && (
-            attrValue.includes(".jpg") || 
-            attrValue.includes(".jpeg") || 
-            attrValue.includes(".png") || 
-            attrValue.includes(".webp") ||
-            attrValue.includes("image")
-          );
-
-          if (isImageUrl) {
-            let potentialUrl = attrValue.trim().replace(/\\/g, "");
-            
-            // Clean up potentially concatenated URLs from data-srcset or space-separated lists
-            if (potentialUrl.includes(" ")) {
-              potentialUrl = potentialUrl.split(" ")[0];
+      // Priority 2: JSON-LD metadata for target property
+      let jsonLdImages: string[] = [];
+      if (nextDataTargetImages.length === 0) {
+        $("script[type='application/ld+json']").each((_, script) => {
+          try {
+            const content = $(script).html();
+            if (content) {
+              const ld = JSON.parse(content);
+              const items = Array.isArray(ld) ? ld : (ld["@graph"] ? ld["@graph"] : [ld]);
+              items.forEach((item: any) => {
+                if (item && item.image) {
+                  const imgs = Array.isArray(item.image) ? item.image : [item.image];
+                  imgs.forEach((img: any) => {
+                    const u = typeof img === 'string' ? img : (img?.url || img?.contentUrl);
+                    if (u && typeof u === 'string') {
+                      const promoted = promoteToHighRes(u);
+                      if (!isForbiddenGraphic(promoted)) {
+                        jsonLdImages.push(promoted);
+                      }
+                    }
+                  });
+                }
+              });
             }
+          } catch (e) {}
+        });
+      }
 
-            if (potentialUrl.startsWith("//")) potentialUrl = "https:" + potentialUrl;
-            if (potentialUrl.startsWith("/")) {
+      // Priority 3: DOM Gallery elements (with aggressive stripping of recommendations and similar listings)
+      let domGalleryImages: string[] = [];
+      if (nextDataTargetImages.length === 0 && jsonLdImages.length === 0) {
+        const unrelatedSelectors = [
+          "aside", "footer", "nav", "header",
+          ".recommendations", ".featured-offers", ".similar-offers", ".similar-ads", 
+          ".others-ads", ".suggested-offers", "[data-testid=\"recommendations\"]", 
+          ".listing-related", ".related-ads", "#ad-recommendations", ".bottom-ads",
+          ".other-offers", ".related-offers", ".promoted-offers", ".slider-similar",
+          ".agent-card", ".agency-card", ".agency-logo", ".broker-logo", ".developer-logo",
+          ".user-card", ".user-profile", ".breadcrumbs", ".search-results",
+          "[data-cy=\"similar-ads\"]", "[data-cy=\"recommended-ads\"]",
+          ".ad-carousel-similar", ".similar-listings", ".related-properties",
+          ".cross-selling", ".cross-sell", ".banner", ".ad-banner", ".header-logo",
+          ".site-header", ".site-footer", ".navbar", ".menu", ".sidebar", ".contact-agent-section"
+        ];
+        unrelatedSelectors.forEach(selector => {
+          $(selector).remove();
+        });
+
+        const galleryContainers = $(
+          "#galerie, .galerie, [data-testid=\"gallery\"], [data-testid=\"swiper-image\"], .gallery-slider, " +
+          ".image-gallery, .swiper-wrapper, .property-gallery, .offer-photos, #slider-pro, .slider-for, " +
+          ".ad-gallery, [data-cy=\"ad-photos\"], .main-slider, #fotoGal, .foto-galerie, #photo-gallery, " +
+          ".slider-galerie, #anunt-galerie"
+        );
+
+        const searchScope = galleryContainers.length > 0 ? galleryContainers : $("main, article, #main-content, .offer-view, .ad-content, .listing-content, body");
+
+        searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
+          const $el = $(el);
+          const src = $el.attr("src");
+          const dataSrc = $el.attr("data-src") || $el.attr("data-lazy") || $el.attr("data-full") || $el.attr("data-lazy-src") || $el.attr("data-original") || $el.attr("data-src-full") || $el.attr("data-zoom") || $el.attr("data-image") || $el.attr("data-gallery-src") || $el.attr("data-url");
+          const href = ($el.prop("tagName") === "A") ? $el.attr("href") : null;
+          const srcset = $el.attr("srcset") || $el.attr("data-srcset");
+
+          let candidates = [dataSrc, src, href];
+          if (srcset) {
+            const sources = srcset.split(",").map(s => s.trim().split(" ")[0]);
+            candidates = [...candidates, ...sources];
+          }
+
+          candidates.forEach(raw => {
+            if (!raw || typeof raw !== "string") return;
+            let absUrl = raw.trim().replace(/\\/g, "");
+            if (absUrl.startsWith("//")) absUrl = "https:" + absUrl;
+            else if (absUrl.startsWith("/") && !absUrl.startsWith("//")) {
               try {
-                const urlObj = new URL(url);
-                potentialUrl = urlObj.origin + potentialUrl;
+                const uObj = new URL(url);
+                absUrl = uObj.origin + absUrl;
               } catch (e) {}
             }
+            if (!absUrl.startsWith("http")) return;
+            if (isForbiddenGraphic(absUrl)) return;
+            if (socialMediaBlocked.some(s => absUrl.toLowerCase().includes(s))) return;
+            if (adKeywords.some(k => absUrl.toLowerCase().includes(k))) return;
 
-            if (potentialUrl.startsWith("http")) {
-              let cleaned = potentialUrl;
-              const isPubli24Url = cleaned.includes("publi24") || cleaned.includes("pstatic.ro") || cleaned.includes("pcdnh.ro");
-              
-              if (isPubli24Url) {
-                if (cleaned.includes("/small/")) cleaned = cleaned.replace("/small/", "/large/");
-                if (cleaned.includes("/medium/")) cleaned = cleaned.replace("/medium/", "/large/");
-                if (cleaned.includes("/thumb/")) cleaned = cleaned.replace("/thumb/", "/large/");
-              }
-              
-              // Only push if it's likely a real image and not already present
-              const lowResKeywords = ["logo", "icon", "avatar", "150x150", "75x75", "100x100"];
-              const isLowRes = lowResKeywords.some(keyword => cleaned.toLowerCase().includes(keyword));
-              
-              if (!isLowRes) {
-                images.push(cleaned);
-              }
+            const isKnownImage = imageExtensions.test(absUrl) || 
+              absUrl.includes("/files/") || absUrl.includes("/image") || absUrl.includes("/photos/") || absUrl.includes("roamcdn") || absUrl.includes("apollo");
+
+            if (isKnownImage) {
+              const promoted = promoteToHighRes(absUrl);
+              domGalleryImages.push(promoted);
             }
-          }
+          });
         });
-      });
+      }
 
-      // Scan scripts for hidden image URLs (especially for Publi24/OLX/Storia)
-      $("script").each((_, script) => {
-        const content = $(script).html();
-        if (content) {
-          // Unescape backslashes in script content for better matching
-          const unescapedContent = content.replace(/\\\/|\\/g, (m) => m === "\\/" ? "/" : "");
-          
-          // Special handling for Next.js data
-          if (content.includes("__NEXT_DATA__")) {
-            try {
-              const data = JSON.parse(content);
-              
-              // Specific Storia/OLX path
-              const adData = data?.props?.pageProps?.ad || data?.props?.pageProps?.advert;
-              const adImages = adData?.images || adData?.photos || adData?.gallery;
-              
-              if (Array.isArray(adImages)) {
-                adImages.forEach((img: any) => {
-                  const url = img.url || img.medium || img.large || (typeof img === 'string' ? img : null);
-                  if (url && typeof url === 'string') {
-                    let cleaned = url;
-                    if (cleaned.includes(";s=")) cleaned = cleaned.replace(/;s=\d+x\d+/, ";s=1000x700");
-                    else if ((cleaned.includes("akamaized.net") || cleaned.includes("apollo") || cleaned.includes("storia.ro")) && (cleaned.includes("/files/") || cleaned.includes("/image"))) {
-                      cleaned = cleaned + (cleaned.includes('?') ? '&' : ';') + "s=1000x700";
-                    }
-                    images.push(cleaned);
-                  }
-                });
-              }
+      // Collect candidates based on priority
+      const rawCandidates = nextDataTargetImages.length > 0
+        ? nextDataTargetImages
+        : (jsonLdImages.length > 0 ? jsonLdImages : domGalleryImages);
 
-              // Recursively find all other potential images
-              const findImages = (obj: any) => {
-                if (!obj) return;
-                if (typeof obj === "string") {
-                  const lower = obj.toLowerCase();
-                  const isPotentialImage = 
-                    lower.startsWith("http") && 
-                    ((lower.includes("apollo") || 
-                      lower.includes("akamaized") || 
-                      lower.includes("olxcdn") ||
-                      lower.includes("storia.ro") ||
-                      lower.includes("roamcdn") ||
-                      lower.includes("publi24")) && (lower.includes("/files/") || lower.includes("/image") || lower.includes("/photos/") || lower.includes("/large/") || lower.includes("/medium/") || lower.includes("prop/imo") || lower.includes("gallery")) ||
-                     imageExtensions.test(lower));
-                  
-                  if (isPotentialImage) {
-                    let cleaned = obj;
-                    if (cleaned.includes(";s=")) cleaned = cleaned.replace(/;s=\d+x\d+/, ";s=1000x700");
-                    else if ((cleaned.includes("akamaized.net") || cleaned.includes("apollo")) && (cleaned.includes("/files/") || cleaned.includes("/image"))) {
-                      cleaned = cleaned + (cleaned.includes('?') ? '&' : ';') + "s=1000x700";
-                    }
-                    if (cleaned.includes("/small/")) cleaned = cleaned.replace("/small/", "/large/");
-                    if (cleaned.includes("/medium/")) cleaned = cleaned.replace("/medium/", "/large/");
-                    if (cleaned.toLowerCase().includes("roamcdn")) {
-                      cleaned = cleaned.replace(/gallery-[a-zA-Z0-9]+-watermark/g, "gallery-full-1200w-watermark");
-                    }
-                    images.push(cleaned);
-                  }
-                  return;
-                }
-                if (Array.isArray(obj)) {
-                  obj.forEach(findImages);
-                  return;
-                }
-                if (typeof obj === "object") {
-                  Object.values(obj).forEach(findImages);
-                }
-              };
-              findImages(data);
-            } catch (e) {
-              // Silently fail if JSON parse fails
-            }
-          }
-
-          // Look for URLs that look like property images, including those without specific extensions but on apollo/akamaized
-          // Using a more robust regex that accounts for potential escaping and multiple formats
-          const matches = unescapedContent.match(/https?:\/\/[^"'\s\)]+(?:\.(?:jpg|jpeg|png|webp|avif)|(?:\/image|v1\/files|\/large\/|\/medium\/)[^"'\s\)]*)(?:[^"'\s\)]*)?/gi);
-          if (matches) {
-            matches.forEach(rawUrl => {
-              const absoluteUrl = rawUrl;
-              const isSocial = socialMediaBlocked.some(s => absoluteUrl.toLowerCase().includes(s));
-              const isAd = adKeywords.some(k => absoluteUrl.toLowerCase().includes(k));
-              const isKnownDomain = 
-                (absoluteUrl.includes("publi24") || 
-                 absoluteUrl.includes("olxcdn") || 
-                 absoluteUrl.includes("storia") || 
-                 absoluteUrl.includes("imobiliare.ro") ||
-                 absoluteUrl.includes("roamcdn") ||
-                 absoluteUrl.includes("akamaized.net") ||
-                 absoluteUrl.includes("pstatic") ||
-                 absoluteUrl.includes("pcdnh") ||
-                 absoluteUrl.includes("apollo")) && (absoluteUrl.includes("/files/") || absoluteUrl.includes("/image") || absoluteUrl.includes("/photos/") || absoluteUrl.includes("/large/") || absoluteUrl.includes("/medium/") || absoluteUrl.includes("/galerie/") || absoluteUrl.includes("static") || absoluteUrl.includes("prop/imo") || absoluteUrl.includes("gallery"));
-              
-              if (isKnownDomain && !isSocial && !isAd) {
-                let cleanedUrl = absoluteUrl;
-                
-                // Promote imobiliare.ro & roamcdn images
-                if (cleanedUrl.toLowerCase().includes("imobiliare.ro") || cleanedUrl.toLowerCase().includes("roamcdn")) {
-                  const imobiliarePromotions = [
-                    { thumb: "_75x75.jpg", high: "_800x600.jpg" },
-                    { thumb: "_150x150.jpg", high: "_800x600.jpg" },
-                    { thumb: "_160x120.jpg", high: "_800x600.jpg" },
-                    { thumb: "_400x300.jpg", high: "_800x600.jpg" },
-                    { thumb: "/small/", high: "/large/" },
-                    { thumb: "/medium/", high: "/large/" },
-                    { thumb: "/thumb/", high: "/large/" }
-                  ];
-                  imobiliarePromotions.forEach(p => {
-                    if (cleanedUrl.includes(p.thumb)) cleanedUrl = cleanedUrl.replace(p.thumb, p.high);
-                  });
-                  if (cleanedUrl.toLowerCase().includes("roamcdn")) {
-                    cleanedUrl = cleanedUrl.replace(/gallery-[a-zA-Z0-9]+-watermark/g, "gallery-full-1200w-watermark");
-                  }
-                }
-                
-                if (cleanedUrl.includes("/small/")) cleanedUrl = cleanedUrl.replace("/small/", "/large/");
-                if (cleanedUrl.includes("/medium/")) cleanedUrl = cleanedUrl.replace("/medium/", "/large/");
-                if (cleanedUrl.includes("/thumb/")) cleanedUrl = cleanedUrl.replace("/thumb/", "/large/");
-                
-                // High res for Storia/OLX
-                if (cleanedUrl.includes(";s=")) {
-                  cleanedUrl = cleanedUrl.replace(/;s=\d+x\d+/, ";s=1000x700");
-                } else if (cleanedUrl.includes("akamaized.net") || cleanedUrl.includes("apollo") || cleanedUrl.includes("storia.ro")) {
-                   if ((cleanedUrl.includes("/files/") || cleanedUrl.includes("/image")) && !cleanedUrl.includes(";s=")) {
-                     cleanedUrl = cleanedUrl + (cleanedUrl.includes('?') ? '&' : ';') + "s=1000x700";
-                   }
-                }
-                
-                images.push(cleanedUrl);
-              }
-            });
-          }
-        }
-      });
-
-      // Remove duplicates and limit
+      // Deduplicate images and keep highest resolution version
       const deduplicateImages = (urls: string[]) => {
         const map = new Map<string, string>();
-        
-        const isLogoOrTextUrl = (urlStr: string): boolean => {
-          const lower = urlStr.toLowerCase();
-          // Exempt known real estate property photo CDNs from watermark/promo keyword filtering
-          if (
-            lower.includes("roamcdn.net") || 
-            lower.includes("apollo.olxcdn.com") || 
-            lower.includes("olxcdn.com") || 
-            lower.includes("akamaized.net") ||
-            lower.includes("pstatic.ro") ||
-            lower.includes("pcdnh")
-          ) {
-            return false;
-          }
-          const badKeywords = [
-            "logo", "watermark", "banner", "avatar", "placeholder", "icon",
-            "schita", "plan", "schiță", "text", "sigla", "siglă", "promo",
-            "grafic", "desen", "document", "pdf", ".gif", "brand", "afis", "afiș",
-            "anunt", "anunț", "titlu", "title", "splash", "favicon"
-          ];
-          return badKeywords.some(keyword => lower.includes(keyword));
-        };
 
         const getCanonical = (u: string) => {
           let base = u.split(/[?;]/)[0];
-          
-          // Match roamcdn unique file paths to deduplicate thumbnails and high-res main pictures
           const roamMatch = base.match(/(prod-property-core-backend-media-imo\/\d+\/[a-f0-9-]+\.[a-z]+)/i);
-          if (roamMatch) {
-            return roamMatch[1];
-          }
-          
-          // OLX/Storia pattern: /v1/files/[ID]/
+          if (roamMatch) return roamMatch[1];
           const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9]+)\//);
           if (olxMatch) return olxMatch[1];
-          // Imobiliare.ro pattern: strip size suffix
           base = base.replace(/_\d+x\d+(?=\.jpg)/i, "");
-          // General size folder removal
           base = base.replace(/\/(small|medium|thumb|large|galerie)\//i, "/");
           return base;
         };
@@ -988,15 +835,13 @@ Returnează un JSON strict cu următoarele chei:
           if (lower.includes("800x600")) score += 50;
           if (lower.includes("/large/") || lower.includes("/galerie/")) score += 40;
           if (lower.includes("/medium/")) score += 20;
-          if (lower.includes("/small/") || lower.includes("/thumb/") || lower.includes("140w")) score -= 20;
-          if (lower.includes("logo") || lower.includes("icon")) score -= 1000;
+          if (lower.includes("/small/") || lower.includes("/thumb/") || lower.includes("140w")) score -= 50;
+          if (isForbiddenGraphic(u)) score -= 10000;
           return score;
         };
 
         urls.forEach(u => {
-          if (isLogoOrTextUrl(u)) {
-            return; // completely filter out logo and text images
-          }
+          if (isForbiddenGraphic(u)) return;
           const key = getCanonical(u);
           const existing = map.get(key);
           if (!existing || getScore(u) > getScore(existing)) {
@@ -1004,10 +849,10 @@ Returnează un JSON strict cu următoarele chei:
           }
         });
 
-        return Array.from(map.values());
+        return Array.from(map.values()).filter(u => !isForbiddenGraphic(u));
       };
 
-      const uniqueImages = deduplicateImages(images).slice(0, 50);
+      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 50);
       console.log(`Found ${uniqueImages.length} unique images for ${url}`);
 
       // Extract seller name explicitly if possible (OLX/Storia patterns)
@@ -1519,10 +1364,10 @@ Returnează un JSON strict cu următoarele chei:
             notePrivate: ""
           },
           comisioane: {
-            comisionCumparatorProcent: "50%",
-            comisionCumparatorValoare: "",
-            comisionProprietarProcent: "50%",
-            comisionProprietarValoare: "",
+            comisionCumparatorProcent: transactionType === "Închiriere" ? "50%" : "0%",
+            comisionCumparatorValoare: transactionType === "Închiriere" ? "50%+TVA" : "0% (comision 0% pentru cumpărător)",
+            comisionProprietarProcent: transactionType === "Închiriere" ? "50%" : "0%",
+            comisionProprietarValoare: transactionType === "Închiriere" ? "50%+TVA" : "0% (comision 0% pentru cumpărător)",
             colaborare: false
           },
           contract: {
@@ -1549,6 +1394,105 @@ Returnează un JSON strict cu următoarele chei:
         }
       };
 
+      const defaultCommission = transactionType === "Închiriere" ? "50%+TVA" : "0%";
+
+      // Summary: includes all configurare section data and area, easy to read, <= 512 chars
+      const summaryCamere = camere && camere !== "-" ? `${camere} camere` : "";
+      const summarySuprafata = suprafataUtila ? `${suprafataUtila} mp utili` : "";
+      const summaryComp = compartimentare || "decomandat";
+      const summaryEtaj = etaj ? (etaj.toLowerCase().startsWith("etaj") || etaj.toLowerCase() === "parter" || etaj.toLowerCase() === "demisol" ? `la ${etaj.toLowerCase()}` : `la etajul ${etaj}`) : "";
+      const summaryAn = anConstructie ? `într-un bloc din ${anConstructie}` : "";
+      const summarySpecs = [summaryCamere, summarySuprafata].filter(Boolean).join(", ") || "spațiu generos";
+      let summaryText = `Apartament cu ${summarySpecs}, compartimentat ${summaryComp.toLowerCase()}${summaryEtaj ? `, situat ${summaryEtaj}` : ""}${summaryAn ? ` ${summaryAn}` : ""}, în stare bună. Locuința dispune de o baie și balcon, fiind poziționată în zona ${zona || oras}, cu acces facil la mijloace de transport și facilități urbane.`.trim();
+      if (summaryText.length > 512) {
+        summaryText = summaryText.substring(0, 508).replace(/\s+[^\s]*$/, "") + "...";
+      }
+
+      const presentationSections = {
+        introducere: {
+          summary: summaryText
+        },
+        configuratie: {
+          "Suprafață utilă": suprafataUtila || "-",
+          "Compartimentare": compartimentare || "Decomandat",
+          "Etaj": etaj || "-",
+          "An construcție": anConstructie || "-",
+          "Număr camere": camere ? String(camere) : "-",
+          "Număr băi": "1",
+          "Balcon": "-",
+          "Stare": "Buna"
+        },
+        finisaje: {
+          "Living": "vopsea lavabilă, parchet",
+          "Camera 1": "vopsea lavabilă, parchet",
+          "Camera 2": "vopsea lavabilă, parchet",
+          "Camera 3": "vopsea lavabilă, parchet",
+          "Camera 4": "vopsea lavabilă, parchet",
+          "Bucătărie": "vopsea lavabilă, faianță și gresie",
+          "Baie 1": "faianță și gresie",
+          "Baie 2": "faianță și gresie",
+          "Baie 3": "faianță și gresie",
+          "Baie 4": "faianță și gresie",
+          "Hol": "vopsea lavabilă, parchet"
+        },
+        mobilare: {
+          "Living": "canapea, măsuță cafea, comodă",
+          "Camera 1": "pat, noptiere, dulap",
+          "Camera 2": "pat, noptiere, dulap",
+          "Camera 3": "pat, noptiere, dulap",
+          "Camera 4": "pat, noptiere, dulap",
+          "Bucătărie": "mobilă de bucatarie premium",
+          "Baie 1": "obiecte sanitare premium",
+          "Baie 2": "obiecte sanitare premium",
+          "Baie 3": "obiecte sanitare premium",
+          "Baie 4": "obiecte sanitare premium",
+          "Hol": "cuier, pantofar"
+        },
+        dotari: {
+          "Living": "aer condiționat, smart TV",
+          "Camera 1": "-",
+          "Camera 2": "-",
+          "Camera 3": "-",
+          "Camera 4": "-",
+          "Bucătărie": "frigider, plită, cuptor, hotă",
+          "Baie 1": "-",
+          "Baie 2": "-",
+          "Hol": "interfon",
+          "Altele": "-"
+        },
+        bloc: {
+          "Acces": "Tag magnetic, interfon",
+          "Spații": "-",
+          "Dotări": "Lift, supraveghere video",
+          "Servicii": "Administrație, curățenie spații comune"
+        },
+        imprejurimi: {
+          "Educație": "Grădinițe de stat și private, școli gimnaziale, licee în apropiere",
+          "Comerț": "Numeroase magazine de proximitate.",
+          "Benzinării": "Multiple statii de alimentare.",
+          "Sănătate": "Diverse farmacii.",
+          "Relaxare": "Spatii verzi in apropiere.",
+          "Divertisment": "Restaurante, baruri si cafenele in zona.",
+          "Obiective": "Diverse puncte de atracie din sector."
+        },
+        parcare: {
+          "Parcare": "Publica in zona"
+        },
+        acte: {
+          "Situație juridică": "Fara probleme",
+          "Disponibilitate": "Imediată",
+          "Finanțare": "Credit bancar / fonduri proprii",
+          "Condiții contractuale": "Contract pe minimum 12 luni",
+          "Avans": "1 lună",
+          "Garanție": "1 lună"
+        },
+        tranzactie: {
+          "Preț": formattedPrice,
+          "TVA": "Scutit de TVA / conform legislației în vigoare",
+          "Comision": defaultCommission
+        }
+      };
+
       res.json({
         title: cleanTitle,
         price: formattedPrice,
@@ -1572,6 +1516,7 @@ Returnează un JSON strict cu următoarele chei:
         images: uniqueImages,
         coverImage: uniqueImages.length > 0 ? uniqueImages[0] : null,
         crmData: crmData,
+        presentationSections: presentationSections,
         text: text.substring(0, 8000)
       });
       return; // Success!
