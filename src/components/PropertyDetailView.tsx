@@ -1274,10 +1274,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         </nav>
       )}
 
-      {/* Horizontal Sticky Menu with Jump Links (Left) and Actions (Right) */}
-      <div className="sticky top-0 z-30 bg-white border-b border-gray-200 shadow-xs select-none">
+      {/* Horizontal Sticky Menu with Jump Links (Left) and Actions (Right) - Fixed at top-[50px] below Title Row */}
+      <div className="sticky top-[50px] z-20 bg-white border-b border-gray-200 shadow-xs select-none">
         <div className="w-full h-10 flex items-stretch justify-between p-0">
-          {/* Left: Jump Links (full height, no roundness, architectural borders) */}
+          {/* Left: Jump Links (no borders between, left menu hover effect & bottom golden border for active) */}
           <div className="flex items-stretch overflow-x-auto no-scrollbar">
             {NAV_SECTIONS.map((sect) => {
               const Icon = sect.icon;
@@ -1288,30 +1288,30 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   key={sect.id}
                   type="button"
                   onClick={() => scrollToSection(sect.id)}
-                  className={`h-full px-3.5 sm:px-4 rounded-none text-xs font-semibold uppercase tracking-wider transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 select-none border-r border-gray-200 ${
+                  className={`h-full px-3.5 sm:px-4 rounded-none text-xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 select-none border-b-4 group font-sans ${
                     isActive
-                      ? "bg-[#051D35] text-white border-r-[#051D35]"
-                      : "bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                      ? "bg-gray-100 text-gray-900 font-semibold border-b-[#BE9662]"
+                      : "text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-b-transparent font-medium"
                   }`}
                 >
-                  <Icon size={13} className={isActive ? "text-[#BE9662]" : "text-gray-400"} />
-                  <span>{sect.label}</span>
+                  <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-gray-900 transition-colors"} />
+                  <span className="uppercase text-[11px] font-semibold tracking-wider">{sect.label}</span>
                 </button>
               );
             })}
           </div>
 
-          {/* Right: Actions (sterge, printeaza, distribuie, link extern, activitate) */}
+          {/* Right: Actions (no borders between, left menu hover effect, except activitate) */}
           <div className="flex items-stretch h-full shrink-0">
             {/* 1. Șterge */}
             {!isPublicShared && onDelete && (
               <button 
                 type="button"
                 onClick={onDelete}
-                className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
+                className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
                 title="Mută în Șterse"
               >
-                <Trash2 size={13} className="text-gray-500 group-hover:text-red-600 transition-colors" />
+                <Trash2 size={15} className="text-gray-500 group-hover:text-red-600 transition-colors" />
               </button>
             )}
 
@@ -1319,20 +1319,20 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             <button
               type="button"
               onClick={handlePrint}
-              className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group rounded-none"
+              className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
               title="Tipărește oferta"
             >
-              <Printer size={13} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+              <Printer size={15} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
             </button>
 
             {/* 3. Distribuie */}
             <button
               type="button"
               onClick={handleNativeShare}
-              className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group rounded-none"
+              className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
               title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
             >
-              <Share2 size={13} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+              <Share2 size={15} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
             </button>
 
             {/* 4. Link extern */}
@@ -1341,28 +1341,28 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 href={lead.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 select-none group rounded-none"
+                className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 select-none group rounded-none"
                 title="Deschide anunțul sursă extern"
               >
-                <ExternalLink size={13} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+                <ExternalLink size={15} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
               </a>
             ) : (
               <button
                 type="button"
                 disabled
-                className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white text-gray-300 cursor-not-allowed shrink-0 select-none rounded-none"
+                className="h-full aspect-square flex items-center justify-center bg-white text-gray-300 cursor-not-allowed shrink-0 select-none rounded-none"
                 title="Fără link sursă extern"
               >
-                <ExternalLink size={13} className="text-gray-300" />
+                <ExternalLink size={15} className="text-gray-300" />
               </button>
             )}
 
-            {/* 5. Activitate (PRIMARY) */}
+            {/* 5. Activitate (PRIMARY - kept distinct per user request) */}
             {!isPublicShared && onAddActivity && (
               <button
                 type="button"
                 onClick={onAddActivity}
-                className="h-full px-3.5 sm:px-4 flex items-center gap-1.5 border-l border-[#051D35] bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer select-none shrink-0 group rounded-none"
+                className="h-full px-3.5 sm:px-4 flex items-center gap-1.5 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer select-none shrink-0 group rounded-none"
                 title="Adaugă activitate pentru această proprietate"
               >
                 <Plus size={13} className="text-[#BE9662]" />
@@ -1742,7 +1742,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           </div>
 
           {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share */}
-          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-[44px]">
+          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-[102px]">
             
             {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
             {!isPublicShared && (

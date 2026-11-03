@@ -2056,7 +2056,7 @@ export const Home: React.FC = () => {
             onScroll={handleDetailsScroll}
           >
             {/* Sticky Header Bar */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 h-[50px] min-h-[50px] max-h-[50px] shrink-0 box-border flex items-center justify-between p-0 z-20 select-none">
+            <div className="sticky top-0 bg-white border-b border-gray-200 h-[50px] min-h-[50px] max-h-[50px] shrink-0 box-border flex items-center justify-between p-0 z-30 select-none">
               {/* Back Button (Square, height = container height, bg = container bg, menu hover effect) */}
               <button 
                 onClick={() => {
