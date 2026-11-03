@@ -151,25 +151,13 @@ export const SharedProperty: React.FC = () => {
   }
 
   return (
-    <div id="shared-property-container" className="fixed inset-0 overflow-y-auto overflow-x-hidden bg-[#F8F9FA] flex flex-col scroll-smooth">
+    <div id="shared-property-container" className="fixed inset-0 overflow-hidden bg-[#F8F9FA] flex flex-col">
       {/* Strict Public Presentation: isPublicShared=true ensures NO owner details ever leak */}
       <PropertyDetailView 
         lead={lead} 
         isPublicShared={true} 
         showTopNavbar={true} 
       />
-      
-      {/* Footer */}
-      <footer className="bg-white border-t border-gray-200 py-6 mt-12 text-center text-xs text-gray-400">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <p className="font-semibold text-gray-700">
-            brokr<span className="text-[#BE9662]">.</span> Real Estate Management System
-          </p>
-          <p className="text-[11px]">
-            Toate drepturile rezervate © {new Date().getFullYear()} • Pagină generată automat
-          </p>
-        </div>
-      </footer>
     </div>
   );
 };

@@ -2052,11 +2052,10 @@ export const Home: React.FC = () => {
             animate="center"
             exit="exit"
             transition={pageSlideTransition}
-            className="w-full h-full bg-gray-50 overflow-y-auto flex flex-col scroll-smooth"
-            onScroll={handleDetailsScroll}
+            className="w-full h-full bg-gray-50 overflow-hidden flex flex-col"
           >
-            {/* Sticky Header Bar */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 h-[50px] min-h-[50px] max-h-[50px] shrink-0 box-border flex items-center justify-between p-0 z-30 select-none">
+            {/* Top Fixed Header Bar (Permanently fixed at top, never scrolls away) */}
+            <div className="h-[50px] min-h-[50px] max-h-[50px] shrink-0 bg-white border-b border-gray-200 box-border flex items-center justify-between p-0 z-30 select-none">
               {/* Back Button (Square, height = container height, bg = container bg, menu hover effect) */}
               <button 
                 onClick={() => {
@@ -2137,7 +2136,7 @@ export const Home: React.FC = () => {
 
             {/* Content view: Edit form or Presentation layout */}
             {isEditingDetails ? (
-              <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col font-sans">
+              <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col font-sans" onScroll={handleDetailsScroll}>
                 {/* Sticky Jump-links bar in Edit Mode */}
                 <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-gray-200 px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-xs">
                   <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">

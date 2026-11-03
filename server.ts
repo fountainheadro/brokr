@@ -1078,16 +1078,10 @@ Returnează un JSON strict cu următoarele chei:
 
       // --- Pure Crawler Extraction of Full Property Data (No AI Needed!) ---
       const lowerCombo = (url + " " + title + " " + text).toLowerCase();
-      
-      // 1. Transaction Type
-      const isRent = lowerCombo.includes("inchirier") || 
-                     lowerCombo.includes("închiriat") || 
-                     lowerCombo.includes("inchiriat") || 
-                     lowerCombo.includes("chirie") || 
-                     lowerCombo.includes("/rent/");
-      const transactionType = isRent ? "Închiriere" : "Vânzare";
+      const urlLower = url.toLowerCase();
+      const titleLower = title.toLowerCase();
 
-      // 2. Category
+      // 1. Category extraction (needed to qualify price thresholds)
       let categoria = "Apartament";
       if (lowerCombo.includes("garsonier") || lowerCombo.includes("studio")) {
         categoria = "Apartament";
@@ -1103,7 +1097,7 @@ Returnează un JSON strict cu următoarele chei:
         categoria = "Spatiu Industrial";
       }
 
-      // 3. Price & Currency
+      // 2. Price & Currency extraction
       let rawPriceNum = 0;
       let currency = "EUR";
       if (nextAdData?.price?.regularPrice?.value) {
@@ -1122,6 +1116,66 @@ Returnează un JSON strict cu următoarele chei:
           currency = currStr.includes("ron") || currStr.includes("lei") ? "RON" : "EUR";
         }
       }
+
+      // Approximate price in EUR for threshold comparisons
+      const priceInEur = currency === "RON" ? Math.round(rawPriceNum / 5) : rawPriceNum;
+
+      // 3. Robust Transaction Type Detection (Rent vs Sale)
+      // Per rules: Usually rents are less than 10,000 euros, while sales are thousands of euros (20,000+).
+      const hasPerMonth = /\b(?:pe\s*lun[aă]|\/\s*lun[aă]|\/\s*month|per\s*month|lunar[aă]?)\b/i.test(title + " " + text);
+      const urlHasRent = /\b(?:de-inchiriat|inchiriere|inchirieri|inchiriat|chirie|rent)\b/i.test(urlLower);
+      const urlHasSale = /\b(?:de-vanzare|vanzare|vanzari|cumparare|sale)\b/i.test(urlLower);
+      const titleHasRent = /\b(?:de\s+[îi]nchiriat|spre\s+[îi]nchiriere|ofer\s+spre\s+[îi]nchiriere|[îi]nchiriez|chirie|for\s+rent)\b/i.test(titleLower);
+      const titleHasSale = /\b(?:de\s+v[aâ]nzare|spre\s+v[aâ]nzare|v[aâ]nd|v[aâ]nzare|for\s+sale)\b/i.test(titleLower);
+      
+      const structuredCat = String(nextAdData?.category?.name || "").toLowerCase();
+      const structuredTarget = String(nextAdData?.target?.transaction_type || nextAdData?.target?.action || "").toLowerCase();
+      const structuredIsRent = structuredCat.includes("inchiri") || structuredTarget.includes("rent");
+      const structuredIsSale = structuredCat.includes("vanza") || structuredTarget.includes("sell") || structuredTarget.includes("sale");
+
+      let isRent = false;
+
+      if (priceInEur >= 20000) {
+        // High price (20,000+ EUR) is overwhelmingly a SALE (e.g. 50,000€, 120,000€, 300,000€).
+        // Even if description mentions "se poate închiria" or "randament închiriere", it is a SALE.
+        // Exception only for dedicated massive commercial rent with unambiguous rent URL & /lună.
+        if (urlHasRent && hasPerMonth && (categoria === "Spatiu Birou" || categoria === "Spatiu Comercial" || categoria === "Spatiu Industrial")) {
+          isRent = true;
+        } else {
+          isRent = false;
+        }
+      } else if (priceInEur > 0 && priceInEur <= 10000) {
+        // Low price (under 10,000 EUR) is overwhelmingly a RENT (e.g. 350€, 600€, 1200€, 3000€).
+        // Standard residential apartments/houses are never sold for under 10,000 EUR.
+        // Only exception: explicit plot of land or small garage parking with explicit sale in URL/title.
+        if ((categoria === "Teren" || lowerCombo.includes("garaj") || lowerCombo.includes("parcare")) && (urlHasSale || titleHasSale)) {
+          isRent = false;
+        } else {
+          isRent = true;
+        }
+      } else if (priceInEur > 10000 && priceInEur < 20000) {
+        // Intermediate band (10,000 - 20,000 EUR)
+        if (urlHasRent || titleHasRent || structuredIsRent || hasPerMonth) {
+          isRent = true;
+        } else {
+          isRent = false;
+        }
+      } else {
+        // Price not found (0 or N/A) -> rely on URL, title and structured tags
+        if (urlHasRent || titleHasRent || structuredIsRent || hasPerMonth) {
+          isRent = true;
+        } else if (urlHasSale || titleHasSale || structuredIsSale) {
+          isRent = false;
+        } else {
+          const rentMentions = (lowerCombo.match(/\b(?:[îi]nchiriere|chirie|garan[t\u021b]ie|depozit)\b/g) || []).length;
+          const saleMentions = (lowerCombo.match(/\b(?:v[aâ]nzare|credit\s+ipotecar|noua\s+cas[aă]|cadastru)\b/g) || []).length;
+          isRent = rentMentions > saleMentions;
+        }
+      }
+
+      const transactionType = isRent ? "Închiriere" : "Vânzare";
+      console.log(`[Crawler Transaction Detection] Price: ${priceInEur} EUR (${currency}) -> Type: ${transactionType} (URL Rent: ${urlHasRent}, Title Rent: ${titleHasRent})`);
+
       const formattedPrice = rawPriceNum > 0 
         ? `${rawPriceNum.toLocaleString("ro-RO")} ${currency}${transactionType === "Închiriere" ? " / lună" : ""}` 
         : "N/A";
@@ -1358,7 +1412,7 @@ Returnează un JSON strict cu următoarele chei:
             plataAcceptata: "Cash sau Credit",
             pretGaraj: "",
             pretParcare: "",
-            avans: "",
+            avans: transactionType === "Închiriere" ? "1 lună avans" : "",
             garantie: transactionType === "Închiriere" ? "1 lună garanție" : "",
             tvaIncluded: false,
             notePrivate: ""
@@ -1475,16 +1529,23 @@ Returnează un JSON strict cu următoarele chei:
           "Divertisment": "Restaurante, baruri si cafenele in zona.",
           "Obiective": "Diverse puncte de atracie din sector."
         },
+        transport: {
+          "Metrou": "Stație de metrou în proximitate",
+          "Tramvai": "Linii tramvai în zonă",
+          "Troleibuz": "Linii troleibuz în apropiere",
+          "Autobuz": "Multiple linii STB în apropiere"
+        },
         parcare: {
           "Parcare": "Publica in zona"
         },
-        acte: {
+        acte: transactionType === "Închiriere" ? {
+          "Condiții contractuale": "12 luni",
+          "Avans": "1 luna",
+          "Garanție": "1 luna"
+        } : {
           "Situație juridică": "Fara probleme",
           "Disponibilitate": "Imediată",
-          "Finanțare": "Credit bancar / fonduri proprii",
-          "Condiții contractuale": "Contract pe minimum 12 luni",
-          "Avans": "1 lună",
-          "Garanție": "1 lună"
+          "Finanțare": "Credit bancar / fonduri proprii"
         },
         tranzactie: {
           "Preț": formattedPrice,

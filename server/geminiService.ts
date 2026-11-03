@@ -116,6 +116,9 @@ export async function serverExtractBasicData(content: string, title: string): Pr
   ${content.substring(0, 3500)}
   
   --- REGULI STRICTE ---
+  - REGULĂ DETECȚIE TRANZACȚIE (VÂNZARE vs ÎNCHIRIERE):
+    * Închirierile au de regulă prețuri sub 10.000 EUR (de obicei 200 - 3.000 EUR/lună). Dacă prețul este sub 10.000 EUR sau apar mențiuni de "/lună", "garanție", setează "Inchiriere".
+    * Vânzările au prețuri de zeci sau sute de mii de euro (20.000+ EUR, ex: 50.000, 100.000 EUR). Dacă prețul este de 20.000+ EUR, setează categoric "Vanzare", chiar dacă textul menționează "randament chirie" sau "pretabil închiriere".
   - NICIODATĂ nu include în titlu sau descriere numele vreunui complex rezidențial sau complex de blocuri/clădiri (ex: "Astorium", "Hills" etc.), numărul străzii, numărul de bloc, scara sau apartamentul, ori alte detalii de adresă poștală exactă. Folosește DOAR zona sau cartierul general.
   - ELIMINĂ orice mențiune despre "comision 0%", "0 ron", "0 euro comision".
   - Folosește DOAR opțiunile care se potrivesc cel mai bine din lista de Categorii de mai sus, NU inventa opțiuni noi.
@@ -149,7 +152,20 @@ export async function serverExtractBasicData(content: string, title: string): Pr
 
   const text = response.text;
   if (!text) throw new Error("No response from Gemini");
-  return JSON.parse(text);
+  const parsed = JSON.parse(text);
+
+  // Post-processing price validation for transactionType
+  const priceDigits = parseInt(String(parsed.price || "").replace(/[^0-9]/g, ""), 10) || 0;
+  const isRon = String(parsed.price || "").toLowerCase().includes("ron") || String(parsed.price || "").toLowerCase().includes("lei");
+  const priceInEur = isRon ? Math.round(priceDigits / 5) : priceDigits;
+
+  if (priceInEur >= 20000) {
+    parsed.transactionType = "Vanzare";
+  } else if (priceInEur > 0 && priceInEur <= 10000 && (parsed.categoria === "Apartament" || parsed.categoria === "Casa/Vila")) {
+    parsed.transactionType = "Inchiriere";
+  }
+
+  return parsed;
 }
 
 export async function serverExtractData(content: string, title: string, imageUrls: string[] = [], propertyId?: string, propertyUrl?: string) {
@@ -761,6 +777,21 @@ Condiții suplimentare:
   try {
     const parsed = JSON.parse(text);
     if (parsed && parsed.crmData) {
+      // Validate and enforce transactionType based on price heuristics
+      if (parsed.crmData.detaliiGenerale) {
+        const rawP = String(parsed.crmData.pret?.detalii?.pret || "");
+        const priceDigits = parseInt(rawP.replace(/[^0-9]/g, ""), 10) || 0;
+        const isRon = rawP.toLowerCase().includes("ron") || rawP.toLowerCase().includes("lei");
+        const priceInEur = isRon ? Math.round(priceDigits / 5) : priceDigits;
+        const cat = parsed.crmData.detaliiGenerale.categoria;
+
+        if (priceInEur >= 20000) {
+          parsed.crmData.detaliiGenerale.tranzactie = "Vânzare";
+        } else if (priceInEur > 0 && priceInEur <= 10000 && (cat === "Apartament" || cat === "Casa/Vila")) {
+          parsed.crmData.detaliiGenerale.tranzactie = "Închiriere";
+        }
+      }
+
       if (!parsed.crmData.caracteristici) {
         parsed.crmData.caracteristici = {};
       }

@@ -75,6 +75,11 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "acte", label: "Condiții", icon: ShieldCheck }
 ];
 
+const COMPARTIMENTARE_OPTIONS = ["Decomandat", "Semidecomandat", "Nedecomandat", "Circular", "Open Space"];
+const STARE_OPTIONS = ["Buna", "Renovat", "Necesita renovare"];
+const CONDITII_CONTRACTUALE_OPTIONS = ["6 luni", "12 luni", "24 luni", "36 luni", "48 luni", "60 luni"];
+const AVANS_GARANTIE_OPTIONS = ["1 luna", "2 luni", "3 luni", "4 luni", "5 luni", "6 luni"];
+
 interface AttributeRowProps {
   label: string;
   value: React.ReactNode;
@@ -84,6 +89,7 @@ interface AttributeRowProps {
   editValue?: string;
   onEditChange?: (val: string) => void;
   multiline?: boolean;
+  options?: string[];
 }
 
 const AttributeRow: React.FC<AttributeRowProps> = ({ 
@@ -92,12 +98,29 @@ const AttributeRow: React.FC<AttributeRowProps> = ({
   copyValue,
   isEditing = false,
   editValue,
-  onEditChange
+  onEditChange,
+  options
 }) => {
   const [copied, setCopied] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectRef = useRef<HTMLSelectElement>(null);
   const textToCopy = copyValue || (typeof value === "string" ? value : "");
+
+  const rawEdit = editValue ?? (typeof value === "string" ? value : "");
+  let matchedValue = rawEdit;
+  if (options && options.length > 0) {
+    const found = options.find(opt => opt.toLowerCase() === rawEdit.toLowerCase());
+    if (found) {
+      matchedValue = found;
+    } else {
+      const partial = options.find(opt => 
+        rawEdit.toLowerCase().includes(opt.toLowerCase()) || 
+        opt.toLowerCase().replace(/[ăâ]/g, "a").includes(rawEdit.toLowerCase().replace(/[ăâ]/g, "a"))
+      );
+      matchedValue = partial || options[0];
+    }
+  }
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -128,36 +151,62 @@ const AttributeRow: React.FC<AttributeRowProps> = ({
         </span>
       </div>
 
-      {/* Right Cell: Value (100% of cell surface is the seamless editable input) */}
+      {/* Right Cell: Value (100% of cell surface is the seamless editable input or select dropdown) */}
       <div 
         onClick={() => {
-          if (isEditing && inputRef.current) {
-            inputRef.current.focus();
+          if (isEditing) {
+            if (options && options.length > 0) {
+              selectRef.current?.focus();
+            } else {
+              inputRef.current?.focus();
+            }
           }
         }}
         className={`flex-1 relative flex items-stretch min-w-0 transition-colors ${
           isFocused 
             ? "bg-amber-50/40" 
             : isEditing 
-              ? "hover:bg-amber-50/15 cursor-text" 
+              ? "hover:bg-amber-50/15 cursor-pointer" 
               : "hover:bg-gray-50/60"
         }`}
       >
         {isEditing ? (
-          <input
-            ref={inputRef}
-            type="text"
-            value={editValue ?? (typeof value === "string" ? value : "")}
-            onChange={(e) => onEditChange?.(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => setIsFocused(false)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLElement).blur();
-            }}
-            className={`w-full h-full min-h-[36px] px-3.5 py-2 text-[12px] font-sans leading-normal bg-transparent border-none outline-none rounded-none focus:outline-none focus:ring-0 p-0 m-0 shadow-none cursor-text select-text transition-colors ${
-              isFocused ? "text-[#051D35] font-semibold" : "text-gray-800 font-normal"
-            }`}
-          />
+          options && options.length > 0 ? (
+            <div className="relative w-full h-full flex items-center">
+              <select
+                ref={selectRef}
+                value={matchedValue}
+                onChange={(e) => onEditChange?.(e.target.value)}
+                onFocus={() => setIsFocused(true)}
+                onBlur={() => setIsFocused(false)}
+                className={`w-full h-full min-h-[36px] px-3.5 pr-8 py-2 text-[12px] font-sans leading-normal bg-transparent border-none outline-none rounded-none focus:outline-none focus:ring-0 p-0 m-0 shadow-none cursor-pointer appearance-none transition-colors ${
+                  isFocused ? "text-[#051D35] font-semibold" : "text-gray-800 font-normal"
+                }`}
+              >
+                {options.map((opt) => (
+                  <option key={opt} value={opt} className="bg-white text-gray-900 py-1 font-sans">
+                    {opt}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown size={13} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+            </div>
+          ) : (
+            <input
+              ref={inputRef}
+              type="text"
+              value={editValue ?? (typeof value === "string" ? value : "")}
+              onChange={(e) => onEditChange?.(e.target.value)}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => setIsFocused(false)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLElement).blur();
+              }}
+              className={`w-full h-full min-h-[36px] px-3.5 py-2 text-[12px] font-sans leading-normal bg-transparent border-none outline-none rounded-none focus:outline-none focus:ring-0 p-0 m-0 shadow-none cursor-text select-text transition-colors ${
+                isFocused ? "text-[#051D35] font-semibold" : "text-gray-800 font-normal"
+              }`}
+            />
+          )
         ) : (
           <div className="w-full h-full min-h-[36px] px-3.5 py-2 text-[12px] font-sans text-gray-600 leading-normal flex items-center break-words select-text pr-10">
             {value}
@@ -282,8 +331,16 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onDelete,
   onAddActivity
 }) => {
-  const [activeSection, setActiveSection] = useState<string>("introducere");
+  const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
   const [isCopied, setIsCopied] = useState<boolean>(false);
+  
+  // Ensure default active tab is always the first in jump links on mount or property change
+  useEffect(() => {
+    setActiveSection(NAV_SECTIONS[0]?.id || "tranzactie");
+    if (mainScrollRef.current) {
+      mainScrollRef.current.scrollTop = 0;
+    }
+  }, [lead?.id]);
   
   // Persistent favorite stored in browser localStorage
   const favoriteStorageKey = `brokr_fav_prop_${lead.propertyId || lead.id || "default"}`;
@@ -314,6 +371,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const [formSent, setFormSent] = useState(false);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const mainScrollRef = useRef<HTMLElement>(null);
   const isManualScrollingRef = useRef(false);
   const scrollTimeoutRef = useRef<any>(null);
 
@@ -327,6 +385,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   }, [lead]);
 
   const getScrollContainer = (node: HTMLElement | null): HTMLElement | Window => {
+    if (mainScrollRef.current) return mainScrollRef.current;
     let parent = node?.parentElement;
     while (parent) {
       const style = window.getComputedStyle(parent);
@@ -338,46 +397,31 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     return window;
   };
 
-  // Track active jump link section on scroll with early activation (before header disappears)
+  // Track active jump link section on scroll
   useEffect(() => {
-    let scrollContainer: HTMLElement | Window = window;
-    let p = containerRef.current?.parentElement;
-    while (p) {
-      const style = window.getComputedStyle(p);
-      if (style.overflowY === "auto" || style.overflowY === "scroll") {
-        scrollContainer = p;
-        break;
-      }
-      p = p.parentElement;
-    }
-
-    const stickyOffset = showTopNavbar ? 116 : 108;
+    const scrollContainer = mainScrollRef.current;
+    if (!scrollContainer) return;
 
     const handleScroll = () => {
       // Don't override active tab during programmatic smooth scroll
       if (isManualScrollingRef.current) return;
 
       // Check if user is scrolled to the absolute bottom of the container
-      if (scrollContainer instanceof HTMLElement) {
-        const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
-        if (isAtBottom) {
-          setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
-          return;
-        }
-      } else {
-        const isAtBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 40;
-        if (isAtBottom) {
-          setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
-          return;
-        }
+      const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
+      if (isAtBottom) {
+        setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
+        return;
       }
 
-      const containerTop = scrollContainer instanceof HTMLElement 
-        ? scrollContainer.getBoundingClientRect().top 
-        : 0;
-      
-      // Trigger line: 100px below the sticky header bar so section activates early before its header is occluded
-      const triggerLine = containerTop + stickyOffset + 100;
+      // If at or near the top of the container, force the first jump link tab
+      if (scrollContainer.scrollTop <= 40) {
+        setActiveSection(NAV_SECTIONS[0].id);
+        return;
+      }
+
+      const containerTop = scrollContainer.getBoundingClientRect().top;
+      // Trigger line: 70px below the top of the visible content area
+      const triggerLine = containerTop + 70;
 
       // Find the last section whose top has reached or passed the trigger line
       let currentSectionId = NAV_SECTIONS[0].id;
@@ -394,21 +438,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       setActiveSection(currentSectionId);
     };
 
-    if (scrollContainer instanceof HTMLElement) {
-      scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
-    }
-    window.addEventListener("scroll", handleScroll, { passive: true });
+    scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
 
     return () => {
-      if (scrollContainer instanceof HTMLElement) {
-        scrollContainer.removeEventListener("scroll", handleScroll);
-      }
-      window.removeEventListener("scroll", handleScroll);
+      scrollContainer.removeEventListener("scroll", handleScroll);
       if (scrollTimeoutRef.current) {
         clearTimeout(scrollTimeoutRef.current);
       }
     };
-  }, [showTopNavbar]);
+  }, []);
 
   const toggleCard = (cardId: string) => {
     setCollapsedCards(prev => ({
@@ -431,16 +469,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       isManualScrollingRef.current = false;
     }, 850);
 
-    // Find the scrollable ancestor container (div or window)
-    const scrollContainer = getScrollContainer(el);
-
-    // Header offset for sticky navigation
-    const stickyOffset = (showTopNavbar ? 116 : 108) + 12;
+    const scrollContainer = mainScrollRef.current || getScrollContainer(el);
 
     if (scrollContainer instanceof HTMLElement) {
       const containerRect = scrollContainer.getBoundingClientRect();
       const elRect = el.getBoundingClientRect();
-      const targetTop = scrollContainer.scrollTop + (elRect.top - containerRect.top) - stickyOffset;
+      const targetTop = scrollContainer.scrollTop + (elRect.top - containerRect.top) - 16;
       
       scrollContainer.scrollTo({
         top: Math.max(0, targetTop),
@@ -450,7 +484,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       const elRect = el.getBoundingClientRect().top;
       const bodyRect = document.body.getBoundingClientRect().top;
       window.scrollTo({
-        top: Math.max(0, elRect - bodyRect - stickyOffset),
+        top: Math.max(0, elRect - bodyRect - 16),
         behavior: "smooth"
       });
     }
@@ -993,6 +1027,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Obiective": saved.imprejurimi?.["Obiective"] || "Diverse puncte de atracie din sector.",
         ...(saved.imprejurimi || {})
       },
+      transport: {
+        "Metrou": saved.transport?.["Metrou"] || "Stație de metrou în proximitate",
+        "Tramvai": saved.transport?.["Tramvai"] || "Linii tramvai în zonă",
+        "Troleibuz": saved.transport?.["Troleibuz"] || "Linii troleibuz în apropiere",
+        "Autobuz": saved.transport?.["Autobuz"] || "Multiple linii STB în apropiere",
+        ...(saved.transport || {})
+      },
       parcare: {
         "Parcare": saved.parcare?.["Parcare"] || "Publica in zona",
         ...(saved.parcare || {})
@@ -1001,9 +1042,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Situație juridică": saved.acte?.["Situație juridică"] || "Fara probleme",
         "Disponibilitate": saved.acte?.["Disponibilitate"] || "Imediată",
         "Finanțare": saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii",
-        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "Contract pe minimum 12 luni",
-        "Avans": saved.acte?.["Avans"] || "1 lună",
-        "Garanție": saved.acte?.["Garanție"] || "1 lună",
+        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "12 luni",
+        "Avans": saved.acte?.["Avans"] || "1 luna",
+        "Garanție": saved.acte?.["Garanție"] || "1 luna",
         ...(saved.acte || {})
       },
       tranzactie: {
@@ -1186,7 +1227,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     label: string, 
     fallbackVal: string, 
     isLast: boolean = false, 
-    multiline: boolean = false
+    multiline: boolean = false,
+    options?: string[]
   ) => {
     const isSecEditing = editingSection === sectionId;
     const originalVal = sectionData[sectionId]?.[label] ?? fallbackVal;
@@ -1212,16 +1254,17 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         onEditChange={(newVal) => handleFieldChange(sectionId, label, newVal)}
         multiline={multiline}
         isLast={isLast}
+        options={options}
       />
     );
   };
 
   return (
-    <div ref={containerRef} className="w-full bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 min-h-screen">
+    <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden">
       
       {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
       {showTopNavbar && (
-        <nav className="sticky top-0 z-40 bg-white border-b border-gray-200 select-none">
+        <nav className="h-[50px] shrink-0 bg-white border-b border-gray-200 select-none z-30">
           <div className="w-full h-[50px] flex items-center justify-between p-0">
             <div className="flex items-center h-full">
               <a 
@@ -1274,107 +1317,105 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         </nav>
       )}
 
-      {/* Horizontal Sticky Menu with Jump Links (Left) and Actions (Right) - Fixed at top-[50px] below Title Row */}
-      <div className="sticky top-[50px] z-20 bg-white border-b border-gray-200 shadow-xs select-none">
-        <div className="w-full h-10 flex items-stretch justify-between p-0">
-          {/* Left: Jump Links (no borders between, left menu hover effect & bottom golden border for active) */}
-          <div className="flex items-stretch overflow-x-auto no-scrollbar">
-            {NAV_SECTIONS.map((sect) => {
-              const Icon = sect.icon;
-              const isActive = activeSection === sect.id;
+      {/* Horizontal Fixed Menu with Jump Links (Left) and Actions (Right) - Matching Cereri subheader style */}
+      <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20 px-4 sm:px-6 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+        {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
+        <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
+          {NAV_SECTIONS.map((sect) => {
+            const Icon = sect.icon;
+            const isActive = activeSection === sect.id;
 
-              return (
-                <button
-                  key={sect.id}
-                  type="button"
-                  onClick={() => scrollToSection(sect.id)}
-                  className={`h-full px-3.5 sm:px-4 rounded-none text-xs transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 select-none border-b-4 group font-sans ${
-                    isActive
-                      ? "bg-gray-100 text-gray-900 font-semibold border-b-[#BE9662]"
-                      : "text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-b-transparent font-medium"
-                  }`}
-                >
-                  <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-gray-900 transition-colors"} />
-                  <span className="uppercase text-[11px] font-semibold tracking-wider">{sect.label}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Right: Actions (no borders between, left menu hover effect, except activitate) */}
-          <div className="flex items-stretch h-full shrink-0">
-            {/* 1. Șterge */}
-            {!isPublicShared && onDelete && (
-              <button 
+            return (
+              <button
+                key={sect.id}
                 type="button"
-                onClick={onDelete}
-                className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
-                title="Mută în Șterse"
+                onClick={() => scrollToSection(sect.id)}
+                className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                  isActive
+                    ? "bg-[#051D35] text-white font-medium shadow-xs"
+                    : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                }`}
               >
-                <Trash2 size={15} className="text-gray-500 group-hover:text-red-600 transition-colors" />
+                <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
+                <span>{sect.label}</span>
               </button>
-            )}
+            );
+          })}
+        </div>
 
-            {/* 2. Printează */}
+        {/* Right: Actions (matching Cereri action button style) */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* 1. Șterge */}
+          {!isPublicShared && onDelete && (
+            <button 
+              type="button"
+              onClick={onDelete}
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer shadow-2xs group"
+              title="Mută în Șterse"
+            >
+              <Trash2 size={14} className="text-gray-500 group-hover:text-red-600 transition-colors" />
+            </button>
+          )}
+
+          {/* 2. Printează */}
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+            title="Tipărește oferta"
+          >
+            <Printer size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+          </button>
+
+          {/* 3. Distribuie */}
+          <button
+            type="button"
+            onClick={handleNativeShare}
+            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+            title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+          >
+            <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+          </button>
+
+          {/* 4. Link extern */}
+          {lead?.url ? (
+            <a
+              href={lead.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+              title="Deschide anunțul sursă extern"
+            >
+              <ExternalLink size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+            </a>
+          ) : (
             <button
               type="button"
-              onClick={handlePrint}
-              className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
-              title="Tipărește oferta"
+              disabled
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed shrink-0"
+              title="Fără link sursă extern"
             >
-              <Printer size={15} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+              <ExternalLink size={14} className="text-gray-300" />
             </button>
+          )}
 
-            {/* 3. Distribuie */}
+          {/* 5. Activitate (PRIMARY) */}
+          {!isPublicShared && onAddActivity && (
             <button
               type="button"
-              onClick={handleNativeShare}
-              className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
-              title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+              onClick={onAddActivity}
+              className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
+              title="Adaugă activitate pentru această proprietate"
             >
-              <Share2 size={15} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+              <Plus size={13} className="text-[#BE9662]" />
+              <span>Activitate</span>
             </button>
-
-            {/* 4. Link extern */}
-            {lead?.url ? (
-              <a
-                href={lead.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="h-full aspect-square flex items-center justify-center bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 select-none group rounded-none"
-                title="Deschide anunțul sursă extern"
-              >
-                <ExternalLink size={15} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-              </a>
-            ) : (
-              <button
-                type="button"
-                disabled
-                className="h-full aspect-square flex items-center justify-center bg-white text-gray-300 cursor-not-allowed shrink-0 select-none rounded-none"
-                title="Fără link sursă extern"
-              >
-                <ExternalLink size={15} className="text-gray-300" />
-              </button>
-            )}
-
-            {/* 5. Activitate (PRIMARY - kept distinct per user request) */}
-            {!isPublicShared && onAddActivity && (
-              <button
-                type="button"
-                onClick={onAddActivity}
-                className="h-full px-3.5 sm:px-4 flex items-center gap-1.5 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer select-none shrink-0 group rounded-none"
-                title="Adaugă activitate pentru această proprietate"
-              >
-                <Plus size={13} className="text-[#BE9662]" />
-                <span>Activitate</span>
-              </button>
-            )}
-          </div>
+          )}
         </div>
       </div>
 
-      {/* Main Two-Column Layout (Seamless with inside padding & border divider) */}
-      <main className="w-full flex-1 bg-white p-0">
+      {/* Main Two-Column Layout (Scrollable container below the fixed headers) */}
+      <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth">
         <div className="grid grid-cols-1 lg:grid-cols-12 min-h-full items-start">
           
           {/* Left Column: All Content Cards (8 cols on lg) with clean right border */}
@@ -1506,13 +1547,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   />
                   <div className="divide-y divide-gray-100">
                     {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
-                    {renderRow("configuratie", "Compartimentare", compartimentare)}
+                    {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
                     {renderRow("configuratie", "Etaj", etaj)}
                     {renderRow("configuratie", "An construcție", anConstructie)}
                     {renderRow("configuratie", "Număr camere", String(camere))}
                     {renderRow("configuratie", "Număr băi", String(bai))}
                     {renderRow("configuratie", "Balcon", String(balcoane))}
-                    {renderRow("configuratie", "Stare", stareInterior, true)}
+                    {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
                   </div>
                 </div>
 
@@ -1670,6 +1711,36 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
+            {/* #CARD "TRANSPORT" */}
+            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
+              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                    <Bus size={16} />
+                  </div>
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                    TRANSPORT
+                  </h2>
+                </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "transport"}
+                  isDirty={isSectionDirty("transport")}
+                  onStartEdit={() => handleStartEditSection("transport")}
+                  onCancel={() => handleCancelEditSection("transport")}
+                  onSave={() => handleSaveSection("transport")}
+                  disabled={isPublicShared}
+                />
+              </div>
+
+              <div className="font-sans divide-y divide-gray-100">
+                {renderRow("transport", "Metrou", "Stație de metrou în proximitate")}
+                {renderRow("transport", "Tramvai", "Linii tramvai în zonă")}
+                {renderRow("transport", "Troleibuz", "Linii troleibuz în apropiere")}
+                {renderRow("transport", "Autobuz", "Multiple linii STB în apropiere", true)}
+              </div>
+            </div>
+
             {/* #CARD "PARCARE" */}
             <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
@@ -1722,9 +1793,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <div className="font-sans divide-y divide-gray-100">
                 {isRent ? (
                   <>
-                    {renderRow("acte", "Condiții contractuale", "Contract pe minimum 12 luni")}
-                    {renderRow("acte", "Avans", "1 lună")}
-                    {renderRow("acte", "Garanție", "1 lună", true)}
+                    {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
+                    {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
+                    {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
                   </>
                 ) : (
                   <>
@@ -1742,7 +1813,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           </div>
 
           {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share */}
-          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-[102px]">
+          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-0">
             
             {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
             {!isPublicShared && (
