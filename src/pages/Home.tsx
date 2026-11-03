@@ -2107,127 +2107,32 @@ export const Home: React.FC = () => {
                 </div>
               </div>
 
-              {/* Right Action Buttons */}
-              <div className="flex items-stretch h-full shrink-0">
-                {isEditingDetails && (
-                  <div className="flex items-stretch h-full border-l border-gray-200">
-                    <button
-                      type="button"
-                      onClick={() => setIsEditingDetails(false)}
-                      className="h-full px-3.5 flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600 hover:text-gray-900 text-xs font-medium border-r border-gray-200 transition-colors cursor-pointer"
-                    >
-                      <X size={14} className="text-gray-400" />
-                      <span>Cancel</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        await handleSaveDetails();
-                        toast.success("Modificările au fost salvate cu succes!");
-                        setIsEditingDetails(false);
-                      }}
-                      className="h-full px-4 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                      title="Salvează modificările și revino la prezentare"
-                    >
-                      <Check size={14} className="text-[#BE9662]" />
-                      <span>Salvează</span>
-                    </button>
-                  </div>
-                )}
-
-                {/* 1. Șterge (Square, container height, icon only, menu hover) */}
-                <button 
-                  type="button"
-                  onClick={async () => {
-                    if (selectedLead.status === 'Sterse') {
-                      setShowDeleteConfirm(true);
-                      document.getElementById('delete-section')?.scrollIntoView({ behavior: 'smooth' });
-                    } else {
-                      await updateStatus(selectedLead.id!, 'Sterse');
-                      toast.success('Proprietate mutată în Șterse');
-                    }
-                  }}
-                  className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer select-none group"
-                  title={selectedLead.status === 'Sterse' ? "Ștergere Definitivă" : "Mută în Șterse"}
-                >
-                  <Trash2 size={16} className="text-gray-500 group-hover:text-red-600 transition-colors" />
-                </button>
-
-                {/* 2. Printează (Square, container height, icon only, menu hover) */}
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
-                  title="Tipărește oferta"
-                >
-                  <Printer size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-                </button>
-
-                {/* 3. Distribuie (Square, container height, icon only, menu hover) */}
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const shareUrl = getPublicShareUrl(selectedLead.id!);
-                    const shareTitle = selectedLead.title || selectedLead.extractedData?.crmData?.descriere?.titlu || "Proprietate imobiliară";
-                    const shareText = `${shareTitle} - ${selectedLead.price || ""} | ${selectedLead.zone || ""}`;
-                    if (typeof navigator !== "undefined" && navigator.share) {
-                      try {
-                        await navigator.share({
-                          title: shareTitle,
-                          text: shareText,
-                          url: shareUrl
-                        });
-                        return;
-                      } catch (err: any) {
-                        if (err?.name === "AbortError") return;
-                      }
-                    }
-                    try {
-                      await navigator.clipboard.writeText(shareUrl);
-                      toast.success("Linkul public al proprietății a fost copiat!");
-                    } catch {
-                      toast.success("Link: " + shareUrl);
-                    }
-                  }}
-                  className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
-                  title="Distribuie proprietatea prin aplicația nativă sau copiază linkul"
-                >
-                  <Share2 size={16} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-                </button>
-
-                {/* 4. Link extern (Square, container height, icon only, menu hover) */}
-                {selectedLead.url ? (
-                  <a
-                    href={selectedLead.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 select-none group"
-                    title="Deschide anunțul sursă extern"
-                  >
-                    <ExternalLink size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-                  </a>
-                ) : (
+              {/* Right: Actions in Edit Mode */}
+              {isEditingDetails && (
+                <div className="flex items-stretch h-full shrink-0 border-l border-gray-200">
                   <button
                     type="button"
-                    disabled
-                    className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white text-gray-300 cursor-not-allowed shrink-0 select-none"
-                    title="Fără link sursă extern"
+                    onClick={() => setIsEditingDetails(false)}
+                    className="h-full px-3.5 flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600 hover:text-gray-900 text-xs font-medium border-r border-gray-200 transition-colors cursor-pointer"
                   >
-                    <ExternalLink size={16} className="text-gray-300" />
+                    <X size={14} className="text-gray-400" />
+                    <span>Cancel</span>
                   </button>
-                )}
-
-                {/* 5. Activitate (+Activitate with text, container height, menu hover) */}
-                <button
-                  type="button"
-                  onClick={() => setIsActivityModalOpen(true)}
-                  className="h-full px-4 flex items-center gap-2 border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-700 hover:text-gray-900 text-xs font-semibold transition-colors cursor-pointer select-none shrink-0 group font-sans"
-                  title="Adaugă activitate pentru această proprietate"
-                >
-                  <Plus size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-                  <span>Activitate</span>
-                </button>
-              </div>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await handleSaveDetails();
+                      toast.success("Modificările au fost salvate cu succes!");
+                      setIsEditingDetails(false);
+                    }}
+                    className="h-full px-4 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Salvează modificările și revino la prezentare"
+                  >
+                    <Check size={14} className="text-[#BE9662]" />
+                    <span>Salvează</span>
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Content view: Edit form or Presentation layout */}
@@ -2356,6 +2261,16 @@ export const Home: React.FC = () => {
                   setEditedCategoria(selectedLead.categoria || "");
                   setIsEditingDetails(true);
                 }}
+                onDelete={async () => {
+                  if (selectedLead.status === 'Sterse') {
+                    setShowDeleteConfirm(true);
+                    document.getElementById('delete-section')?.scrollIntoView({ behavior: 'smooth' });
+                  } else {
+                    await updateStatus(selectedLead.id!, 'Sterse');
+                    toast.success('Proprietate mutată în Șterse');
+                  }
+                }}
+                onAddActivity={() => setIsActivityModalOpen(true)}
               />
             )}
           </motion.div>

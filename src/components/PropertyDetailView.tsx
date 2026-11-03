@@ -41,7 +41,8 @@ import {
   Edit3,
   Plus,
   Upload,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Trash2
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
@@ -53,6 +54,8 @@ export interface PropertyDetailViewProps {
   contacts?: Contact[];
   onOpenEditForm?: () => void;
   showTopNavbar?: boolean;
+  onDelete?: () => void;
+  onAddActivity?: () => void;
 }
 
 interface NavSection {
@@ -275,7 +278,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   isPublicShared = false,
   contacts = [],
   onOpenEditForm,
-  showTopNavbar = false
+  showTopNavbar = false,
+  onDelete,
+  onAddActivity
 }) => {
   const [activeSection, setActiveSection] = useState<string>("introducere");
   const [isCopied, setIsCopied] = useState<boolean>(false);
@@ -1273,55 +1278,100 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       )}
 
       {/* Horizontal Sticky Menu with Jump Links (Left) and Actions (Right) */}
-      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-200 shadow-xs">
-        <div className="w-full px-4 sm:px-6">
-          <div className="h-11 flex items-center justify-between gap-3">
-            {/* Left: Jump Links */}
-            <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar py-1">
-              {NAV_SECTIONS.map((sect) => {
-                const Icon = sect.icon;
-                const isActive = activeSection === sect.id;
+      <div className="sticky top-0 z-30 bg-white border-b border-gray-200 shadow-xs select-none">
+        <div className="w-full h-10 flex items-stretch justify-between p-0">
+          {/* Left: Jump Links (full height, no roundness, architectural borders) */}
+          <div className="flex items-stretch overflow-x-auto no-scrollbar">
+            {NAV_SECTIONS.map((sect) => {
+              const Icon = sect.icon;
+              const isActive = activeSection === sect.id;
 
-                return (
-                  <button
-                    key={sect.id}
-                    type="button"
-                    onClick={() => scrollToSection(sect.id)}
-                    className={`shrink-0 h-8 px-3 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
-                      isActive
-                        ? "bg-[#051D35] text-white shadow-xs"
-                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
-                    }`}
-                  >
-                    <Icon size={13} className={isActive ? "text-[#BE9662]" : "text-gray-400"} />
-                    <span>{sect.label}</span>
-                  </button>
-                );
-              })}
-            </div>
+              return (
+                <button
+                  key={sect.id}
+                  type="button"
+                  onClick={() => scrollToSection(sect.id)}
+                  className={`h-full px-3.5 sm:px-4 rounded-none text-xs font-semibold uppercase tracking-wider transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 select-none border-r border-gray-200 ${
+                    isActive
+                      ? "bg-[#051D35] text-white border-r-[#051D35]"
+                      : "bg-white text-gray-600 hover:text-gray-900 hover:bg-gray-50"
+                  }`}
+                >
+                  <Icon size={13} className={isActive ? "text-[#BE9662]" : "text-gray-400"} />
+                  <span>{sect.label}</span>
+                </button>
+              );
+            })}
+          </div>
 
-            {/* Right: Actions */}
-            <div className="flex items-center gap-2 shrink-0">
+          {/* Right: Actions (sterge, printeaza, distribuie, link extern, activitate) */}
+          <div className="flex items-stretch h-full shrink-0">
+            {/* 1. Șterge */}
+            {!isPublicShared && onDelete && (
+              <button 
+                type="button"
+                onClick={onDelete}
+                className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer select-none group rounded-none"
+                title="Mută în Șterse"
+              >
+                <Trash2 size={13} className="text-gray-500 group-hover:text-red-600 transition-colors" />
+              </button>
+            )}
+
+            {/* 2. Printează */}
+            <button
+              type="button"
+              onClick={handlePrint}
+              className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group rounded-none"
+              title="Tipărește oferta"
+            >
+              <Printer size={13} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+            </button>
+
+            {/* 3. Distribuie */}
+            <button
+              type="button"
+              onClick={handleNativeShare}
+              className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group rounded-none"
+              title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+            >
+              <Share2 size={13} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+            </button>
+
+            {/* 4. Link extern */}
+            {lead?.url ? (
+              <a
+                href={lead.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 select-none group rounded-none"
+                title="Deschide anunțul sursă extern"
+              >
+                <ExternalLink size={13} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+              </a>
+            ) : (
               <button
                 type="button"
-                onClick={handlePrint}
-                className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer font-sans shadow-2xs"
-                title="Tipărește oferta"
+                disabled
+                className="h-full aspect-square flex items-center justify-center border-l border-gray-200 bg-white text-gray-300 cursor-not-allowed shrink-0 select-none rounded-none"
+                title="Fără link sursă extern"
               >
-                <Printer size={13} className="text-gray-400" />
-                <span className="hidden sm:inline">Printează</span>
+                <ExternalLink size={13} className="text-gray-300" />
               </button>
+            )}
 
+            {/* 5. Activitate (PRIMARY) */}
+            {!isPublicShared && onAddActivity && (
               <button
                 type="button"
-                onClick={handleNativeShare}
-                className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 hover:border-gray-300 text-gray-700 hover:text-[#051D35] transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer font-sans"
-                title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+                onClick={onAddActivity}
+                className="h-full px-3.5 sm:px-4 flex items-center gap-1.5 border-l border-[#051D35] bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold uppercase tracking-wider transition-colors cursor-pointer select-none shrink-0 group rounded-none"
+                title="Adaugă activitate pentru această proprietate"
               >
-                <Share2 size={13} className="text-[#BE9662]" />
-                <span className="hidden sm:inline">Distribuie</span>
+                <Plus size={13} className="text-[#BE9662]" />
+                <span>Activitate</span>
               </button>
-            </div>
+            )}
           </div>
         </div>
       </div>
