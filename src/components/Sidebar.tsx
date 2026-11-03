@@ -326,7 +326,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {!isCollapsed ? (
           <div className="h-[48px] px-5 flex items-center justify-between gap-2 font-sans">
             <span className="text-[12px] font-sans font-semibold text-gray-800 tracking-tight shrink-0">
-              {versionInfo.versionCode} / 145
+              {versionInfo.versionCode} / {versionInfo.aiInputsCount}
             </span>
             <span className="text-[11px] text-gray-500 font-sans truncate">
               {versionInfo.dateFormatted}
@@ -335,13 +335,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         ) : (
           <div 
             className="h-[48px] px-1 flex flex-col items-center justify-center cursor-default font-sans text-center"
-            title={`${versionInfo.versionCode} / 145 ${versionInfo.dateFormatted}`}
+            title={`${versionInfo.versionCode} / ${versionInfo.aiInputsCount} ${versionInfo.dateFormatted}`}
           >
             <span className="text-[10px] font-sans font-bold text-gray-700 leading-tight">
               v{versionInfo.major}.{versionInfo.minor}
             </span>
             <span className="text-[9px] font-sans text-gray-400 leading-tight mt-0.5">
-              /145
+              /{versionInfo.aiInputsCount}
             </span>
           </div>
         )}

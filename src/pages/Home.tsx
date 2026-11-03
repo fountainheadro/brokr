@@ -25,7 +25,7 @@ import { NotificationsModal } from "../components/NotificationsModal";
 import { CalendarDrawer } from "../components/CalendarDrawer";
 import { ExtractionRulesModal } from "../components/ExtractionRulesModal";
 import { notificationsService, Notification as AppNotification } from "../services/notificationsService";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, Transition } from "motion/react";
 import { extractData, extractBasicData } from "../services/geminiService";
 import { toast } from "react-hot-toast";
 import { 
@@ -64,10 +64,12 @@ import {
   Filter,
   Share2,
   ExternalLink,
+  Printer,
   Inbox,
   Building2,
   ClipboardList,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Edit3
 } from "lucide-react";
 import { getPublicShareUrl } from "../utils/shareUtils";
 import { auth } from "../lib/firebase";
@@ -126,6 +128,26 @@ const STATUS_LABELS: Record<string, string> = {
   "Finalizata": "Finalizate",
   "Arhiva": "Arhivă",
   "Sterse": "Șterse"
+};
+
+const pageSlideVariants = {
+  enter: (direction: number) => ({
+    x: direction >= 0 ? "100%" : "-100%",
+    opacity: 1,
+  }),
+  center: {
+    x: "0%",
+    opacity: 1,
+  },
+  exit: (direction: number) => ({
+    x: direction >= 0 ? "-100%" : "100%",
+    opacity: 1,
+  }),
+};
+
+const pageSlideTransition: Transition = {
+  x: { type: "tween", duration: 0.22, ease: [0.25, 1, 0.5, 1] },
+  opacity: { duration: 0.15 },
 };
 
 type SortOption = 'newest' | 'oldest' | 'expensive' | 'cheap';
@@ -324,9 +346,14 @@ export const Home: React.FC = () => {
   const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>('Toate');
   const [leadRoleFilter, setLeadRoleFilter] = useState<LeadRoleFilter>('Toate');
   const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Imobile');
+  const [navDirection, setNavDirection] = useState<number>(1);
   const location = useLocation();
 
   const handleSelectSidebarItem = (subItem: NavSubItem) => {
+    if (selectedLead) {
+      setNavDirection(-1);
+      setSelectedLead(null);
+    }
     const normalized = subItem === 'Proprietăți' ? 'Imobile' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
@@ -1055,6 +1082,7 @@ export const Home: React.FC = () => {
       return;
     }
 
+    setNavDirection(1);
     setSelectedLead(lead);
     setShowDeleteConfirm(false);
     setEditedName(lead.ownerName || "");
@@ -1428,6 +1456,7 @@ export const Home: React.FC = () => {
   };
 
   const handleCloseDetails = async () => {
+    setNavDirection(-1);
     await handleSaveDetails();
     setShowDeleteConfirm(false);
     setSelectedLead(null);
@@ -1460,6 +1489,7 @@ export const Home: React.FC = () => {
   const handleDeleteLead = async () => {
     if (!selectedLead?.id) return;
     try {
+      setNavDirection(-1);
       await leadsService.deleteLead(selectedLead.id);
       setSelectedLead(null);
       setShowDeleteConfirm(false);
@@ -1644,15 +1674,17 @@ export const Home: React.FC = () => {
         />
 
         <div className="flex-1 min-h-0 relative overflow-hidden">
-          <AnimatePresence mode="popLayout" initial={false}>
+          <AnimatePresence mode="popLayout" initial={false} custom={navDirection}>
           {!selectedLead ? (
             <motion.div
               key="list-view"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.2 }}
-              className="absolute inset-0 flex flex-col bg-gray-50 overflow-hidden"
+              custom={navDirection}
+              variants={pageSlideVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={pageSlideTransition}
+              className="w-full h-full flex flex-col bg-gray-50 overflow-hidden"
             >
 
             {activeSidebarItem === 'Clienți' || activeSidebarItem === 'Contacte' ? (
@@ -1662,6 +1694,7 @@ export const Home: React.FC = () => {
                 onSelectProperty={(propId) => {
                   const lead = leads.find(l => l.propertyId === propId || l.id === propId);
                   if (lead) {
+                    setNavDirection(1);
                     handleLeadClick(lead);
                   }
                 }}
@@ -1946,20 +1979,21 @@ export const Home: React.FC = () => {
             transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
             className="fixed inset-0 bg-gray-50 z-[300] overflow-y-auto flex flex-col"
           >
-            <div className="sticky top-0 bg-white border-b border-gray-100 p-5 min-h-[68px] flex items-center gap-3 z-10 shadow-sm">
+            <div className="sticky top-0 bg-white border-b border-gray-200 h-[50px] min-h-[50px] max-h-[50px] flex items-center p-0 z-10 shadow-xs select-none">
               <button 
                 onClick={() => setSelectedContact(null)}
-                className="w-10 h-10 flex items-center justify-center bg-white rounded-full cursor-pointer hover:bg-gray-50 transition-colors shrink-0 border border-gray-100 shadow-sm"
+                className="h-full aspect-square w-[50px] flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                title="Înapoi la listă"
               >
-                <ChevronLeft size={20} strokeWidth={2.5} className="text-gray-400 hover:text-gray-900" />
+                <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
               </button>
 
-              <div className="flex-1 min-w-0">
-                <h2 className="text-[16px] font-bold text-[--color-text-main] truncate tracking-tight">{selectedContact.firstName} {selectedContact.lastName}</h2>
+              <div className="flex-1 min-w-0 px-4">
+                <h2 className="text-[14px] font-bold text-gray-900 truncate tracking-tight">{selectedContact.firstName} {selectedContact.lastName}</h2>
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-[--color-accent] uppercase tracking-[0.15em]">{selectedContact.type}</span>
-                  <div className="w-1 h-1 bg-gray-200 rounded-full" />
-                  <span className="text-[11px] text-[--color-text-secondary] font-bold uppercase tracking-wider">{selectedContact.phone}</span>
+                  <span className="text-[10px] font-bold text-[#BE9662] uppercase tracking-[0.15em]">{selectedContact.type}</span>
+                  <div className="w-1 h-1 bg-gray-300 rounded-full" />
+                  <span className="text-[11px] text-gray-500 font-bold uppercase tracking-wider">{selectedContact.phone}</span>
                 </div>
               </div>
             </div>
@@ -2012,24 +2046,35 @@ export const Home: React.FC = () => {
         ) : (
           <motion.div
             key="detail-view"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ duration: 0.3, ease: [0.4, 0, 0.2, 1] }}
-            className="absolute inset-0 bg-gray-50 overflow-y-auto flex flex-col z-10 scroll-smooth"
+            custom={navDirection}
+            variants={pageSlideVariants}
+            initial="enter"
+            animate="center"
+            exit="exit"
+            transition={pageSlideTransition}
+            className="w-full h-full bg-gray-50 overflow-y-auto flex flex-col scroll-smooth"
             onScroll={handleDetailsScroll}
           >
             {/* Sticky Header Bar */}
-            <div className="sticky top-0 bg-white border-b border-gray-200 h-[50px] min-h-[50px] max-h-[50px] shrink-0 box-border flex items-center justify-between px-4 gap-2.5 z-20">
-              <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                <button 
-                  onClick={handleCloseDetails}
-                  className="w-8 h-8 flex items-center justify-center bg-white rounded-lg cursor-pointer hover:bg-gray-50 transition-colors shrink-0 border border-gray-200 shadow-xs"
-                  title="Înapoi la listă"
-                >
-                  <ChevronLeft size={16} className="text-gray-700 hover:text-gray-900" />
-                </button>
+            <div className="sticky top-0 bg-white border-b border-gray-200 h-[50px] min-h-[50px] max-h-[50px] shrink-0 box-border flex items-center justify-between p-0 z-20 select-none">
+              {/* Back Button (Square, height = container height, bg = container bg, menu hover effect) */}
+              <button 
+                onClick={() => {
+                  if (isEditingDetails) {
+                    setIsEditingDetails(false);
+                  } else {
+                    setNavDirection(-1);
+                    handleCloseDetails();
+                  }
+                }}
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                title={isEditingDetails ? "Înapoi la prezentare" : "Înapoi la listă"}
+              >
+                <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+              </button>
 
+              {/* Title & Info Center */}
+              <div className="flex items-center gap-2.5 min-w-0 flex-1 px-3.5">
                 <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 text-[#051D35] flex items-center justify-center shrink-0">
                   <Building2 size={16} />
                 </div>
@@ -2037,7 +2082,7 @@ export const Home: React.FC = () => {
                 <div className="flex-1 min-w-0 pr-2">
                   <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="text-[13px] font-semibold text-gray-900 truncate tracking-tight leading-tight">
-                      {selectedLead.title}
+                      {isEditingDetails ? `Modificare: ${selectedLead.title}` : selectedLead.title}
                     </h2>
                     {selectedLead.propertyId && (
                       <span className="text-[10px] font-mono font-semibold px-1.5 py-0.2 rounded bg-[#051D35]/5 text-[#051D35] border border-[#051D35]/15 shrink-0">
@@ -2047,6 +2092,11 @@ export const Home: React.FC = () => {
                     <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0">
                       {STATUS_LABELS[selectedLead.status] || selectedLead.status}
                     </span>
+                    {isEditingDetails && (
+                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-[#BE9662] border border-[#BE9662]/30 shrink-0">
+                        Mod editare
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-1.5 text-xs mt-0.5">
@@ -2057,10 +2107,65 @@ export const Home: React.FC = () => {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                {/* Share Link Button */}
-                {/* Share Link Button - Native device share */}
+              {/* Right Action Buttons */}
+              <div className="flex items-stretch h-full shrink-0">
+                {isEditingDetails && (
+                  <div className="flex items-stretch h-full border-l border-gray-200">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingDetails(false)}
+                      className="h-full px-3.5 flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600 hover:text-gray-900 text-xs font-medium border-r border-gray-200 transition-colors cursor-pointer"
+                    >
+                      <X size={14} className="text-gray-400" />
+                      <span>Cancel</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleSaveDetails();
+                        toast.success("Modificările au fost salvate cu succes!");
+                        setIsEditingDetails(false);
+                      }}
+                      className="h-full px-4 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="Salvează modificările și revino la prezentare"
+                    >
+                      <Check size={14} className="text-[#BE9662]" />
+                      <span>Salvează</span>
+                    </button>
+                  </div>
+                )}
+
+                {/* 1. Șterge (Square, container height, icon only, menu hover) */}
+                <button 
+                  type="button"
+                  onClick={async () => {
+                    if (selectedLead.status === 'Sterse') {
+                      setShowDeleteConfirm(true);
+                      document.getElementById('delete-section')?.scrollIntoView({ behavior: 'smooth' });
+                    } else {
+                      await updateStatus(selectedLead.id!, 'Sterse');
+                      toast.success('Proprietate mutată în Șterse');
+                    }
+                  }}
+                  className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer select-none group"
+                  title={selectedLead.status === 'Sterse' ? "Ștergere Definitivă" : "Mută în Șterse"}
+                >
+                  <Trash2 size={16} className="text-gray-500 group-hover:text-red-600 transition-colors" />
+                </button>
+
+                {/* 2. Printează (Square, container height, icon only, menu hover) */}
                 <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                  title="Tipărește oferta"
+                >
+                  <Printer size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+                </button>
+
+                {/* 3. Distribuie (Square, container height, icon only, menu hover) */}
+                <button
+                  type="button"
                   onClick={async () => {
                     const shareUrl = getPublicShareUrl(selectedLead.id!);
                     const shareTitle = selectedLead.title || selectedLead.extractedData?.crmData?.descriere?.titlu || "Proprietate imobiliară";
@@ -2084,75 +2189,175 @@ export const Home: React.FC = () => {
                       toast.success("Link: " + shareUrl);
                     }
                   }}
-                  className="h-8 px-2.5 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
                   title="Distribuie proprietatea prin aplicația nativă sau copiază linkul"
                 >
-                  <Share2 size={13} className="text-[#BE9662]" />
-                  <span className="hidden sm:inline">Distribuie</span>
+                  <Share2 size={16} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
                 </button>
 
-                {/* External Source Link */}
-                {selectedLead.url && (
+                {/* 4. Link extern (Square, container height, icon only, menu hover) */}
+                {selectedLead.url ? (
                   <a
                     href={selectedLead.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-8 h-8 flex items-center justify-center rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 hover:text-gray-900 transition-colors"
-                    title="Deschide anunțul sursă"
+                    className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 select-none group"
+                    title="Deschide anunțul sursă extern"
                   >
-                    <ExternalLink size={14} />
+                    <ExternalLink size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
                   </a>
-                )}
-
-                {/* On-demand AI Extraction Button */}
-                {selectedLead.url && (
+                ) : (
                   <button
-                    onClick={() => triggerExtraction(selectedLead)}
-                    disabled={isExtracting}
-                    className="h-8 px-2.5 rounded-md border border-[#051D35]/20 bg-white hover:bg-amber-50/50 text-[#051D35] text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
-                    title={selectedLead.extractedData ? "Re-extrage Date AI" : "Extrage Date AI"}
+                    type="button"
+                    disabled
+                    className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white text-gray-300 cursor-not-allowed shrink-0 select-none"
+                    title="Fără link sursă extern"
                   >
-                    <Zap size={13} className="text-[#BE9662]" fill="currentColor" />
-                    <span className="hidden sm:inline">
-                      {isExtracting ? "Se extrage..." : (selectedLead.extractedData ? "Re-extrage AI" : "Extrage AI")}
-                    </span>
+                    <ExternalLink size={16} className="text-gray-300" />
                   </button>
                 )}
 
-                {/* Add Activity Button */}
+                {/* 5. Activitate (+Activitate with text, container height, menu hover) */}
                 <button
+                  type="button"
                   onClick={() => setIsActivityModalOpen(true)}
-                  className="h-8 px-3 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                  className="h-full px-4 flex items-center gap-2 border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-700 hover:text-gray-900 text-xs font-semibold transition-colors cursor-pointer select-none shrink-0 group font-sans"
+                  title="Adaugă activitate pentru această proprietate"
                 >
-                  <Plus size={13} className="text-[#BE9662]" />
-                  <span className="hidden sm:inline">Activitate</span>
-                </button>
-
-                {/* Trash/Delete Button */}
-                <button 
-                  onClick={async () => {
-                    if (selectedLead.status === 'Sterse') {
-                      setShowDeleteConfirm(true);
-                      document.getElementById('delete-section')?.scrollIntoView({ behavior: 'smooth' });
-                    } else {
-                      await updateStatus(selectedLead.id!, 'Sterse');
-                      toast.success('Proprietate mutată în Șterse');
-                    }
-                  }}
-                  className="w-8 h-8 flex items-center justify-center bg-white border border-gray-200 rounded-lg text-gray-400 hover:text-red-600 hover:bg-gray-50 transition-colors shrink-0 cursor-pointer"
-                  title={selectedLead.status === 'Sterse' ? "Ștergere Definitivă" : "Mută în Șterse"}
-                >
-                  <Trash2 size={14} />
+                  <Plus size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+                  <span>Activitate</span>
                 </button>
               </div>
             </div>
 
-            {/* Presentation layout for property details */}
-            <PropertyDetailView 
-              lead={selectedLead}
-              isPublicShared={false}
-              contacts={contacts.filter(c => c.propertyId === selectedLead.propertyId || c.propertyId === selectedLead.id)}
-            />
+            {/* Content view: Edit form or Presentation layout */}
+            {isEditingDetails ? (
+              <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col font-sans">
+                {/* Sticky Jump-links bar in Edit Mode */}
+                <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-gray-200 px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                    {[
+                      { id: "basicale", label: "Informații de Bază" },
+                      { id: "detaliigenerale", label: "Detalii Generale" },
+                      { id: "caracteristici", label: "Caracteristici" },
+                      { id: "utilitati", label: "Utilități" },
+                      { id: "pret", label: "Preț" },
+                      { id: "descriere", label: "Descriere" },
+                      { id: "imagini", label: "Imagini" }
+                    ].map(sect => (
+                      <button
+                        key={sect.id}
+                        type="button"
+                        onClick={() => {
+                          const el = document.getElementById(sect.id);
+                          el?.scrollIntoView({ behavior: "smooth", block: "start" });
+                        }}
+                        className="px-2.5 py-1 rounded-md text-[11px] font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors shrink-0 uppercase tracking-wider"
+                      >
+                        {sect.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingDetails(false)}
+                      className="h-8 px-3 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer"
+                    >
+                      Anulează
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleSaveDetails();
+                        toast.success("Modificările au fost salvate cu succes!");
+                        setIsEditingDetails(false);
+                      }}
+                      className="h-8 px-3.5 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                    >
+                      <Check size={13} className="text-[#BE9662]" />
+                      <span>Salvează</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Edit Form Content with text fields and many checkboxes */}
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 w-full space-y-5">
+                  <SectionCard id="basicale" title="Informații de Bază">
+                    <BasicInfoSection 
+                      editedTitle={editedTitle}
+                      setEditedTitle={setEditedTitle}
+                      editedName={editedName}
+                      setEditedName={setEditedName}
+                      editedPhone={editedPhone}
+                      setEditedPhone={setEditedPhone}
+                      editedZone={editedZone}
+                      setEditedZone={setEditedZone}
+                      editedPrice={editedPrice}
+                      setEditedPrice={setEditedPrice}
+                      editedTransactionType={editedTransactionType}
+                      setEditedTransactionType={setEditedTransactionType}
+                      editedCategoria={editedCategoria}
+                      setEditedCategoria={setEditedCategoria}
+                      url={selectedLead.url}
+                      coverImage={selectedLead.coverImage}
+                      handleSaveDetails={handleSaveDetails}
+                      extractedData={selectedLead.extractedData}
+                    />
+                  </SectionCard>
+
+                  <ExtractionViewer 
+                    data={selectedLead?.extractedData}
+                    leadId={selectedLead.id!}
+                    propertyId={selectedLead.propertyId}
+                    onUpdate={handleUpdate}
+                    basicInfoProps={{}}
+                    status={selectedLead.status}
+                  />
+
+                  {/* Bottom Save Bar */}
+                  <div className="pt-4 pb-12 flex items-center justify-end gap-3 border-t border-gray-200">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditingDetails(false)}
+                      className="h-9 px-4 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer"
+                    >
+                      Înapoi la Prezentare
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        await handleSaveDetails();
+                        toast.success("Modificările au fost salvate cu succes!");
+                        setIsEditingDetails(false);
+                      }}
+                      className="h-9 px-5 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                    >
+                      <Check size={14} className="text-[#BE9662]" />
+                      <span>Salvează Modificările</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <PropertyDetailView 
+                lead={selectedLead}
+                isPublicShared={false}
+                contacts={contacts.filter(c => c.propertyId === selectedLead.propertyId || c.propertyId === selectedLead.id)}
+                onOpenEditForm={() => {
+                  setEditedName(selectedLead.ownerName || "");
+                  setEditedPhone(selectedLead.ownerPhone || "");
+                  setEditedPropertyId(selectedLead.propertyId || "");
+                  setEditedTitle(selectedLead.title || "");
+                  setEditedZone(selectedLead.zone || "");
+                  setEditedPrice(selectedLead.price || "");
+                  setEditedTransactionType(selectedLead.transactionType || "Vânzare");
+                  setEditedCategoria(selectedLead.categoria || "");
+                  setIsEditingDetails(true);
+                }}
+              />
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -2193,6 +2398,7 @@ export const Home: React.FC = () => {
             } else {
               handleSelectSidebarItem('Imobile');
             }
+            setNavDirection(1);
             setSelectedLead(targetLead);
             return;
           }

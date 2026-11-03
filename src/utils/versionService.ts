@@ -15,18 +15,21 @@ export interface VersionData {
   major: number; // Grupul 1
   minor: number; // Grupul 2 (0 - 99)
   patch: number; // Grupul 3 (1 - 1000)
+  aiInputsCount: number; // AI inputs count submitted in AI Studio (e.g. 146)
   lastUpdated: string; // ISO string
 }
 
 export type UpdateComplexity = 'small' | 'medium' | 'large' | number;
 
-const STORAGE_KEY = "brokr_app_version_state_v9";
+const STORAGE_KEY = "brokr_app_version_state_v14";
+export const BASE_AI_INPUTS_COUNT = 150;
 
-// Initial version state updated (+10 pts to group 3)
+// Initial version state updated (+1 prompt to AI Studio inputs count)
 const DEFAULT_VERSION: VersionData = {
   major: 0,
-  minor: 12,
-  patch: 126, // formats to "126"
+  minor: 15,
+  patch: 150,
+  aiInputsCount: BASE_AI_INPUTS_COUNT,
   lastUpdated: new Date().toISOString()
 };
 
@@ -36,7 +39,8 @@ const DEFAULT_VERSION: VersionData = {
  * - If minor reaches 100, minor resets to 0 and major increments.
  */
 function normalizeVersion(data: VersionData): VersionData {
-  let { major, minor, patch, lastUpdated } = data;
+  let { major, minor, patch, aiInputsCount, lastUpdated } = data;
+  aiInputsCount = Math.max(BASE_AI_INPUTS_COUNT, Number(aiInputsCount) || BASE_AI_INPUTS_COUNT);
 
   if (patch > 1000) {
     const overflow = Math.floor((patch - 1) / 1000);
@@ -49,30 +53,31 @@ function normalizeVersion(data: VersionData): VersionData {
     minor = minor % 100;
   }
 
-  return { major, minor, patch, lastUpdated };
+  return { major, minor, patch, aiInputsCount, lastUpdated };
 }
 
 export function getCurrentVersion(): {
   major: number;
   minor: number;
   patch: number;
-  versionCode: string; // "0.0.001"
-  dateFormatted: string; // "01.11.2026, 11:15"
-  fullDisplay: string; // "0.0.001 (01.11.2026, 11:15)"
+  aiInputsCount: number;
+  versionCode: string; // "0.14.146"
+  dateFormatted: string; // "02.11.2026, 15:30"
+  fullDisplay: string; // "0.14.146 / 146 02.11.2026, 15:30"
 } {
   let stored: VersionData = DEFAULT_VERSION;
 
   try {
     // Clear legacy keys if any
-    if (localStorage.getItem("brokr_app_version_state")) {
-      localStorage.removeItem("brokr_app_version_state");
-    }
-    if (localStorage.getItem("brokr_app_version_state_v2")) {
-      localStorage.removeItem("brokr_app_version_state_v2");
-    }
-    if (localStorage.getItem("brokr_app_version_state_v3")) {
-      localStorage.removeItem("brokr_app_version_state_v3");
-    }
+    const legacyKeys = [
+      "brokr_app_version_state",
+      "brokr_app_version_state_v2",
+      "brokr_app_version_state_v3",
+      "brokr_app_version_state_v9"
+    ];
+    legacyKeys.forEach(k => {
+      if (localStorage.getItem(k)) localStorage.removeItem(k);
+    });
 
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
@@ -93,15 +98,17 @@ export function getCurrentVersion(): {
   const minutes = String(d.getMinutes()).padStart(2, "0");
   const dateFormatted = `${day}.${month}.${year}, ${hours}:${minutes}`;
 
-  // Third group is zero-padded to 3 digits (e.g. 001)
+  // Third group is zero-padded to 3 digits (e.g. 001, 146)
   const patchFormatted = String(stored.patch).padStart(3, "0");
   const versionCode = `${stored.major}.${stored.minor}.${patchFormatted}`;
-  const fullDisplay = `${versionCode} / 145 ${dateFormatted}`;
+  const aiInputsCount = Math.max(BASE_AI_INPUTS_COUNT, stored.aiInputsCount || BASE_AI_INPUTS_COUNT);
+  const fullDisplay = `${versionCode} / ${aiInputsCount} ${dateFormatted}`;
 
   return {
     major: stored.major,
     minor: stored.minor,
     patch: stored.patch,
+    aiInputsCount,
     versionCode,
     dateFormatted,
     fullDisplay
@@ -116,6 +123,7 @@ export function resetVersionToInitial(): ReturnType<typeof getCurrentVersion> {
     major: 0,
     minor: 0,
     patch: 1,
+    aiInputsCount: BASE_AI_INPUTS_COUNT,
     lastUpdated: new Date().toISOString()
   };
   try {
@@ -146,12 +154,13 @@ export function recordUpdate(complexity: UpdateComplexity = 1): ReturnType<typeo
   let stored = DEFAULT_VERSION;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) stored = JSON.parse(raw);
+    if (raw) stored = normalizeVersion(JSON.parse(raw));
   } catch {}
 
   let patch = stored.patch + step;
   let minor = stored.minor;
   let major = stored.major;
+  const aiInputsCount = Math.max(BASE_AI_INPUTS_COUNT, (stored.aiInputsCount || BASE_AI_INPUTS_COUNT)) + 1;
 
   // Check 1% thresholds (every 10 points in patch = 1% of 1000, so minor increments by 1)
   const prevPercent = Math.floor(stored.patch / 10);
@@ -174,6 +183,7 @@ export function recordUpdate(complexity: UpdateComplexity = 1): ReturnType<typeo
     major,
     minor,
     patch,
+    aiInputsCount,
     lastUpdated: new Date().toISOString()
   };
 

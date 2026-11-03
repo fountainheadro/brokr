@@ -37,7 +37,11 @@ import {
   User,
   Lock,
   Copy,
-  Bookmark
+  Bookmark,
+  Edit3,
+  Plus,
+  Upload,
+  Image as ImageIcon
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
@@ -58,14 +62,14 @@ interface NavSection {
 }
 
 const NAV_SECTIONS: NavSection[] = [
+  { id: "tranzactie", label: "Preț & Comision", icon: BadgePercent },
   { id: "introducere", label: "Introducere", icon: FileText },
   { id: "apartament", label: "Apartament", icon: Home },
   { id: "bloc", label: "Bloc", icon: Building2 },
   { id: "imprejurimi", label: "Împrejurimi", icon: Compass },
   { id: "transport", label: "Transport", icon: Bus },
   { id: "parcare", label: "Parcare", icon: Car },
-  { id: "acte", label: "Acte & Tranzacție", icon: ShieldCheck },
-  { id: "tranzactie", label: "Preț & Comision", icon: BadgePercent }
+  { id: "acte", label: "Acte & Tranzacție", icon: ShieldCheck }
 ];
 
 interface AttributeRowProps {
@@ -73,10 +77,23 @@ interface AttributeRowProps {
   value: React.ReactNode;
   copyValue?: string;
   isLast?: boolean;
+  isEditing?: boolean;
+  editValue?: string;
+  onEditChange?: (val: string) => void;
+  multiline?: boolean;
 }
 
-const AttributeRow: React.FC<AttributeRowProps> = ({ label, value, copyValue }) => {
+const AttributeRow: React.FC<AttributeRowProps> = ({ 
+  label, 
+  value, 
+  copyValue,
+  isEditing = false,
+  editValue,
+  onEditChange
+}) => {
   const [copied, setCopied] = useState(false);
+  const [isFocused, setIsFocused] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const textToCopy = copyValue || (typeof value === "string" ? value : "");
 
   const handleCopy = (e: React.MouseEvent) => {
@@ -89,45 +106,169 @@ const AttributeRow: React.FC<AttributeRowProps> = ({ label, value, copyValue }) 
   };
 
   return (
-    <div className="group/row relative flex items-start sm:items-center justify-between py-2.5 px-3.5 hover:bg-gray-50/80 transition-colors font-sans">
-      <div className="flex flex-col sm:flex-row sm:items-baseline w-full gap-1 sm:gap-4 pr-8">
-        <span className="text-[12px] font-medium text-gray-900 w-full sm:w-[24%] sm:min-w-[140px] shrink-0 font-sans select-text">
+    <div 
+      className={`group/row relative flex items-stretch border-b border-gray-100 last:border-b-0 transition-colors font-sans min-h-[36px] ${
+        isFocused 
+          ? "border-l-3 border-l-[#BE9662]" 
+          : "border-l-3 border-l-transparent"
+      }`}
+    >
+      {/* Left Cell: Label */}
+      <div className="w-[30%] sm:w-[22%] sm:min-w-[130px] px-3.5 py-2 flex items-center shrink-0 border-r border-gray-100 select-text bg-gray-50/30">
+        <span className={`text-[12px] font-sans transition-colors flex items-center gap-1.5 ${
+          isFocused ? "font-bold text-[#051D35]" : "font-medium text-gray-900"
+        }`}>
           {label}:
-        </span>
-        <span className="text-[12px] text-gray-600 leading-relaxed flex-1 font-sans select-text break-words">
-          {value}
+          {isFocused && (
+            <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662] shrink-0 animate-pulse" title="Mod focus activ" />
+          )}
         </span>
       </div>
 
-      {textToCopy && (
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="opacity-0 group-hover/row:opacity-100 flex items-center justify-center w-6 h-6 rounded-md bg-white border border-gray-200 text-gray-400 hover:text-[#051D35] hover:border-gray-300 shadow-2xs transition-all active:scale-90 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer z-10"
-          title={`Copiază ${label}`}
-        >
-          {copied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
-        </button>
-      )}
+      {/* Right Cell: Value (100% of cell surface is the seamless editable input) */}
+      <div 
+        onClick={() => {
+          if (isEditing && inputRef.current) {
+            inputRef.current.focus();
+          }
+        }}
+        className={`flex-1 relative flex items-stretch min-w-0 transition-colors ${
+          isFocused 
+            ? "bg-amber-50/40" 
+            : isEditing 
+              ? "hover:bg-amber-50/15 cursor-text" 
+              : "hover:bg-gray-50/60"
+        }`}
+      >
+        {isEditing ? (
+          <input
+            ref={inputRef}
+            type="text"
+            value={editValue ?? (typeof value === "string" ? value : "")}
+            onChange={(e) => onEditChange?.(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLElement).blur();
+            }}
+            className={`w-full h-full min-h-[36px] px-3.5 py-2 text-[12px] font-sans leading-normal bg-transparent border-none outline-none rounded-none focus:outline-none focus:ring-0 p-0 m-0 shadow-none cursor-text select-text transition-colors ${
+              isFocused ? "text-[#051D35] font-semibold" : "text-gray-800 font-normal"
+            }`}
+          />
+        ) : (
+          <div className="w-full h-full min-h-[36px] px-3.5 py-2 text-[12px] font-sans text-gray-600 leading-normal flex items-center break-words select-text pr-10">
+            {value}
+          </div>
+        )}
+
+        {!isEditing && textToCopy && (
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="opacity-0 group-hover/row:opacity-100 flex items-center justify-center w-6 h-6 rounded-md bg-white border border-gray-200 text-gray-400 hover:text-[#051D35] hover:border-gray-300 shadow-2xs transition-all active:scale-90 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer z-10"
+            title={`Copiază ${label}`}
+          >
+            {copied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+          </button>
+        )}
+      </div>
     </div>
   );
 };
 
-const SubCategoryHeader: React.FC<{ title: string; count?: string }> = ({ title, count }) => (
-  <div className="h-8 flex items-center justify-between px-3.5 bg-gray-50/70 border-b border-gray-100 select-none">
+interface SubCategoryHeaderProps {
+  title: string;
+  count?: string;
+  actions?: React.ReactNode;
+}
+
+const SubCategoryHeader: React.FC<SubCategoryHeaderProps> = ({ title, count, actions }) => (
+  <div className="min-h-9 py-1 px-3.5 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between gap-2 select-none font-sans">
     <div className="flex items-center gap-2">
       <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
       <span className="text-[11px] font-bold uppercase tracking-wider text-[#051D35] font-sans">
         {title}
       </span>
+      {count && (
+        <span className="text-[10px] font-mono text-gray-400 font-medium ml-1">
+          {count}
+        </span>
+      )}
     </div>
-    {count && (
-      <span className="text-[10px] font-mono text-gray-400 font-medium">
-        {count}
-      </span>
-    )}
+    {actions && <div className="flex items-center gap-1.5">{actions}</div>}
   </div>
 );
+
+interface SectionEditButtonProps {
+  isEditing: boolean;
+  isDirty: boolean;
+  onStartEdit: () => void;
+  onCancel: () => void;
+  onSave: () => void;
+  disabled?: boolean;
+}
+
+const SectionEditButton: React.FC<SectionEditButtonProps> = ({
+  isEditing,
+  isDirty,
+  onStartEdit,
+  onCancel,
+  onSave,
+  disabled = false
+}) => {
+  if (disabled) return null;
+
+  if (!isEditing) {
+    return (
+      <button
+        type="button"
+        onClick={onStartEdit}
+        className="h-6 px-2.5 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-700 hover:text-[#051D35] border border-gray-200 transition-all flex items-center gap-1 shadow-2xs cursor-pointer font-sans"
+        title="Modifică datele acestei secțiuni"
+      >
+        <Edit3 size={11} className="text-[#BE9662]" />
+        <span>Modifică</span>
+      </button>
+    );
+  }
+
+  if (!isDirty) {
+    return (
+      <button
+        type="button"
+        onClick={onCancel}
+        className="h-6 px-2.5 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-500 hover:text-gray-800 border border-gray-300 transition-all flex items-center gap-1 shadow-2xs cursor-pointer font-sans"
+        title="Renunță la editare"
+      >
+        <X size={11} className="text-gray-400" />
+        <span>Cancel</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <button
+        type="button"
+        onClick={onCancel}
+        className="h-6 px-2 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-500 hover:text-gray-800 border border-gray-200 transition-all flex items-center gap-1 cursor-pointer font-sans"
+        title="Renunță la modificări"
+      >
+        <X size={11} />
+        <span>Cancel</span>
+      </button>
+      <button
+        type="button"
+        onClick={onSave}
+        className="h-6 px-2.5 rounded-md text-[11px] font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white border border-[#051D35] transition-all flex items-center gap-1 shadow-xs cursor-pointer font-sans"
+        title="Salvează modificările secțiunii"
+      >
+        <Check size={11} className="text-[#BE9662]" />
+        <span>Salvează</span>
+      </button>
+    </div>
+  );
+};
 
 export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   lead,
@@ -154,6 +295,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   // Lightbox Modal state
   const [isGalleryOpen, setIsGalleryOpen] = useState<boolean>(false);
   const [selectedPhotoIndex, setSelectedPhotoIndex] = useState<number>(0);
+  const [carouselIndex, setCarouselIndex] = useState<number>(0);
 
   // Accordion collapsed states (default open)
   const [collapsedCards, setCollapsedCards] = useState<Record<string, boolean>>({});
@@ -317,15 +459,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       url: currentUrl
     };
 
-    if (navigator.share) {
+    if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
       try {
         await navigator.share(shareData);
-        toast.success("Partajat cu succes!");
         return;
       } catch (err: any) {
-        if (err.name === "AbortError") {
+        if (err?.name === "AbortError") {
           return;
         }
+        console.warn("navigator.share failed, fallback to copy:", err);
       }
     }
 
@@ -782,286 +924,450 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     };
   }, [lead]);
 
+  // Section Data with persistence fallback from Firestore (extractedData.presentationSections)
+  const initialPresentationSections = useMemo<Record<string, Record<string, string>>>(() => {
+    const saved = (lead as any)?.extractedData?.presentationSections || {};
+    return {
+      introducere: {
+        summary: saved.introducere?.summary || summaryDescription
+      },
+      configuratie: {
+        "Suprafață utilă": saved.configuratie?.["Suprafață utilă"] || suprafataUtila,
+        "Compartimentare": saved.configuratie?.["Compartimentare"] || compartimentare,
+        "Etaj": saved.configuratie?.["Etaj"] || etaj,
+        "An construcție": saved.configuratie?.["An construcție"] || anConstructie,
+        "Număr camere": saved.configuratie?.["Număr camere"] || String(camere),
+        "Număr băi": saved.configuratie?.["Număr băi"] || String(bai),
+        "Balcon": saved.configuratie?.["Balcon"] || String(balcoane),
+        "Stare": saved.configuratie?.["Stare"] || stareInterior,
+        ...(saved.configuratie || {})
+      },
+      finisaje: {
+        "Living": saved.finisaje?.["Living"] || "vopsea lavabilă, parchet",
+        "Camera 1": saved.finisaje?.["Camera 1"] || "vopsea lavabilă, parchet",
+        "Camera 2": saved.finisaje?.["Camera 2"] || "vopsea lavabilă, parchet",
+        "Bucătărie": saved.finisaje?.["Bucătărie"] || "vopsea lavabilă, faianță și gresie",
+        "Baie 1": saved.finisaje?.["Baie 1"] || "faianță și gresie",
+        "Baie 2": saved.finisaje?.["Baie 2"] || "faianță și gresie",
+        "Hol": saved.finisaje?.["Hol"] || "vopsea lavabilă, parchet",
+        ...(saved.finisaje || {})
+      },
+      mobilare: {
+        "Living": saved.mobilare?.["Living"] || "canapea, măsuță cafea, comodă",
+        "Camera 1": saved.mobilare?.["Camera 1"] || "pat, noptiere",
+        "Camera 2": saved.mobilare?.["Camera 2"] || "pat, dulap",
+        "Bucătărie": saved.mobilare?.["Bucătărie"] || "mobilată",
+        "Baie 1": saved.mobilare?.["Baie 1"] || "obiecte sanitare premium",
+        "Baie 2": saved.mobilare?.["Baie 2"] || "obiecte sanitare",
+        "Hol": saved.mobilare?.["Hol"] || "cuier, pantofar",
+        ...(saved.mobilare || {})
+      },
+      dotari: {
+        "Living": saved.dotari?.["Living"] || "aer condiționat, smart TV",
+        "Camera 1": saved.dotari?.["Camera 1"] || "aer condiționat, draperii",
+        "Camera 2": saved.dotari?.["Camera 2"] || "aer condiționat, corp iluminat LED",
+        "Bucătărie": saved.dotari?.["Bucătărie"] || "frigider încorporat, mașină de spălat vase, plită, cuptor, hotă",
+        "Baie 1": saved.dotari?.["Baie 1"] || "cadă / duș, accesorii",
+        "Baie 2": saved.dotari?.["Baie 2"] || "cabină duș, vas WC",
+        "Hol": saved.dotari?.["Hol"] || "interfon, tablou siguranțe",
+        ...(saved.dotari || {})
+      },
+      altele: {
+        "Altele": saved.altele?.["Altele"] || "mașină de spălat rufe cu uscător, centrală proprie, încălzire în pardoseală, vedere către curtea interioară",
+        ...(saved.altele || {})
+      },
+      bloc: {
+        "Acces": saved.bloc?.["Acces"] || "Tag magnetic, pază 24/7, interfon",
+        "Spații": saved.bloc?.["Spații"] || "Curte interioară, spații verzi, loc de joacă",
+        "Dotări": saved.bloc?.["Dotări"] || "Lift silențios, supraveghere video, generator curent",
+        "Servicii": saved.bloc?.["Servicii"] || "Administrație dedicată, mentenanță tehnică, curățenie spații comune",
+        ...(saved.bloc || {})
+      },
+      imprejurimi: {
+        "Educație": saved.imprejurimi?.["Educație"] || "Grădinițe de stat și private, școli gimnaziale, licee în proximitate",
+        "Comerț": saved.imprejurimi?.["Comerț"] || "Promenada Mall, Băneasa Shopping City, Mega Image, Carrefour, Lidl",
+        "Benzinării": saved.imprejurimi?.["Benzinării"] || "Rompetrol, OMV, Petrom, Lukoil",
+        "Sănătate": saved.imprejurimi?.["Sănătate"] || "Regina Maria, Medicover, clinici private, farmacii nonstop",
+        "Relaxare": saved.imprejurimi?.["Relaxare"] || "Parcul Herăstrău (Regele Mihai I), alei de promenadă, spații verzi",
+        "Divertisment": saved.imprejurimi?.["Divertisment"] || "Săli World Class, cinematograf multiplex, restaurante și cafenele",
+        "Obiective": saved.imprejurimi?.["Obiective"] || "Zona de birouri Aviației, Pipera Business District, Promenada",
+        ...(saved.imprejurimi || {})
+      },
+      transport: {
+        "Tramvaie": saved.transport?.["Tramvaie"] || "Liniile 16, 36",
+        "Troleibuze": saved.transport?.["Troleibuze"] || "Liniile 76, 86",
+        "Autobuze": saved.transport?.["Autobuze"] || "Liniile 112, 135, 301, 343",
+        "Metrou": saved.transport?.["Metrou"] || "Aurel Vlaicu, Pipera (8-10 minute mers pe jos)",
+        ...(saved.transport || {})
+      },
+      parcare: {
+        "Parcare": saved.parcare?.["Parcare"] || "Publică în zonă, loc de parcare dedicat subteran/suprateran disponibil la cerere / inclus în funcție de contract",
+        ...(saved.parcare || {})
+      },
+      acte: {
+        "Situație juridică": saved.acte?.["Situație juridică"] || "Intabulat, extras CF liber de sarcini, certificat energetic clasa A",
+        "Disponibilitate": saved.acte?.["Disponibilitate"] || "Imediată",
+        "Finanțare": saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii, înregistrare ANAF",
+        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "Contract pe minimum 12 luni, fără animale de companie (sau conform acordului părților)",
+        ...(saved.acte || {})
+      },
+      tranzactie: {
+        "Preț": saved.tranzactie?.["Preț"] || formattedPrice,
+        "TVA": saved.tranzactie?.["TVA"] || "Scutit de TVA / conform legislației în vigoare",
+        "Comision": saved.tranzactie?.["Comision"] || (isRent ? "50% + TVA din contravaloarea primei chirii lunare" : "Comision standard agenție"),
+        ...(saved.tranzactie || {})
+      }
+    };
+  }, [lead, summaryDescription, suprafataUtila, compartimentare, etaj, anConstructie, camere, bai, balcoane, stareInterior, formattedPrice, isRent]);
+
+  const [sectionData, setSectionData] = useState<Record<string, Record<string, string>>>(initialPresentationSections);
+  const [editingSection, setEditingSection] = useState<string | null>(null);
+  const [draftSectionData, setDraftSectionData] = useState<Record<string, Record<string, string>>>({});
+  const [introFocused, setIntroFocused] = useState(false);
+  const introTextareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Photos state and inline editing
+  const [imagesList, setImagesList] = useState<string[]>(allImages);
+  const [isEditingPhotos, setIsEditingPhotos] = useState<boolean>(false);
+  const [isPhotosDirty, setIsPhotosDirty] = useState<boolean>(false);
+  const [isDraggingOverCard, setIsDraggingOverCard] = useState<boolean>(false);
+  const [draggedSlotIndex, setDraggedSlotIndex] = useState<number | null>(null);
+  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
+  const [slotPage, setSlotPage] = useState<number>(0);
+  const photoFileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isEditingPhotos) {
+      setImagesList(allImages);
+      setIsPhotosDirty(false);
+    }
+  }, [allImages, isEditingPhotos]);
+
+  useEffect(() => {
+    const page = Math.floor(carouselIndex / 4);
+    if (page !== slotPage) {
+      setSlotPage(page);
+    }
+  }, [carouselIndex]);
+
+  const handleSavePhotos = async () => {
+    if (!lead?.id) return;
+    try {
+      const newCover = imagesList[0] || "";
+      const updates: any = {
+        coverImage: newCover,
+        "extractedData.crmData.imagini.living": imagesList
+      };
+      await leadsService.updateLeadData(lead.id, updates);
+      setIsEditingPhotos(false);
+      setIsPhotosDirty(false);
+      toast.success("Fotografiile au fost salvate cu succes!");
+    } catch (err) {
+      console.error("Failed to save photos:", err);
+      toast.error("Eroare la salvarea fotografiilor.");
+    }
+  };
+
+  const handleCancelPhotos = () => {
+    setImagesList(allImages);
+    setIsEditingPhotos(false);
+    setIsPhotosDirty(false);
+  };
+
+  const handleAddPhotoFiles = (files: FileList | File[]) => {
+    const fileArray = Array.from(files).filter(f => f.type.startsWith("image/"));
+    if (fileArray.length === 0) {
+      toast.error("Vă rugăm să selectați fișiere imagine valide (JPG, PNG, WEBP).");
+      return;
+    }
+
+    const newImgs: string[] = [];
+    let readCount = 0;
+    fileArray.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        if (e.target?.result && typeof e.target.result === "string") {
+          newImgs.push(e.target.result);
+        }
+        readCount++;
+        if (readCount === fileArray.length) {
+          setImagesList(prev => [...prev, ...newImgs]);
+          setIsPhotosDirty(true);
+          setIsEditingPhotos(true);
+          toast.success(`${newImgs.length} ${newImgs.length === 1 ? "fotografie adăugată" : "fotografii adăugate"}!`);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  useEffect(() => {
+    setSectionData(prev => ({
+      ...initialPresentationSections,
+      ...(editingSection && prev[editingSection] ? { [editingSection]: prev[editingSection] } : {})
+    }));
+  }, [initialPresentationSections, editingSection]);
+
+  const handleStartEditSection = (sectionId: string) => {
+    setEditingSection(sectionId);
+    setDraftSectionData(prev => ({
+      ...prev,
+      [sectionId]: { ...(sectionData[sectionId] || {}) }
+    }));
+  };
+
+  const handleCancelEditSection = (sectionId: string) => {
+    setEditingSection(null);
+    setDraftSectionData(prev => {
+      const copy = { ...prev };
+      delete copy[sectionId];
+      return copy;
+    });
+  };
+
+  const handleFieldChange = (sectionId: string, label: string, value: string) => {
+    setDraftSectionData(prev => ({
+      ...prev,
+      [sectionId]: {
+        ...(prev[sectionId] || sectionData[sectionId] || {}),
+        [label]: value
+      }
+    }));
+  };
+
+  const isSectionDirty = (sectionId: string) => {
+    if (editingSection !== sectionId) return false;
+    const currentDraft = draftSectionData[sectionId];
+    if (!currentDraft) return false;
+    const original = sectionData[sectionId] || {};
+    return Object.keys(currentDraft).some(k => (currentDraft[k] ?? "") !== (original[k] ?? ""));
+  };
+
+  const handleSaveSection = async (sectionId: string) => {
+    const updatedSec = { ...(draftSectionData[sectionId] || sectionData[sectionId]) };
+    const nextSectionData = {
+      ...sectionData,
+      [sectionId]: updatedSec
+    };
+    setSectionData(nextSectionData);
+    setEditingSection(null);
+
+    if (!lead?.id) return;
+    try {
+      const updates: any = {
+        "extractedData.presentationSections": nextSectionData
+      };
+
+      if (sectionId === "configuratie") {
+        if (updatedSec["Suprafață utilă"]) updates["extractedData.crmData.caracteristici.suprafete.utila"] = updatedSec["Suprafață utilă"];
+        if (updatedSec["Compartimentare"]) updates["extractedData.crmData.caracteristici.detalii.compartimentare"] = updatedSec["Compartimentare"];
+        if (updatedSec["Etaj"]) updates["extractedData.crmData.caracteristici.detalii.etaj"] = updatedSec["Etaj"];
+        if (updatedSec["An construcție"]) updates["extractedData.crmData.caracteristici.alteDetalii.anConstructie"] = updatedSec["An construcție"];
+        if (updatedSec["Număr camere"]) updates["extractedData.crmData.caracteristici.detalii.camere"] = updatedSec["Număr camere"];
+        if (updatedSec["Număr băi"]) updates["extractedData.crmData.caracteristici.detalii.bai"] = updatedSec["Număr băi"];
+        if (updatedSec["Balcon"]) updates["extractedData.crmData.caracteristici.suprafete.balcoane"] = updatedSec["Balcon"];
+        if (updatedSec["Stare"]) updates["extractedData.crmData.caracteristici.alteDetalii.stadiuConstructie"] = updatedSec["Stare"];
+      } else if (sectionId === "tranzactie") {
+        if (updatedSec["Preț"]) {
+          updates["price"] = updatedSec["Preț"];
+          updates["extractedData.crmData.pret.detalii.pret"] = updatedSec["Preț"];
+        }
+      } else if (sectionId === "introducere") {
+        if (updatedSec["summary"]) {
+          updates["extractedData.crmData.descriere.continut"] = updatedSec["summary"];
+        }
+      }
+
+      await leadsService.updateLeadData(lead.id, updates);
+      toast.success("Modificările au fost salvate cu succes!");
+    } catch (e) {
+      console.error("Failed to save inline changes:", e);
+      toast.error("Eroare la salvarea modificărilor.");
+    }
+  };
+
+  const renderRow = (
+    sectionId: string, 
+    label: string, 
+    fallbackVal: string, 
+    isLast: boolean = false, 
+    multiline: boolean = false
+  ) => {
+    const isSecEditing = editingSection === sectionId;
+    const originalVal = sectionData[sectionId]?.[label] ?? fallbackVal;
+    const currentVal = isSecEditing 
+      ? (draftSectionData[sectionId]?.[label] ?? originalVal) 
+      : originalVal;
+
+    return (
+      <AttributeRow
+        key={label}
+        label={label}
+        value={currentVal}
+        copyValue={typeof currentVal === "string" ? currentVal : ""}
+        isEditing={isSecEditing}
+        editValue={typeof currentVal === "string" ? currentVal : ""}
+        onEditChange={(newVal) => handleFieldChange(sectionId, label, newVal)}
+        multiline={multiline}
+        isLast={isLast}
+      />
+    );
+  };
+
   return (
-    <div ref={containerRef} className="w-full bg-[#F8F9FA] text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20">
+    <div ref={containerRef} className="w-full bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 min-h-screen">
       
       {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
       {showTopNavbar && (
-        <nav className="sticky top-0 z-40 bg-white border-b border-gray-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 h-[50px] flex items-center justify-between gap-4">
-            <div className="flex items-center gap-1.5 focus:outline-none">
-              <span className="font-extrabold text-base tracking-tight text-[#051D35] font-sans flex items-center">
-                brokr<span className="text-[#BE9662]">.</span>
-              </span>
+        <nav className="sticky top-0 z-40 bg-white border-b border-gray-200 select-none">
+          <div className="w-full h-[50px] flex items-center justify-between p-0">
+            <div className="flex items-center h-full">
+              <a 
+                href="/"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 select-none group"
+                title="Înapoi la pagina principală"
+              >
+                <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+              </a>
+              <div className="px-4 flex items-center gap-1.5 focus:outline-none">
+                <span className="font-extrabold text-base tracking-tight text-[#051D35] font-sans flex items-center">
+                  brokr<span className="text-[#BE9662]">.</span>
+                </span>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-stretch h-full shrink-0">
               <button
                 type="button"
                 onClick={handleToggleFavorite}
-                className={`h-8 px-3 rounded-md text-xs font-medium border transition-colors flex items-center gap-1.5 cursor-pointer ${
+                className={`h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 transition-colors cursor-pointer select-none group ${
                   isFavorite 
-                    ? "bg-amber-50 border-[#BE9662]/40 text-[#BE9662]" 
-                    : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
+                    ? "bg-amber-50/50 text-[#BE9662]" 
+                    : "bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900"
                 }`}
-                title={isFavorite ? "Elimină din favoritele browserului" : "Salvează ca favorit în browser (Ctrl+D / Cmd+D)"}
+                title={isFavorite ? "Elimină din favorite" : "Salvează ca favorit"}
               >
-                <Bookmark size={14} className={isFavorite ? "fill-[#BE9662] text-[#BE9662]" : "text-gray-400"} />
-                <span className="hidden sm:inline">{isFavorite ? "Salvat" : "Salvează favorit"}</span>
+                <Bookmark size={16} className={isFavorite ? "fill-[#BE9662] text-[#BE9662]" : "text-gray-500 group-hover:text-[#BE9662] transition-colors"} />
               </button>
 
               <button
                 type="button"
                 onClick={handlePrint}
-                className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
                 title="Tipărește oferta"
               >
-                <Printer size={14} className="text-gray-400" />
-                <span className="hidden sm:inline">Printează</span>
+                <Printer size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
               </button>
 
               <button
                 type="button"
                 onClick={handleNativeShare}
-                className="h-8 px-3.5 rounded-md text-xs font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-all flex items-center gap-1.5 shadow-xs cursor-pointer"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
                 title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
               >
-                <Share2 size={14} className="text-[#BE9662]" />
-                <span>Distribuie</span>
+                <Share2 size={16} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
               </button>
             </div>
           </div>
         </nav>
       )}
 
-      {/* Hero Header Section */}
-      <section className="bg-white border-b border-gray-200 pt-5 pb-5">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          
-          {/* Breadcrumb / Category (Clean typography without tag boxes) */}
-          <div className="flex items-center gap-2 text-xs text-gray-500 mb-2 font-medium flex-wrap font-sans">
-            <span className="text-[#051D35] font-semibold">Imobile</span>
-            <span className="text-gray-300">/</span>
-            <span className="text-gray-700 font-medium">
-              {lead.transactionType || "Închiriere"}
-            </span>
-            <span className="text-gray-300">/</span>
-            <span className="text-gray-600 font-medium">{categoria}</span>
-            <span className="text-gray-300">/</span>
-            <span className="font-mono text-gray-500 text-[11px]">
-              Cod #{internalCode}
-            </span>
-          </div>
-
-          {/* Title & Price Row */}
-          <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-            <div className="space-y-1.5 flex-1 min-w-0 pr-4">
-              <h1 className="text-2xl sm:text-3xl font-bold font-[700] text-[#051D35] tracking-tight leading-snug font-sans break-words">
-                {displayTitle}
-              </h1>
-              
-              <div className="flex items-center gap-2 text-xs sm:text-sm text-gray-600 font-sans">
-                <MapPin size={15} className="text-[#BE9662] shrink-0" />
-                <span className="font-medium text-gray-700">
-                  {addressDetails.fullSummary}
-                </span>
-              </div>
-            </div>
-
-            {/* Price block & Action buttons for in-app mode */}
-            <div className="shrink-0 flex flex-col md:items-end justify-between md:justify-center border-t md:border-t-0 pt-3 md:pt-0 border-gray-100 gap-2">
-              <div className="flex md:flex-col items-baseline md:items-end justify-between w-full">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400 md:mb-0.5 font-sans">
-                  {isRent ? "Chirie lunară" : "Preț vânzare"}
-                </span>
-                <div className="text-2xl sm:text-3xl font-black text-[#051D35] font-mono tracking-tight">
-                  {formattedPrice}
-                </div>
-              </div>
-
-              {!showTopNavbar && (
-                <div className="flex items-center gap-2 mt-1">
-                  <button
-                    type="button"
-                    onClick={handleToggleFavorite}
-                    className={`h-8 px-3 rounded-md text-xs font-medium border transition-colors flex items-center gap-1.5 cursor-pointer font-sans ${
-                      isFavorite 
-                        ? "bg-amber-50 border-[#BE9662]/40 text-[#BE9662]" 
-                        : "bg-white border-gray-200 text-gray-700 hover:bg-gray-50"
-                    }`}
-                    title={isFavorite ? "Elimină din favoritele browserului" : "Salvează ca favorit în browser (Ctrl+D / Cmd+D)"}
-                  >
-                    <Bookmark size={13} className={isFavorite ? "fill-[#BE9662] text-[#BE9662]" : "text-gray-400"} />
-                    <span>{isFavorite ? "Salvat" : "Salvează favorit"}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handlePrint}
-                    className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer font-sans"
-                    title="Tipărește oferta"
-                  >
-                    <Printer size={13} className="text-gray-400" />
-                    <span className="hidden sm:inline">Printează</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleNativeShare}
-                    className="h-8 px-3.5 rounded-md text-xs font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-all flex items-center gap-1.5 shadow-xs cursor-pointer font-sans"
-                    title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
-                  >
-                    <Share2 size={13} className="text-[#BE9662]" />
-                    <span>Distribuie</span>
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
-        </div>
-      </section>
-
-      {/* Photo Gallery Grid Mosaic */}
-      <section className="bg-white border-b border-gray-200 py-4">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          {allImages.length > 0 ? (
-            <div className="grid grid-cols-1 md:grid-cols-4 md:grid-rows-2 gap-2.5 h-[320px] sm:h-[400px] md:h-[450px] rounded-xl overflow-hidden">
-              
-              {/* Primary Large Image */}
-              <div 
-                onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                className="md:col-span-2 md:row-span-2 relative group cursor-pointer overflow-hidden bg-gray-100"
-              >
-                <img 
-                  src={allImages[0]} 
-                  alt={displayTitle} 
-                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out" 
-                  referrerPolicy="no-referrer"
-                />
-                <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-4">
-                  <span className="text-white text-xs font-semibold flex items-center gap-1.5 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md">
-                    <Maximize2 size={13} />
-                    Mărește imaginea principală
-                  </span>
-                </div>
-              </div>
-
-              {/* Smaller secondary images */}
-              {[1, 2, 3, 4].map((idx) => {
-                const img = allImages[idx];
-                const isLastSlot = idx === 4 || idx === allImages.length - 1;
-                const remainingCount = Math.max(0, allImages.length - 5);
-
-                if (!img && idx > 0) {
-                  return (
-                    <div 
-                      key={idx} 
-                      className="hidden md:flex items-center justify-center bg-gray-50 border border-dashed border-gray-200 text-gray-300 text-xs"
-                    >
-                      <Building2 size={24} className="opacity-40" />
-                    </div>
-                  );
-                }
+      {/* Horizontal Sticky Menu with Jump Links (Left) and Actions (Right) */}
+      <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-md border-b border-gray-200 shadow-xs">
+        <div className="w-full px-4 sm:px-6">
+          <div className="h-11 flex items-center justify-between gap-3">
+            {/* Left: Jump Links */}
+            <div className="flex items-center gap-1 sm:gap-1.5 overflow-x-auto no-scrollbar py-1">
+              {NAV_SECTIONS.map((sect) => {
+                const Icon = sect.icon;
+                const isActive = activeSection === sect.id;
 
                 return (
-                  <div 
-                    key={idx}
-                    onClick={() => { setSelectedPhotoIndex(idx); setIsGalleryOpen(true); }}
-                    className="hidden md:block relative group cursor-pointer overflow-hidden bg-gray-100"
+                  <button
+                    key={sect.id}
+                    type="button"
+                    onClick={() => scrollToSection(sect.id)}
+                    className={`shrink-0 h-8 px-3 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
+                      isActive
+                        ? "bg-[#051D35] text-white shadow-xs"
+                        : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+                    }`}
                   >
-                    <img 
-                      src={img} 
-                      alt={`${displayTitle} - foto ${idx + 1}`} 
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ease-out" 
-                      referrerPolicy="no-referrer"
-                    />
-                    
-                    {isLastSlot && remainingCount > 0 ? (
-                      <div className="absolute inset-0 bg-black/65 backdrop-blur-xs flex flex-col items-center justify-center text-white text-center p-2 group-hover:bg-black/75 transition-colors">
-                        <Camera size={22} className="mb-1 text-[#BE9662]" />
-                        <span className="text-xs font-bold uppercase tracking-wider">
-                          Vezi toate
-                        </span>
-                        <span className="text-base font-extrabold font-mono">
-                          +{remainingCount + 1} fotografii
-                        </span>
-                      </div>
-                    ) : (
-                      <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <span className="bg-black/60 text-white p-2 rounded-full backdrop-blur-xs">
-                          <Maximize2 size={14} />
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                    <Icon size={13} className={isActive ? "text-[#BE9662]" : "text-gray-400"} />
+                    <span>{sect.label}</span>
+                  </button>
                 );
               })}
-
             </div>
-          ) : (
-            <div className="h-64 rounded-xl border border-dashed border-gray-300 bg-gray-50 flex flex-col items-center justify-center text-gray-400 gap-2">
-              <Camera size={36} className="text-gray-300" />
-              <p className="text-xs font-medium">Nu există fotografii încărcate pentru această proprietate</p>
-            </div>
-          )}
 
-          {/* Quick button to view all photos on mobile */}
-          {allImages.length > 0 && (
-            <div className="mt-3 flex justify-between items-center md:hidden">
-              <span className="text-xs text-gray-500 font-medium">
-                {allImages.length} fotografii disponibile
-              </span>
+            {/* Right: Actions */}
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                className="h-8 px-3 rounded-md bg-[#051D35] text-white text-xs font-medium flex items-center gap-1.5"
+                onClick={handlePrint}
+                className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5 cursor-pointer font-sans shadow-2xs"
+                title="Tipărește oferta"
               >
-                <Camera size={13} className="text-[#BE9662]" />
-                <span>Vezi galeria completă</span>
+                <Printer size={13} className="text-gray-400" />
+                <span className="hidden sm:inline">Printează</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleNativeShare}
+                className="h-8 px-3 rounded-md text-xs font-medium bg-white border border-gray-200 hover:border-gray-300 text-gray-700 hover:text-[#051D35] transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer font-sans"
+                title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+              >
+                <Share2 size={13} className="text-[#BE9662]" />
+                <span className="hidden sm:inline">Distribuie</span>
               </button>
             </div>
-          )}
-
-        </div>
-      </section>
-
-      {/* Horizontal Sticky Menu with Jump Links */}
-      <div className="sticky top-[50px] z-30 bg-white/95 backdrop-blur-md border-b border-gray-200 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center gap-1 sm:gap-2 overflow-x-auto no-scrollbar py-2.5">
-            {NAV_SECTIONS.map((sect) => {
-              const Icon = sect.icon;
-              const isActive = activeSection === sect.id;
-
-              return (
-                <button
-                  key={sect.id}
-                  type="button"
-                  onClick={() => scrollToSection(sect.id)}
-                  className={`shrink-0 h-8 px-3.5 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all flex items-center gap-1.5 cursor-pointer ${
-                    isActive
-                      ? "bg-[#051D35] text-white shadow-xs"
-                      : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
-                  }`}
-                >
-                  <Icon size={13} className={isActive ? "text-[#BE9662]" : "text-gray-400"} />
-                  <span>{sect.label}</span>
-                </button>
-              );
-            })}
           </div>
         </div>
       </div>
 
-      {/* Main Two-Column Layout */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 flex-1 w-full">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+      {/* Main Two-Column Layout (Seamless with inside padding & border divider) */}
+      <main className="w-full flex-1 bg-white p-0">
+        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-full items-start">
           
-                    {/* Left Column: All Content Cards (8 cols on lg) */}
-          <div className="lg:col-span-8 space-y-6">
+          {/* Left Column: All Content Cards (8 cols on lg) with clean right border */}
+          <div className="lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200">
 
-            {/* #CARD "INTRODUCERE" */}
+            {/* #CARD 1: "PREȚ & COMISION" (First card in Column 1 per user request) */}
+            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
+              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                    <BadgePercent size={16} />
+                  </div>
+                  <div>
+                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                      PREȚ & COMISION
+                    </h2>
+                    <span className="text-[11px] text-gray-500 font-sans">
+                      Preț, TVA și Comision agenție
+                    </span>
+                  </div>
+                </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "tranzactie"}
+                  isDirty={isSectionDirty("tranzactie")}
+                  onStartEdit={() => handleStartEditSection("tranzactie")}
+                  onCancel={() => handleCancelEditSection("tranzactie")}
+                  onSave={() => handleSaveSection("tranzactie")}
+                  disabled={isPublicShared}
+                />
+              </div>
+
+              <div className="font-sans divide-y divide-gray-100">
+                {renderRow("tranzactie", "Preț", formattedPrice)}
+                {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
+                {renderRow("tranzactie", "Comision", isRent ? "50% + TVA din contravaloarea primei chirii lunare" : "Comision standard agenție", true)}
+              </div>
+            </div>
+
+            {/* #CARD 2: "INTRODUCERE" */}
             <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
@@ -1077,12 +1383,48 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     </span>
                   </div>
                 </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "introducere"}
+                  isDirty={isSectionDirty("introducere")}
+                  onStartEdit={() => handleStartEditSection("introducere")}
+                  onCancel={() => handleCancelEditSection("introducere")}
+                  onSave={() => handleSaveSection("introducere")}
+                  disabled={isPublicShared}
+                />
               </div>
 
               <div className="p-6 font-sans">
-                <div className="text-xs sm:text-sm text-gray-700 leading-relaxed space-y-3 font-normal whitespace-pre-line select-text font-sans">
-                  {summaryDescription}
-                </div>
+                {editingSection === "introducere" ? (
+                  <div 
+                    onClick={() => introTextareaRef.current?.focus()}
+                    className={`p-3.5 transition-all font-sans cursor-text ${
+                      introFocused 
+                        ? "bg-amber-50/40 border-l-3 border-l-[#BE9662]" 
+                        : "bg-transparent border-l-3 border-l-transparent hover:bg-amber-50/15"
+                    }`}
+                  >
+                    <textarea
+                      ref={introTextareaRef}
+                      rows={5}
+                      value={draftSectionData["introducere"]?.["summary"] ?? (sectionData["introducere"]?.["summary"] || summaryDescription)}
+                      onChange={(e) => handleFieldChange("introducere", "summary", e.target.value)}
+                      onFocus={() => setIntroFocused(true)}
+                      onBlur={() => setIntroFocused(false)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") (e.target as HTMLElement).blur();
+                      }}
+                      className={`w-full text-xs sm:text-sm font-sans leading-relaxed bg-transparent border-0 rounded-none p-0 m-0 outline-none resize-y select-text focus:outline-none transition-all ${
+                        introFocused ? "text-[#051D35] font-medium" : "text-gray-700"
+                      }`}
+                      placeholder="Descrierea proprietății..."
+                    />
+                  </div>
+                ) : (
+                  <div className="text-xs sm:text-sm text-gray-700 leading-relaxed space-y-3 font-normal whitespace-pre-line select-text font-sans p-3.5 border-l-3 border-l-transparent">
+                    {sectionData["introducere"]?.["summary"] || summaryDescription}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1102,67 +1444,128 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <div className="font-sans divide-y divide-gray-100">
                 {/* -Subcategorie "Configuratie" */}
                 <div>
-                  <SubCategoryHeader title="Configurație" />
+                  <SubCategoryHeader 
+                    title="Configurație" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "configuratie"}
+                        isDirty={isSectionDirty("configuratie")}
+                        onStartEdit={() => handleStartEditSection("configuratie")}
+                        onCancel={() => handleCancelEditSection("configuratie")}
+                        onSave={() => handleSaveSection("configuratie")}
+                        disabled={isPublicShared}
+                      />
+                    }
+                  />
                   <div className="divide-y divide-gray-100">
-                    <AttributeRow label="Suprafață utilă" value={suprafataUtila} copyValue={suprafataUtila} />
-                    <AttributeRow label="Compartimentare" value={compartimentare} copyValue={compartimentare} />
-                    <AttributeRow label="Etaj" value={etaj} copyValue={etaj} />
-                    <AttributeRow label="An construcție" value={anConstructie} copyValue={anConstructie} />
-                    <AttributeRow label="Număr camere" value={camere} copyValue={String(camere)} />
-                    <AttributeRow label="Număr băi" value={bai} copyValue={String(bai)} />
-                    <AttributeRow label="Balcon" value={balcoane} copyValue={String(balcoane)} />
-                    <AttributeRow label="Stare" value={stareInterior} copyValue={stareInterior} />
+                    {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
+                    {renderRow("configuratie", "Compartimentare", compartimentare)}
+                    {renderRow("configuratie", "Etaj", etaj)}
+                    {renderRow("configuratie", "An construcție", anConstructie)}
+                    {renderRow("configuratie", "Număr camere", String(camere))}
+                    {renderRow("configuratie", "Număr băi", String(bai))}
+                    {renderRow("configuratie", "Balcon", String(balcoane))}
+                    {renderRow("configuratie", "Stare", stareInterior, true)}
                   </div>
                 </div>
 
                 {/* -Subcategorie "Finisaje" */}
                 <div>
-                  <SubCategoryHeader title="Finisaje" />
+                  <SubCategoryHeader 
+                    title="Finisaje" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "finisaje"}
+                        isDirty={isSectionDirty("finisaje")}
+                        onStartEdit={() => handleStartEditSection("finisaje")}
+                        onCancel={() => handleCancelEditSection("finisaje")}
+                        onSave={() => handleSaveSection("finisaje")}
+                        disabled={isPublicShared}
+                      />
+                    }
+                  />
                   <div className="divide-y divide-gray-100">
-                    <AttributeRow label="Living" value="vopsea lavabilă, parchet" />
-                    <AttributeRow label="Camera 1" value="vopsea lavabilă, parchet" />
-                    <AttributeRow label="Camera 2" value="vopsea lavabilă, parchet" />
-                    <AttributeRow label="Bucătărie" value="vopsea lavabilă, faianță și gresie" />
-                    <AttributeRow label="Baie 1" value="faianță și gresie" />
-                    <AttributeRow label="Baie 2" value="faianță și gresie" />
-                    <AttributeRow label="Hol" value="vopsea lavabilă, parchet" />
+                    {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
+                    {renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
+                    {renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
+                    {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
+                    {renderRow("finisaje", "Baie 1", "faianță și gresie")}
+                    {renderRow("finisaje", "Baie 2", "faianță și gresie")}
+                    {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
                   </div>
                 </div>
 
                 {/* -Subcategorie "Mobilare" */}
                 <div>
-                  <SubCategoryHeader title="Mobilare" />
+                  <SubCategoryHeader 
+                    title="Mobilare" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "mobilare"}
+                        isDirty={isSectionDirty("mobilare")}
+                        onStartEdit={() => handleStartEditSection("mobilare")}
+                        onCancel={() => handleCancelEditSection("mobilare")}
+                        onSave={() => handleSaveSection("mobilare")}
+                        disabled={isPublicShared}
+                      />
+                    }
+                  />
                   <div className="divide-y divide-gray-100">
-                    <AttributeRow label="Living" value="canapea, măsuță cafea, comodă" />
-                    <AttributeRow label="Camera 1" value="pat, noptiere" />
-                    <AttributeRow label="Camera 2" value="pat, dulap" />
-                    <AttributeRow label="Bucătărie" value="mobilată" />
-                    <AttributeRow label="Baie 1" value="obiecte sanitare premium" />
-                    <AttributeRow label="Baie 2" value="obiecte sanitare" />
-                    <AttributeRow label="Hol" value="cuier, pantofar" />
+                    {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
+                    {renderRow("mobilare", "Camera 1", "pat, noptiere")}
+                    {renderRow("mobilare", "Camera 2", "pat, dulap")}
+                    {renderRow("mobilare", "Bucătărie", "mobilată")}
+                    {renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
+                    {renderRow("mobilare", "Baie 2", "obiecte sanitare")}
+                    {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
                   </div>
                 </div>
 
                 {/* -Subcategorie "Dotari" */}
                 <div>
-                  <SubCategoryHeader title="Dotări" />
+                  <SubCategoryHeader 
+                    title="Dotări" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "dotari"}
+                        isDirty={isSectionDirty("dotari")}
+                        onStartEdit={() => handleStartEditSection("dotari")}
+                        onCancel={() => handleCancelEditSection("dotari")}
+                        onSave={() => handleSaveSection("dotari")}
+                        disabled={isPublicShared}
+                      />
+                    }
+                  />
                   <div className="divide-y divide-gray-100">
-                    <AttributeRow label="Living" value="aer condiționat, smart TV" />
-                    <AttributeRow label="Camera 1" value="aer condiționat, draperii" />
-                    <AttributeRow label="Camera 2" value="aer condiționat, corp iluminat LED" />
-                    <AttributeRow label="Bucătărie" value="frigider încorporat, mașină de spălat vase, plită, cuptor, hotă" />
-                    <AttributeRow label="Baie 1" value="cadă / duș, accesorii" />
-                    <AttributeRow label="Baie 2" value="cabină duș, vas WC" />
-                    <AttributeRow label="Hol" value="interfon, tablou siguranțe" />
+                    {renderRow("dotari", "Living", "aer condiționat, smart TV")}
+                    {renderRow("dotari", "Camera 1", "aer condiționat, draperii")}
+                    {renderRow("dotari", "Camera 2", "aer condiționat, corp iluminat LED")}
+                    {renderRow("dotari", "Bucătărie", "frigider încorporat, mașină de spălat vase, plită, cuptor, hotă")}
+                    {renderRow("dotari", "Baie 1", "cadă / duș, accesorii")}
+                    {renderRow("dotari", "Baie 2", "cabină duș, vas WC")}
+                    {renderRow("dotari", "Hol", "interfon, tablou siguranțe", true)}
                   </div>
                 </div>
 
                 {/* -Subcategorie "Altele" */}
-                <AttributeRow
-                  label="Altele"
-                  value="mașină de spălat rufe cu uscător, centrală proprie, încălzire în pardoseală, vedere către curtea interioară"
-                  isLast
-                />
+                <div>
+                  <SubCategoryHeader 
+                    title="Altele" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "altele"}
+                        isDirty={isSectionDirty("altele")}
+                        onStartEdit={() => handleStartEditSection("altele")}
+                        onCancel={() => handleCancelEditSection("altele")}
+                        onSave={() => handleSaveSection("altele")}
+                        disabled={isPublicShared}
+                      />
+                    }
+                  />
+                  <div className="divide-y divide-gray-100">
+                    {renderRow("altele", "Altele", "mașină de spălat rufe cu uscător, centrală proprie, încălzire în pardoseală, vedere către curtea interioară", true, true)}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -1177,13 +1580,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     BLOC
                   </h2>
                 </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "bloc"}
+                  isDirty={isSectionDirty("bloc")}
+                  onStartEdit={() => handleStartEditSection("bloc")}
+                  onCancel={() => handleCancelEditSection("bloc")}
+                  onSave={() => handleSaveSection("bloc")}
+                  disabled={isPublicShared}
+                />
               </div>
 
               <div className="font-sans divide-y divide-gray-100">
-                <AttributeRow label="Acces" value="Tag magnetic, pază 24/7, interfon" />
-                <AttributeRow label="Spații" value="Curte interioară, spații verzi, loc de joacă" />
-                <AttributeRow label="Dotări" value="Lift silențios, supraveghere video, generator curent" />
-                <AttributeRow label="Servicii" value="Administrație dedicată, mentenanță tehnică, curățenie spații comune" isLast />
+                {renderRow("bloc", "Acces", "Tag magnetic, pază 24/7, interfon")}
+                {renderRow("bloc", "Spații", "Curte interioară, spații verzi, loc de joacă")}
+                {renderRow("bloc", "Dotări", "Lift silențios, supraveghere video, generator curent")}
+                {renderRow("bloc", "Servicii", "Administrație dedicată, mentenanță tehnică, curățenie spații comune", true)}
               </div>
             </div>
 
@@ -1198,16 +1610,25 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     ÎMPREJURIMI
                   </h2>
                 </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "imprejurimi"}
+                  isDirty={isSectionDirty("imprejurimi")}
+                  onStartEdit={() => handleStartEditSection("imprejurimi")}
+                  onCancel={() => handleCancelEditSection("imprejurimi")}
+                  onSave={() => handleSaveSection("imprejurimi")}
+                  disabled={isPublicShared}
+                />
               </div>
 
               <div className="font-sans divide-y divide-gray-100">
-                <AttributeRow label="Educație" value="Grădinițe de stat și private, școli gimnaziale, licee în proximitate" />
-                <AttributeRow label="Comerț" value="Promenada Mall, Băneasa Shopping City, Mega Image, Carrefour, Lidl" />
-                <AttributeRow label="Benzinării" value="Rompetrol, OMV, Petrom, Lukoil" />
-                <AttributeRow label="Sănătate" value="Regina Maria, Medicover, clinici private, farmacii nonstop" />
-                <AttributeRow label="Relaxare" value="Parcul Herăstrău (Regele Mihai I), alei de promenadă, spații verzi" />
-                <AttributeRow label="Divertisment" value="Săli World Class, cinematograf multiplex, restaurante și cafenele" />
-                <AttributeRow label="Obiective" value="Zona de birouri Aviației, Pipera Business District, Promenada" isLast />
+                {renderRow("imprejurimi", "Educație", "Grădinițe de stat și private, școli gimnaziale, licee în proximitate")}
+                {renderRow("imprejurimi", "Comerț", "Promenada Mall, Băneasa Shopping City, Mega Image, Carrefour, Lidl")}
+                {renderRow("imprejurimi", "Benzinării", "Rompetrol, OMV, Petrom, Lukoil")}
+                {renderRow("imprejurimi", "Sănătate", "Regina Maria, Medicover, clinici private, farmacii nonstop")}
+                {renderRow("imprejurimi", "Relaxare", "Parcul Herăstrău (Regele Mihai I), alei de promenadă, spații verzi")}
+                {renderRow("imprejurimi", "Divertisment", "Săli World Class, cinematograf multiplex, restaurante și cafenele")}
+                {renderRow("imprejurimi", "Obiective", "Zona de birouri Aviației, Pipera Business District, Promenada", true)}
               </div>
             </div>
 
@@ -1222,13 +1643,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     TRANSPORT
                   </h2>
                 </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "transport"}
+                  isDirty={isSectionDirty("transport")}
+                  onStartEdit={() => handleStartEditSection("transport")}
+                  onCancel={() => handleCancelEditSection("transport")}
+                  onSave={() => handleSaveSection("transport")}
+                  disabled={isPublicShared}
+                />
               </div>
 
               <div className="font-sans divide-y divide-gray-100">
-                <AttributeRow label="Tramvaie" value="Liniile 16, 36" />
-                <AttributeRow label="Troleibuze" value="Liniile 76, 86" />
-                <AttributeRow label="Autobuze" value="Liniile 112, 135, 301, 343" />
-                <AttributeRow label="Metrou" value="Aurel Vlaicu, Pipera (8-10 minute mers pe jos)" isLast />
+                {renderRow("transport", "Tramvaie", "Liniile 16, 36")}
+                {renderRow("transport", "Troleibuze", "Liniile 76, 86")}
+                {renderRow("transport", "Autobuze", "Liniile 112, 135, 301, 343")}
+                {renderRow("transport", "Metrou", "Aurel Vlaicu, Pipera (8-10 minute mers pe jos)", true)}
               </div>
             </div>
 
@@ -1243,14 +1673,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     PARCARE
                   </h2>
                 </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "parcare"}
+                  isDirty={isSectionDirty("parcare")}
+                  onStartEdit={() => handleStartEditSection("parcare")}
+                  onCancel={() => handleCancelEditSection("parcare")}
+                  onSave={() => handleSaveSection("parcare")}
+                  disabled={isPublicShared}
+                />
               </div>
 
               <div className="font-sans">
-                <AttributeRow
-                  label="Parcare"
-                  value="Publică în zonă, loc de parcare dedicat subteran/suprateran disponibil la cerere / inclus în funcție de contract"
-                  isLast
-                />
+                {renderRow("parcare", "Parcare", "Publică în zonă, loc de parcare dedicat subteran/suprateran disponibil la cerere / inclus în funcție de contract", true, true)}
               </div>
             </div>
 
@@ -1265,46 +1700,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     ACTE & TRANZACȚIE
                   </h2>
                 </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "acte"}
+                  isDirty={isSectionDirty("acte")}
+                  onStartEdit={() => handleStartEditSection("acte")}
+                  onCancel={() => handleCancelEditSection("acte")}
+                  onSave={() => handleSaveSection("acte")}
+                  disabled={isPublicShared}
+                />
               </div>
 
               <div className="font-sans divide-y divide-gray-100">
-                <AttributeRow label="Situație juridică" value="Intabulat, extras CF liber de sarcini, certificat energetic clasa A" />
-                <AttributeRow label="Disponibilitate" value="Imediată" />
-                <AttributeRow label="Finanțare" value="Credit bancar / fonduri proprii, înregistrare ANAF" />
-                <AttributeRow label="Disponibilitate" value="Contract pe minimum 12 luni, fără animale de companie (sau conform acordului părților)" isLast />
-              </div>
-            </div>
-
-            {/* #CARD "ACTE & TRANZACTIE" (Preț, TVA, Comision) */}
-            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                    <BadgePercent size={16} />
-                  </div>
-                  <div>
-                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                      PREȚ & COMISION
-                    </h2>
-                    <span className="text-[11px] text-gray-500 font-sans">
-                      Preț, TVA și Comision agenție
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="font-sans divide-y divide-gray-100">
-                <AttributeRow
-                  label="Preț"
-                  value={<span className="font-bold text-[#051D35] font-mono text-[13px]">{formattedPrice}</span>}
-                  copyValue={formattedPrice}
-                />
-                <AttributeRow label="TVA" value="Scutit de TVA / conform legislației în vigoare" />
-                <AttributeRow
-                  label="Comision"
-                  value={isRent ? "50% + TVA din contravaloarea primei chirii lunare" : "Comision standard agenție"}
-                  isLast
-                />
+                {renderRow("acte", "Situație juridică", "Intabulat, extras CF liber de sarcini, certificat energetic clasa A")}
+                {renderRow("acte", "Disponibilitate", "Imediată")}
+                {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii, înregistrare ANAF")}
+                {renderRow("acte", "Condiții contractuale", "Contract pe minimum 12 luni, fără animale de companie (sau conform acordului părților)", true)}
               </div>
             </div>
 
@@ -1313,162 +1724,28 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
           </div>
 
-          {/* Right Column: Sticky Sidebar with clear margin below sticky horizontal menu */}
-          <div className="lg:col-span-4 lg:sticky lg:top-[128px] space-y-5">
+          {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share */}
+          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-[44px]">
             
-            {/* AGENT CARD - Displays the real author who initiated importing the data */}
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
-              <div className="p-5 border-b border-gray-100">
-                <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-[#051D35] to-[#BE9662] text-white flex items-center justify-center font-bold text-base shadow-sm ring-2 ring-white shrink-0">
-                    {leadAuthor.name.charAt(0).toUpperCase()}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-[#BE9662] font-sans">
-                      Consilier Imobiliar
-                    </span>
-                    <h3 className="text-sm font-bold text-gray-900 truncate font-sans">
-                      {leadAuthor.name}
-                    </h3>
-                    <p className="text-[11px] text-gray-500 font-sans">
-                      {leadAuthor.role}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 mt-4 font-sans">
-                  <a
-                    href={`tel:${leadAuthor.phone.replace(/[^0-9+]/g, "")}`}
-                    className="h-8 px-2.5 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <Phone size={13} className="text-[#BE9662]" />
-                    <span>Sună Agentul</span>
-                  </a>
-
-                  <a
-                    href={`https://wa.me/4${leadAuthor.phone.replace(/[^0-9]/g, "")}?text=${encodeURIComponent(`Bună ziua, sunt interesat de proprietatea #${internalCode} - ${displayTitle}`)}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="h-8 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                  >
-                    <MessageSquare size={13} />
-                    <span>WhatsApp</span>
-                  </a>
-                </div>
-              </div>
-            </div>
-
-            {/* SOLICITĂ O VIZIONARE CARD - Standardized Card Header */}
-            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                    <Calendar size={16} />
-                  </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    SOLICITĂ O VIZIONARE
-                  </h2>
-                </div>
-              </div>
-
-              <div className="p-5 font-sans">
-                {formSent ? (
-                  <div className="p-4 rounded-lg bg-emerald-50 border border-emerald-200 text-center space-y-2">
-                    <CheckCircle2 size={24} className="text-emerald-600 mx-auto" />
-                    <p className="text-xs font-bold text-emerald-900">
-                      Mesajul a fost transmis cu succes!
-                    </p>
-                    <p className="text-[11px] text-emerald-700">
-                      Agentul imobiliar te va contacta în cel mai scurt timp posibil.
-                    </p>
-                  </div>
-                ) : (
-                  <form onSubmit={handleInquirySubmit} className="space-y-3 font-sans">
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
-                        Numele dumneavoastră *
-                      </label>
-                      <input 
-                        type="text" 
-                        required
-                        value={formName}
-                        onChange={(e) => setFormName(e.target.value)}
-                        placeholder="ex. Radu Popescu"
-                        className="w-full h-8 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors font-sans"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
-                        Număr telefon *
-                      </label>
-                      <input 
-                        type="tel" 
-                        required
-                        value={formPhone}
-                        onChange={(e) => setFormPhone(e.target.value)}
-                        placeholder="ex. 07xx xxx xxx"
-                        className="w-full h-8 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors font-mono"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
-                        Email (opțional)
-                      </label>
-                      <input 
-                        type="email" 
-                        value={formEmail}
-                        onChange={(e) => setFormEmail(e.target.value)}
-                        placeholder="nume@exemplu.ro"
-                        className="w-full h-8 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors font-sans"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1 font-sans">
-                        Mesaj pentru agent
-                      </label>
-                      <textarea 
-                        rows={3}
-                        value={formMessage}
-                        onChange={(e) => setFormMessage(e.target.value)}
-                        className="w-full p-2.5 text-xs bg-gray-50 border border-gray-200 rounded-md focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors resize-none leading-relaxed font-sans"
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={formSubmitting}
-                      className="w-full h-9 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-70 font-sans"
-                    >
-                      <Send size={13} className="text-[#BE9662]" />
-                      <span>{formSubmitting ? "Se trimite..." : "Trimite Mesaj"}</span>
-                    </button>
-                  </form>
-                )}
-              </div>
-            </div>
-
-            {/* OWNER CARD - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
+            {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
             {!isPublicShared && (
-              <div className="bg-white rounded-xl border border-amber-200 overflow-hidden shadow-xs font-sans">
-                <div className="px-6 py-4 bg-amber-50/80 border-b border-amber-200 flex items-center justify-between select-none">
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
+                <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-900 flex items-center justify-center font-bold">
+                    <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                       <User size={16} />
                     </div>
                     <div>
-                      <h2 className="text-xs font-bold text-amber-950 uppercase tracking-wider font-sans">
+                      <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                         DATE PROPRIETAR
                       </h2>
-                      <span className="text-[10px] text-amber-700 font-medium font-sans">
+                      <span className="text-[10px] text-gray-500 font-medium font-sans">
                         Privat CRM • Confidențial
                       </span>
                     </div>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-800 bg-amber-100/70 px-2 py-0.5 rounded border border-amber-300">
-                    <Lock size={10} />
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
+                    <Lock size={10} className="text-gray-400" />
                     Ascuns pe share
                   </span>
                 </div>
@@ -1538,6 +1815,282 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             )}
 
+            {/* PROPERTY PHOTOS CARD: Standardized Card Header & Inline Drag-and-Drop / Browse */}
+            <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
+              {/* Standardized Card Header */}
+              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                    <Camera size={16} />
+                  </div>
+                  <div>
+                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                      FOTOGRAFII IMOBIL
+                    </h2>
+                    <span className="text-[10px] text-gray-500 font-medium font-sans">
+                      {imagesList.length} {imagesList.length === 1 ? "fotografie" : "fotografii"}
+                    </span>
+                  </div>
+                </div>
+                <SectionEditButton
+                  isEditing={isEditingPhotos}
+                  isDirty={isPhotosDirty}
+                  onStartEdit={() => setIsEditingPhotos(true)}
+                  onCancel={handleCancelPhotos}
+                  onSave={handleSavePhotos}
+                />
+              </div>
+
+              {/* Card Content with Drag & Drop over card area */}
+              <div
+                className="relative p-5 space-y-3 font-sans select-none"
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.types.includes("Files")) setIsDraggingOverCard(true);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.types.includes("Files")) setIsDraggingOverCard(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setIsDraggingOverCard(false);
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDraggingOverCard(false);
+                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    handleAddPhotoFiles(e.dataTransfer.files);
+                  }
+                }}
+              >
+                {/* Drag and hold active overlay on content area */}
+                {isDraggingOverCard && (
+                  <div className="absolute inset-0 bg-[#051D35]/85 backdrop-blur-xs z-30 flex flex-col items-center justify-center text-white pointer-events-none p-4 text-center border-2 border-dashed border-[#BE9662] transition-all">
+                    <div className="w-12 h-12 rounded-full bg-[#BE9662]/20 text-[#BE9662] flex items-center justify-center mb-2 animate-bounce">
+                      <Upload size={24} />
+                    </div>
+                    <p className="text-sm font-bold tracking-wide">Plasează fotografiile aici</p>
+                    <p className="text-xs text-gray-300 mt-0.5">Trage fișierele pentru a le adăuga în galerie</p>
+                  </div>
+                )}
+
+                {/* Hidden file input for browsing */}
+                <input
+                  ref={photoFileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      handleAddPhotoFiles(e.target.files);
+                    }
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
+
+                {/* Main large photo carousel preview */}
+                <div className="relative aspect-[4/3] bg-gray-100 rounded-lg group select-none overflow-hidden border border-gray-200">
+                  {imagesList.length > 0 ? (
+                    <>
+                      <img 
+                        src={imagesList[carouselIndex] || imagesList[0]} 
+                        alt={`${displayTitle} - foto ${carouselIndex + 1}`}
+                        onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
+                        className="w-full h-full object-cover cursor-pointer group-hover:scale-102 transition-transform duration-300" 
+                        referrerPolicy="no-referrer"
+                      />
+
+                      {/* Counter Badge */}
+                      <div className="absolute top-3 right-3 flex items-center gap-1.5 z-10">
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
+                          className="h-6 px-2 rounded-md bg-black/65 hover:bg-black/85 text-white text-[11px] font-mono font-medium backdrop-blur-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Deschide galeria completă"
+                        >
+                          <Camera size={11} className="text-[#BE9662]" />
+                          <span>{carouselIndex + 1} / {imagesList.length}</span>
+                        </button>
+                      </div>
+
+                      {/* Prev / Next Buttons */}
+                      {imagesList.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCarouselIndex((prev) => (prev === 0 ? imagesList.length - 1 : prev - 1));
+                            }}
+                            className="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
+                            title="Fotografia anterioară"
+                          >
+                            <ChevronLeft size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCarouselIndex((prev) => (prev === imagesList.length - 1 ? 0 : prev + 1));
+                            }}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
+                            title="Fotografia următoare"
+                          >
+                            <ChevronRight size={16} />
+                          </button>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-1.5 p-4 text-center">
+                      <Camera size={32} className="text-gray-300" />
+                      <span className="text-xs">Nicio fotografie disponibilă</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Thumbnails Slots & Pagination */}
+                <div className="space-y-2 pt-1">
+                  {imagesList.length > 4 && (
+                    <div className="flex items-center justify-between text-[11px] text-gray-500 font-sans px-0.5">
+                      <span>Sloturi {slotPage * 4 + 1} - {Math.min((slotPage + 1) * 4, imagesList.length)} din {imagesList.length}</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={slotPage === 0}
+                          onClick={() => setSlotPage(p => Math.max(0, p - 1))}
+                          className="w-5 h-5 rounded flex items-center justify-center border border-gray-200 bg-white hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                          title="Sloturile anterioare"
+                        >
+                          <ChevronLeft size={12} />
+                        </button>
+                        <span className="font-mono text-[10px] px-1">{slotPage + 1}/{Math.ceil(imagesList.length / 4)}</span>
+                        <button
+                          type="button"
+                          disabled={(slotPage + 1) * 4 >= imagesList.length}
+                          onClick={() => setSlotPage(p => (p + 1) * 4 < imagesList.length ? p + 1 : p)}
+                          className="w-5 h-5 rounded flex items-center justify-center border border-gray-200 bg-white hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                          title="Sloturile următoare"
+                        >
+                          <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 5-slot grid: 4 photo slots + 1 fixed browse slot */}
+                  <div className="grid grid-cols-5 gap-2">
+                    {[0, 1, 2, 3].map((offset) => {
+                      const actualIndex = slotPage * 4 + offset;
+                      const imgUrl = imagesList[actualIndex];
+                      if (imgUrl) {
+                        const isSelected = carouselIndex === actualIndex;
+                        const isDragTarget = dropTargetIndex === actualIndex;
+                        return (
+                          <div
+                            key={actualIndex}
+                            draggable={true}
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData("text/plain", String(actualIndex));
+                              setDraggedSlotIndex(actualIndex);
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              if (draggedSlotIndex !== null && draggedSlotIndex !== actualIndex) {
+                                setDropTargetIndex(actualIndex);
+                              }
+                            }}
+                            onDragLeave={() => {
+                              if (dropTargetIndex === actualIndex) setDropTargetIndex(null);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const fromIdxStr = e.dataTransfer.getData("text/plain");
+                              const fromIdx = fromIdxStr !== "" ? parseInt(fromIdxStr, 10) : draggedSlotIndex;
+                              if (fromIdx !== null && !isNaN(fromIdx) && fromIdx !== actualIndex) {
+                                setImagesList(prev => {
+                                  const next = [...prev];
+                                  const [moved] = next.splice(fromIdx, 1);
+                                  next.splice(actualIndex, 0, moved);
+                                  return next;
+                                });
+                                setIsPhotosDirty(true);
+                                setIsEditingPhotos(true);
+                                setCarouselIndex(actualIndex);
+                              }
+                              setDraggedSlotIndex(null);
+                              setDropTargetIndex(null);
+                            }}
+                            onDragEnd={() => {
+                              setDraggedSlotIndex(null);
+                              setDropTargetIndex(null);
+                            }}
+                            onClick={() => setCarouselIndex(actualIndex)}
+                            className={`relative aspect-square rounded-lg overflow-hidden border cursor-pointer transition-all group ${
+                              isSelected 
+                                ? "border-[#BE9662] ring-2 ring-[#BE9662] shadow-xs" 
+                                : "border-gray-200 hover:border-gray-400"
+                            } ${isDragTarget ? "scale-105 ring-2 ring-[#051D35] border-[#051D35]" : ""}`}
+                            title={`Foto ${actualIndex + 1} (Trage pentru rearanjare)`}
+                          >
+                            <img
+                              src={imgUrl}
+                              alt={`Foto ${actualIndex + 1}`}
+                              className="w-full h-full object-cover select-none"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                            <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded bg-black/60 text-white font-mono text-[9px] pointer-events-none">
+                              {actualIndex + 1}
+                            </span>
+                            {isEditingPhotos && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setImagesList(prev => prev.filter((_, i) => i !== actualIndex));
+                                  setIsPhotosDirty(true);
+                                  if (carouselIndex >= imagesList.length - 1) {
+                                    setCarouselIndex(Math.max(0, imagesList.length - 2));
+                                  }
+                                }}
+                                className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xs"
+                                title="Șterge fotografia"
+                              >
+                                <X size={10} />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      }
+                      return (
+                        <div
+                          key={`empty-${offset}`}
+                          className="aspect-square rounded-lg border border-dashed border-gray-200 bg-gray-50/50 flex items-center justify-center text-gray-300"
+                        >
+                          <span className="text-[10px] font-mono text-gray-300">{slotPage * 4 + offset + 1}</span>
+                        </div>
+                      );
+                    })}
+
+                    {/* Slot 5: Fixed Browse Button */}
+                    <button
+                      type="button"
+                      onClick={() => photoFileInputRef.current?.click()}
+                      className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-[#BE9662] hover:bg-amber-50/20 text-gray-400 hover:text-[#BE9662] flex items-center justify-center transition-all cursor-pointer group shadow-2xs"
+                      title="Încarcă fotografii de pe dispozitiv"
+                    >
+                      <Plus size={20} className="group-hover:scale-125 group-hover:text-[#BE9662] transition-all duration-200" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* LINK ACCES PUBLIC - Standardized Card Header */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
@@ -1563,8 +2116,18 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </span>
                   <button
                     type="button"
+                    onClick={handleNativeShare}
+                    className="h-6 px-2.5 rounded text-[11px] font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-colors shrink-0 cursor-pointer font-sans flex items-center gap-1"
+                    title="Deschide aplicația nativă pentru distribuire"
+                  >
+                    <Share2 size={11} className="text-[#BE9662]" />
+                    <span>Distribuie</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleCopyLink}
-                    className="h-6 px-2.5 rounded text-[11px] font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-colors shrink-0 cursor-pointer font-sans"
+                    className="h-6 px-2.5 rounded text-[11px] font-medium bg-white text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors shrink-0 cursor-pointer font-sans"
+                    title="Copiază linkul"
                   >
                     {isCopied ? "Copiat" : "Copiază"}
                   </button>
@@ -1602,16 +2165,16 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
           <div className="flex-1 relative flex items-center justify-center p-4">
             <img 
-              src={allImages[selectedPhotoIndex]} 
+              src={imagesList[selectedPhotoIndex] || imagesList[0]} 
               alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
               className="max-h-[82vh] max-w-[90vw] object-contain rounded shadow-2xl transition-all"
               referrerPolicy="no-referrer"
             />
 
-            {allImages.length > 1 && (
+            {imagesList.length > 1 && (
               <button
                 type="button"
-                onClick={() => setSelectedPhotoIndex(prev => (prev === 0 ? allImages.length - 1 : prev - 1))}
+                onClick={() => setSelectedPhotoIndex(prev => (prev === 0 ? imagesList.length - 1 : prev - 1))}
                 className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
                 title="Fotografia anterioară"
               >
@@ -1619,10 +2182,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </button>
             )}
 
-            {allImages.length > 1 && (
+            {imagesList.length > 1 && (
               <button
                 type="button"
-                onClick={() => setSelectedPhotoIndex(prev => (prev === allImages.length - 1 ? 0 : prev + 1))}
+                onClick={() => setSelectedPhotoIndex(prev => (prev === imagesList.length - 1 ? 0 : prev + 1))}
                 className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
                 title="Următoarea fotografie"
               >
@@ -1632,7 +2195,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           </div>
 
           <div className="h-20 bg-black/60 border-t border-white/10 px-4 flex items-center justify-center gap-2 overflow-x-auto no-scrollbar shrink-0">
-            {allImages.map((img, idx) => (
+            {imagesList.map((img, idx) => (
               <button
                 key={idx}
                 type="button"
