@@ -637,6 +637,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   // Compile full image list
   const allImages = useMemo(() => {
+    // Priority 1: If lead has explicit images array, use it directly!
+    const directImages = (lead as any)?.images;
+    if (Array.isArray(directImages)) {
+      const sanitized = directImages
+        .map((item: any) => (typeof item === "string" ? item : item?.original))
+        .filter((u: any): u is string => typeof u === "string" && u.trim().length > 0);
+      return [...new Set(sanitized)];
+    }
+
     const images: string[] = [];
     if (lead?.coverImage && !images.includes(lead.coverImage)) {
       images.push(lead.coverImage);
@@ -814,7 +823,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     if (m) balcoaneFromText = m[1];
   }
   const balcoaneRaw = leadBalcoaneRaw || balcoaneFromText;
-  const balcoane = balcoaneRaw ? String(balcoaneRaw) : "-";
+  const balcoane = (balcoaneRaw && balcoaneRaw !== "0" && balcoaneRaw !== "-") ? String(balcoaneRaw) : "1";
 
   const leadStareRaw = (crmData?.utilitati?.finisaje?.stare && crmData.utilitati.finisaje.stare.length > 0)
     ? (Array.isArray(crmData.utilitati.finisaje.stare) ? crmData.utilitati.finisaje.stare.join(", ") : String(crmData.utilitati.finisaje.stare))
@@ -965,7 +974,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "An construcție": saved.configuratie?.["An construcție"] || anConstructie,
         "Număr camere": saved.configuratie?.["Număr camere"] || String(camere),
         "Număr băi": saved.configuratie?.["Număr băi"] || String(bai),
-        "Balcon": saved.configuratie?.["Balcon"] || String(balcoane),
+        "Balcoane": saved.configuratie?.["Balcoane"] || saved.configuratie?.["Balcon"] || String(balcoane),
         "Stare": saved.configuratie?.["Stare"] || stareInterior,
         ...(saved.configuratie || {})
       },
@@ -1089,18 +1098,89 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const handleSavePhotos = async () => {
     if (!lead?.id) return;
     try {
-      const newCover = imagesList[0] || "";
+      const cleanImages = imagesList.filter(img => typeof img === "string" && img.trim().length > 0);
+      const newCover = cleanImages[0] || "";
+      const structuredImages = cleanImages.map(url => ({ original: url }));
+
       const updates: any = {
         coverImage: newCover,
-        "extractedData.crmData.imagini.living": imagesList
+        images: cleanImages,
+        "extractedData.crmData.imagini": {
+          living: structuredImages,
+          camera: [],
+          bucatarie: [],
+          baie: [],
+          alteSpatii: []
+        }
       };
+
       await leadsService.updateLeadData(lead.id, updates);
+
+      // Mutate local lead object in place so that useMemo(allImages) immediately updates without resurrecting deleted images
+      (lead as any).images = cleanImages;
+      (lead as any).coverImage = newCover;
+      if (lead.extractedData?.crmData) {
+        lead.extractedData.crmData.imagini = {
+          living: structuredImages as any,
+          camera: [],
+          bucatarie: [],
+          baie: [],
+          alteSpatii: []
+        };
+      }
+
+      setImagesList(cleanImages);
       setIsEditingPhotos(false);
       setIsPhotosDirty(false);
       toast.success("Fotografiile au fost salvate cu succes!");
     } catch (err) {
       console.error("Failed to save photos:", err);
       toast.error("Eroare la salvarea fotografiilor.");
+    }
+  };
+
+  const handleDeleteCurrentPhoto = async (indexToDelete: number) => {
+    if (imagesList.length === 0) return;
+    const nextList = imagesList.filter((_, i) => i !== indexToDelete);
+    setImagesList(nextList);
+    if (selectedPhotoIndex >= nextList.length) {
+      setSelectedPhotoIndex(Math.max(0, nextList.length - 1));
+    }
+    if (carouselIndex >= nextList.length) {
+      setCarouselIndex(Math.max(0, nextList.length - 1));
+    }
+
+    if (!lead?.id) return;
+    try {
+      const newCover = nextList[0] || "";
+      const structuredImages = nextList.map(url => ({ original: url }));
+      const updates: any = {
+        coverImage: newCover,
+        images: nextList,
+        "extractedData.crmData.imagini": {
+          living: structuredImages,
+          camera: [],
+          bucatarie: [],
+          baie: [],
+          alteSpatii: []
+        }
+      };
+      await leadsService.updateLeadData(lead.id, updates);
+      (lead as any).images = nextList;
+      (lead as any).coverImage = newCover;
+      if (lead.extractedData?.crmData) {
+        lead.extractedData.crmData.imagini = {
+          living: structuredImages as any,
+          camera: [],
+          bucatarie: [],
+          baie: [],
+          alteSpatii: []
+        };
+      }
+      toast.success("Fotografia a fost ștearsă definitiv!");
+    } catch (err) {
+      console.error("Failed to delete photo:", err);
+      toast.error("Eroare la ștergerea fotografiei.");
     }
   };
 
@@ -1201,7 +1281,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         if (updatedSec["An construcție"]) updates["extractedData.crmData.caracteristici.alteDetalii.anConstructie"] = updatedSec["An construcție"];
         if (updatedSec["Număr camere"]) updates["extractedData.crmData.caracteristici.detalii.camere"] = updatedSec["Număr camere"];
         if (updatedSec["Număr băi"]) updates["extractedData.crmData.caracteristici.detalii.bai"] = updatedSec["Număr băi"];
-        if (updatedSec["Balcon"]) updates["extractedData.crmData.caracteristici.suprafete.balcoane"] = updatedSec["Balcon"];
+        if (updatedSec["Balcoane"] || updatedSec["Balcon"]) updates["extractedData.crmData.caracteristici.suprafete.balcoane"] = updatedSec["Balcoane"] || updatedSec["Balcon"];
         if (updatedSec["Stare"]) updates["extractedData.crmData.caracteristici.alteDetalii.stadiuConstructie"] = updatedSec["Stare"];
       } else if (sectionId === "tranzactie") {
         if (updatedSec["Preț"]) {
@@ -1239,15 +1319,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     const valStr = typeof currentVal === "string" ? currentVal.trim() : (currentVal == null ? "" : String(currentVal).trim());
 
     // User rule: Where there is a "-", if no data has been found on the url provided for crawling, just remove that row of data in the page.
-    if (!isSecEditing && (valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null")) {
+    // Exception: "An construcție" and "Balcoane" must ALWAYS appear in read mode as explicitly requested.
+    const isAlwaysVisibleInReadMode = label === "An construcție" || label === "Balcoane" || label === "Balcon";
+    if (!isSecEditing && !isAlwaysVisibleInReadMode && (valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null")) {
       return null;
     }
+
+    const displayValue = (valStr === "-" && !isAlwaysVisibleInReadMode) ? "" : currentVal;
 
     return (
       <AttributeRow
         key={label}
         label={label}
-        value={valStr === "-" ? "" : currentVal}
+        value={displayValue}
         copyValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
         isEditing={isSecEditing}
         editValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
@@ -1259,22 +1343,72 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     );
   };
 
+  // Subtitle items for public shared property header
+  const subtitleParts = useMemo(() => {
+    const parts: string[] = [];
+    
+    // 1. Area (zonă)
+    const area = addressDetails.zona && addressDetails.zona !== "Nespecificat" 
+      ? addressDetails.zona 
+      : (lead?.zone || "");
+    if (area && area !== "-") parts.push(area);
+    
+    // 2. Surface area (suprafață utilă)
+    const suprafata = sectionData["configuratie"]?.["Suprafață utilă"] || suprafataUtila;
+    if (suprafata && suprafata !== "-") parts.push(suprafata);
+    
+    // 3. Number of rooms (număr camere)
+    const nrCamere = sectionData["configuratie"]?.["Număr camere"] || camere;
+    if (nrCamere && nrCamere !== "-") {
+      const nr = parseInt(nrCamere, 10);
+      if (!isNaN(nr)) {
+        parts.push(nr === 1 ? "1 cameră" : `${nr} camere`);
+      } else {
+        parts.push(nrCamere);
+      }
+    }
+    
+    // 4. Block level out of total block levels (etaj)
+    const etajDisp = sectionData["configuratie"]?.["Etaj"] || etaj;
+    if (etajDisp && etajDisp !== "-") {
+      const lower = etajDisp.toLowerCase();
+      if (lower.startsWith("etaj") || lower.startsWith("parter") || lower.startsWith("demisol") || lower.startsWith("mansard")) {
+        parts.push(etajDisp);
+      } else {
+        parts.push(`Etaj ${etajDisp}`);
+      }
+    }
+    
+    return parts;
+  }, [addressDetails.zona, lead?.zone, sectionData, suprafataUtila, camere, etaj]);
+
+  const depositValue = useMemo(() => {
+    const rawGarantie = sectionData["acte"]?.["Garanție"] 
+      || crmData?.pret?.detalii?.garantie;
+    if (rawGarantie && rawGarantie !== "-") {
+      return rawGarantie;
+    }
+    return isRent ? "1 luna" : "";
+  }, [sectionData, crmData, isRent]);
+
   return (
     <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden">
       
       {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
       {showTopNavbar && (
         <nav className="h-[50px] shrink-0 bg-white border-b border-gray-200 select-none z-30">
-          <div className="w-full h-[50px] flex items-center justify-between p-0">
+          <div className={`w-full h-[50px] flex items-center justify-between p-0 ${isPublicShared ? "max-w-4xl mx-auto px-4 sm:px-6" : ""}`}>
             <div className="flex items-center h-full">
-              <a 
-                href="/"
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 select-none group"
-                title="Înapoi la pagina principală"
-              >
-                <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-              </a>
-              <div className="px-4 flex items-center gap-1.5 focus:outline-none">
+              {!isPublicShared && (
+                <a 
+                  href="/"
+                  className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 select-none group"
+                  title="Înapoi la pagina principală"
+                >
+                  <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+                </a>
+              )}
+              <div className={!isPublicShared ? "px-4 flex items-center gap-1.5 focus:outline-none" : "flex items-center gap-1.5 focus:outline-none"}>
                 <span className="font-extrabold text-base tracking-tight text-[#051D35] font-sans flex items-center">
                   brokr<span className="text-[#BE9662]">.</span>
                 </span>
@@ -1317,109 +1451,149 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         </nav>
       )}
 
+      {/* Property Title & Summary Header (Public Shared View Only - placed before jump links menu) */}
+      {isPublicShared && (
+        <div className="shrink-0 bg-white border-b border-gray-200 z-25">
+          <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 py-4 sm:py-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            {/* Left: Property title & subtitle */}
+            <div className="min-w-0 flex-1">
+              <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900 tracking-tight leading-snug">
+                {displayTitle}
+              </h1>
+              {subtitleParts.length > 0 && (
+                <p className="text-xs sm:text-[13px] text-gray-500 font-medium mt-1.5 flex items-center flex-wrap gap-2">
+                  {subtitleParts.map((part, idx) => (
+                    <React.Fragment key={idx}>
+                      {idx > 0 && <span className="text-gray-300">•</span>}
+                      <span>{part}</span>
+                    </React.Fragment>
+                  ))}
+                </p>
+              )}
+            </div>
+
+            {/* Right: Price/month & deposit required */}
+            <div className="shrink-0 text-left sm:text-right flex flex-col sm:items-end">
+              <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-[#051D35] font-mono tracking-tight leading-none">
+                {formattedPrice}
+              </div>
+              {depositValue && isRent && (
+                <div className="text-xs text-gray-500 font-sans mt-1">
+                  Garanție: {depositValue}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Horizontal Fixed Menu with Jump Links (Left) and Actions (Right) - Matching Cereri subheader style */}
       <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20 px-4 sm:px-6 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-        {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
-        <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
-          {NAV_SECTIONS.map((sect) => {
-            const Icon = sect.icon;
-            const isActive = activeSection === sect.id;
+        <div className={`w-full h-full flex items-center justify-between gap-3 shrink-0 ${isPublicShared ? "max-w-4xl mx-auto" : ""}`}>
+          {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
+          <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
+            {NAV_SECTIONS.map((sect) => {
+              const Icon = sect.icon;
+              const isActive = activeSection === sect.id;
 
-            return (
-              <button
-                key={sect.id}
+              return (
+                <button
+                  key={sect.id}
+                  type="button"
+                  onClick={() => scrollToSection(sect.id)}
+                  className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                    isActive
+                      ? "bg-[#051D35] text-white font-medium shadow-xs"
+                      : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                  }`}
+                >
+                  <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
+                  <span>{sect.label}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Right: Actions (matching Cereri action button style) */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* 1. Șterge */}
+            {!isPublicShared && onDelete && (
+              <button 
                 type="button"
-                onClick={() => scrollToSection(sect.id)}
-                className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
-                  isActive
-                    ? "bg-[#051D35] text-white font-medium shadow-xs"
-                    : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
-                }`}
+                onClick={onDelete}
+                className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer shadow-2xs group"
+                title="Mută în Șterse"
               >
-                <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
-                <span>{sect.label}</span>
+                <Trash2 size={14} className="text-gray-500 group-hover:text-red-600 transition-colors" />
               </button>
-            );
-          })}
-        </div>
+            )}
 
-        {/* Right: Actions (matching Cereri action button style) */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* 1. Șterge */}
-          {!isPublicShared && onDelete && (
-            <button 
+            {/* 2. Printează */}
+            <button
               type="button"
-              onClick={onDelete}
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer shadow-2xs group"
-              title="Mută în Șterse"
-            >
-              <Trash2 size={14} className="text-gray-500 group-hover:text-red-600 transition-colors" />
-            </button>
-          )}
-
-          {/* 2. Printează */}
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-            title="Tipărește oferta"
-          >
-            <Printer size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-          </button>
-
-          {/* 3. Distribuie */}
-          <button
-            type="button"
-            onClick={handleNativeShare}
-            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-            title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
-          >
-            <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-          </button>
-
-          {/* 4. Link extern */}
-          {lead?.url ? (
-            <a
-              href={lead.url}
-              target="_blank"
-              rel="noopener noreferrer"
+              onClick={handlePrint}
               className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-              title="Deschide anunțul sursă extern"
+              title="Tipărește oferta"
             >
-              <ExternalLink size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed shrink-0"
-              title="Fără link sursă extern"
-            >
-              <ExternalLink size={14} className="text-gray-300" />
+              <Printer size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
             </button>
-          )}
 
-          {/* 5. Activitate (PRIMARY) */}
-          {!isPublicShared && onAddActivity && (
+            {/* 3. Distribuie */}
             <button
               type="button"
-              onClick={onAddActivity}
-              className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
-              title="Adaugă activitate pentru această proprietate"
+              onClick={handleNativeShare}
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+              title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
             >
-              <Plus size={13} className="text-[#BE9662]" />
-              <span>Activitate</span>
+              <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
             </button>
-          )}
+
+            {/* 4. Link extern (only for internal CRM view, removed on shared external page) */}
+            {!isPublicShared && (
+              lead?.url ? (
+                <a
+                  href={lead.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+                  title="Deschide anunțul sursă extern"
+                >
+                  <ExternalLink size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+                </a>
+              ) : (
+                <button
+                  type="button"
+                  disabled
+                  className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed shrink-0"
+                  title="Fără link sursă extern"
+                >
+                  <ExternalLink size={14} className="text-gray-300" />
+                </button>
+              )
+            )}
+
+            {/* 5. Activitate (PRIMARY) */}
+            {!isPublicShared && onAddActivity && (
+              <button
+                type="button"
+                onClick={onAddActivity}
+                className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
+                title="Adaugă activitate pentru această proprietate"
+              >
+                <Plus size={13} className="text-[#BE9662]" />
+                <span>Activitate</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* Main Two-Column Layout (Scrollable container below the fixed headers) */}
+      {/* Main Layout (Scrollable container below the fixed headers) */}
       <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth">
-        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-full items-start">
+        <div className={isPublicShared ? "w-full min-h-full flex justify-center bg-gray-50/20" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
           
-          {/* Left Column: All Content Cards (8 cols on lg) with clean right border */}
-          <div className="lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200">
+          {/* Main Content Cards Column: Centered boxed container for public shared, 8 cols with right border for internal CRM */}
+          <div className={isPublicShared ? "max-w-4xl w-full p-4 sm:p-6 lg:p-8 space-y-6" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200"}>
 
             {/* #CARD 1: "PREȚ" (First card in Column 1 per user request) */}
             <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
@@ -1552,7 +1726,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     {renderRow("configuratie", "An construcție", anConstructie)}
                     {renderRow("configuratie", "Număr camere", String(camere))}
                     {renderRow("configuratie", "Număr băi", String(bai))}
-                    {renderRow("configuratie", "Balcon", String(balcoane))}
+                    {renderRow("configuratie", "Balcoane", String(balcoane))}
                     {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
                   </div>
                 </div>
@@ -1812,11 +1986,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
           </div>
 
-          {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share */}
-          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-0">
-            
-            {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
-            {!isPublicShared && (
+          {/* Right Column: Sticky Sidebar with Owner Card, Property Carousel & Public Share Link - STRICTLY HIDDEN on public shared page */}
+          {!isPublicShared && (
+            <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-0">
+              
+              {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM */}
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
                 <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                   <div className="flex items-center gap-2.5">
@@ -1901,7 +2075,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </p>
                 </div>
               </div>
-            )}
 
             {/* PROPERTY PHOTOS CARD: Standardized Card Header & Inline Drag-and-Drop / Browse */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
@@ -1991,6 +2164,26 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         className="w-full h-full object-cover cursor-pointer group-hover:scale-102 transition-transform duration-300" 
                         referrerPolicy="no-referrer"
                       />
+
+                      {/* Delete Current Photo Button in Edit Mode */}
+                      {isEditingPhotos && imagesList.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setImagesList(prev => prev.filter((_, i) => i !== carouselIndex));
+                            setIsPhotosDirty(true);
+                            if (carouselIndex >= imagesList.length - 1) {
+                              setCarouselIndex(Math.max(0, imagesList.length - 2));
+                            }
+                          }}
+                          className="absolute top-3 left-3 h-6 px-2.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-[11px] font-medium flex items-center gap-1 shadow-md transition-colors cursor-pointer z-10"
+                          title="Șterge fotografia curentă din galerie"
+                        >
+                          <Trash2 size={11} />
+                          <span>Șterge foto</span>
+                        </button>
+                      )}
 
                       {/* Counter Badge */}
                       <div className="absolute top-3 right-3 flex items-center gap-1.5 z-10">
@@ -2146,10 +2339,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                                     setCarouselIndex(Math.max(0, imagesList.length - 2));
                                   }
                                 }}
-                                className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xs"
-                                title="Șterge fotografia"
+                                className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center opacity-90 hover:opacity-100 hover:scale-110 transition-all cursor-pointer shadow-md z-10"
+                                title="Elimină fotografia din galerie"
                               >
-                                <X size={10} />
+                                <X size={12} />
                               </button>
                             )}
                           </div>
@@ -2222,8 +2415,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
             </div>
-
           </div>
+        )}
 
         </div>
       </main>
@@ -2241,14 +2434,28 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </span>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setIsGalleryOpen(false)}
-              className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
-              title="Închide galeria (Esc)"
-            >
-              <X size={22} />
-            </button>
+            <div className="flex items-center gap-2">
+              {!isPublicShared && imagesList.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => handleDeleteCurrentPhoto(selectedPhotoIndex)}
+                  className="px-2.5 py-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
+                  title="Șterge definitiv această fotografie din galerie"
+                >
+                  <Trash2 size={13} />
+                  <span>Șterge foto</span>
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsGalleryOpen(false)}
+                className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
+                title="Închide galeria (Esc)"
+              >
+                <X size={22} />
+              </button>
+            </div>
           </div>
 
           <div className="flex-1 relative flex items-center justify-center p-4">

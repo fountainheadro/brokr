@@ -124,6 +124,7 @@ export interface Lead {
   status: LeadStatus;
   leadType?: LeadRole | string;
   coverImage?: string;
+  images?: string[];
   notes?: string;
   extractedData?: ExtractionResult;
   createdByName?: string;

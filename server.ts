@@ -640,7 +640,10 @@ Returnează un JSON strict cu următoarele chei:
           "favicon", "button", "arrow", "pin", "pixel", "tracking", "analytics",
           "user", "profile", "agent", "broker", "agentie", "dezvoltator", "developer",
           "sponsor", "promovat", "blank", "default", "spinner", "loader", ".svg",
-          "schita", "plan", "schiță", "document", "pdf", ".gif", "thumb_", "small_"
+          "schita", "plan", "schiță", "document", "pdf", ".gif", "thumb_", "small_",
+          "150x150", "75x75", "100x100", "160x120", "200x150", "50x50", "60x60", "32x32",
+          "card_thumb", "list_thumb", "mini_thumb", "recommend", "similar", "related",
+          "header", "footer", "navbar", "ad-banner"
         ];
         return badPatterns.some(p => lower.includes(p));
       };
@@ -753,7 +756,9 @@ Returnează un JSON strict cu următoarele chei:
           "[data-cy=\"similar-ads\"]", "[data-cy=\"recommended-ads\"]",
           ".ad-carousel-similar", ".similar-listings", ".related-properties",
           ".cross-selling", ".cross-sell", ".banner", ".ad-banner", ".header-logo",
-          ".site-header", ".site-footer", ".navbar", ".menu", ".sidebar", ".contact-agent-section"
+          ".site-header", ".site-footer", ".navbar", ".menu", ".sidebar", ".contact-agent-section",
+          "[data-testid*=\"similar\"]", "[data-testid*=\"recommend\"]", "[data-testid*=\"promoted\"]",
+          "[data-cy*=\"similar\"]", "[data-cy*=\"recommend\"]", ".cards-container", ".slider-cards"
         ];
         unrelatedSelectors.forEach(selector => {
           $(selector).remove();
@@ -1246,6 +1251,18 @@ Returnează un JSON strict cu următoarele chei:
         if (aMatch) anConstructie = aMatch[1];
       }
 
+      let balcoane = "";
+      if (Array.isArray(nextAdData?.parameters)) {
+        for (const p of nextAdData.parameters) {
+          if (p.key === "balconies_num" || p.key === "balcony" || p.key === "balcoane") balcoane = String(p.value || "");
+        }
+      }
+      if (!balcoane) {
+        const bMatch = text.match(/(\d+)\s*balco?ane?/i);
+        if (bMatch) balcoane = bMatch[1];
+      }
+      const balcoaneFinal = balcoane || "1";
+
       const numUtila = parseFloat(suprafataUtila) || 55;
       const mult = (categoria === "Apartament" || categoria === "Casa/Vila") ? 1.2 : 1.1;
       const suprafataConstruita = Math.round(numUtila * mult).toString();
@@ -1440,11 +1457,11 @@ Returnează un JSON strict cu următoarele chei:
           turVirtual: ""
         },
         imagini: {
-          living: [],
+          living: uniqueImages.map(img => ({ original: img })),
           bucatarie: [],
           camera: [],
           baie: [],
-          alteSpatii: uniqueImages.map(img => ({ original: img }))
+          alteSpatii: []
         }
       };
 
@@ -1473,7 +1490,7 @@ Returnează un JSON strict cu următoarele chei:
           "An construcție": anConstructie || "-",
           "Număr camere": camere ? String(camere) : "-",
           "Număr băi": "1",
-          "Balcon": "-",
+          "Balcoane": balcoaneFinal,
           "Stare": "Buna"
         },
         finisaje: {

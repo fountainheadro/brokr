@@ -75,6 +75,9 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
         status: "Noi",
         leadType: leadRole,
         coverImage: coverImage || null,
+        images: Array.isArray(crawlData.images) && crawlData.images.length > 0 
+          ? crawlData.images 
+          : (coverImage ? [coverImage] : []),
         createdByName: creatorName,
         createdByEmail: creatorEmail,
         author: creatorName,
