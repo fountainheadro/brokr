@@ -71,8 +71,7 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "bloc", label: "Bloc", icon: Building2 },
   { id: "imprejurimi", label: "Împrejurimi", icon: Compass },
   { id: "transport", label: "Transport", icon: Bus },
-  { id: "parcare", label: "Parcare", icon: Car },
-  { id: "acte", label: "Condiții", icon: ShieldCheck }
+  { id: "parcare", label: "Parcare", icon: Car }
 ];
 
 const COMPARTIMENTARE_OPTIONS = ["Decomandat", "Semidecomandat", "Nedecomandat", "Circular", "Open Space"];
@@ -331,16 +330,23 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onDelete,
   onAddActivity
 }) => {
-  const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
+  const navSections = useMemo<NavSection[]>(() => {
+    if (isPublicShared) {
+      return [{ id: "poze", label: "Poze", icon: Camera }, ...NAV_SECTIONS];
+    }
+    return NAV_SECTIONS;
+  }, [isPublicShared]);
+
+  const [activeSection, setActiveSection] = useState<string>(isPublicShared ? "poze" : (NAV_SECTIONS[0]?.id || "tranzactie"));
   const [isCopied, setIsCopied] = useState<boolean>(false);
   
-  // Ensure default active tab is always the first in jump links on mount or property change
+  // Ensure default active tab is always the first in jump links on mount or property change (Poze on public shared)
   useEffect(() => {
-    setActiveSection(NAV_SECTIONS[0]?.id || "tranzactie");
+    setActiveSection(isPublicShared ? "poze" : (navSections[0]?.id || "tranzactie"));
     if (mainScrollRef.current) {
       mainScrollRef.current.scrollTop = 0;
     }
-  }, [lead?.id]);
+  }, [lead?.id, isPublicShared, navSections]);
   
   // Persistent favorite stored in browser localStorage
   const favoriteStorageKey = `brokr_fav_prop_${lead.propertyId || lead.id || "default"}`;
@@ -409,13 +415,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       // Check if user is scrolled to the absolute bottom of the container
       const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
       if (isAtBottom) {
-        setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
+        setActiveSection(navSections[navSections.length - 1].id);
         return;
       }
 
       // If at or near the top of the container, force the first jump link tab
       if (scrollContainer.scrollTop <= 40) {
-        setActiveSection(NAV_SECTIONS[0].id);
+        setActiveSection(navSections[0].id);
         return;
       }
 
@@ -424,8 +430,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       const triggerLine = containerTop + 70;
 
       // Find the last section whose top has reached or passed the trigger line
-      let currentSectionId = NAV_SECTIONS[0].id;
-      for (const sect of NAV_SECTIONS) {
+      let currentSectionId = navSections[0].id;
+      for (const sect of navSections) {
         const el = document.getElementById(sect.id);
         if (el) {
           const rect = el.getBoundingClientRect();
@@ -446,7 +452,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         clearTimeout(scrollTimeoutRef.current);
       }
     };
-  }, []);
+  }, [navSections]);
 
   const toggleCard = (cardId: string) => {
     setCollapsedCards(prev => ({
@@ -1060,6 +1066,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Preț": saved.tranzactie?.["Preț"] || formattedPrice,
         "TVA": saved.tranzactie?.["TVA"] || "Scutit de TVA / conform legislației în vigoare",
         "Comision": saved.tranzactie?.["Comision"] || defaultCommission,
+        "Condiții contractuale": saved.tranzactie?.["Condiții contractuale"] || saved.acte?.["Condiții contractuale"] || "12 luni",
+        "Avans": saved.tranzactie?.["Avans"] || saved.acte?.["Avans"] || "1 luna",
+        "Garanție": saved.tranzactie?.["Garanție"] || saved.acte?.["Garanție"] || "1 luna",
+        "Situație juridică": saved.tranzactie?.["Situație juridică"] || saved.acte?.["Situație juridică"] || "Fara probleme",
+        "Disponibilitate": saved.tranzactie?.["Disponibilitate"] || saved.acte?.["Disponibilitate"] || "Imediată",
+        "Finanțare": saved.tranzactie?.["Finanțare"] || saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii",
         ...(saved.tranzactie || {})
       }
     };
@@ -1226,17 +1238,30 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   const handleStartEditSection = (sectionId: string) => {
     setEditingSection(sectionId);
-    setDraftSectionData(prev => ({
-      ...prev,
-      [sectionId]: { ...(sectionData[sectionId] || {}) }
-    }));
+    if (sectionId === "mobilare_dotari") {
+      setDraftSectionData(prev => ({
+        ...prev,
+        mobilare: { ...(sectionData["mobilare"] || {}) },
+        dotari: { ...(sectionData["dotari"] || {}) }
+      }));
+    } else {
+      setDraftSectionData(prev => ({
+        ...prev,
+        [sectionId]: { ...(sectionData[sectionId] || {}) }
+      }));
+    }
   };
 
   const handleCancelEditSection = (sectionId: string) => {
     setEditingSection(null);
     setDraftSectionData(prev => {
       const copy = { ...prev };
-      delete copy[sectionId];
+      if (sectionId === "mobilare_dotari") {
+        delete copy["mobilare"];
+        delete copy["dotari"];
+      } else {
+        delete copy[sectionId];
+      }
       return copy;
     });
   };
@@ -1253,6 +1278,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   const isSectionDirty = (sectionId: string) => {
     if (editingSection !== sectionId) return false;
+    if (sectionId === "mobilare_dotari") {
+      const mDraft = draftSectionData["mobilare"];
+      const mOrig = sectionData["mobilare"] || {};
+      const mDirty = mDraft ? Object.keys(mDraft).some(k => (mDraft[k] ?? "") !== (mOrig[k] ?? "")) : false;
+      const dDraft = draftSectionData["dotari"];
+      const dOrig = sectionData["dotari"] || {};
+      const dDirty = dDraft ? Object.keys(dDraft).some(k => (dDraft[k] ?? "") !== (dOrig[k] ?? "")) : false;
+      return mDirty || dDirty;
+    }
     const currentDraft = draftSectionData[sectionId];
     if (!currentDraft) return false;
     const original = sectionData[sectionId] || {};
@@ -1260,6 +1294,32 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   const handleSaveSection = async (sectionId: string) => {
+    if (sectionId === "mobilare_dotari") {
+      const updatedMob = { ...(draftSectionData["mobilare"] || sectionData["mobilare"]) };
+      const updatedDot = { ...(draftSectionData["dotari"] || sectionData["dotari"]) };
+      const nextSectionData = {
+        ...sectionData,
+        mobilare: updatedMob,
+        dotari: updatedDot
+      };
+      setSectionData(nextSectionData);
+      setEditingSection(null);
+
+      if (lead?.id) {
+        try {
+          const updates: any = {
+            "extractedData.presentationSections": nextSectionData
+          };
+          await leadsService.updateLeadData(lead.id, updates);
+          toast.success("Modificările au fost salvate cu succes!");
+        } catch (e) {
+          console.error("Failed to save inline changes:", e);
+          toast.error("Eroare la salvarea modificărilor.");
+        }
+      }
+      return;
+    }
+
     const updatedSec = { ...(draftSectionData[sectionId] || sectionData[sectionId]) };
     const nextSectionData = {
       ...sectionData,
@@ -1288,6 +1348,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           updates["price"] = updatedSec["Preț"];
           updates["extractedData.crmData.pret.detalii.pret"] = updatedSec["Preț"];
         }
+        if (updatedSec["Garanție"]) {
+          updates["extractedData.crmData.pret.detalii.garantie"] = updatedSec["Garanție"];
+        }
+        if (updatedSec["Avans"]) {
+          updates["extractedData.crmData.pret.detalii.avans"] = updatedSec["Avans"];
+        }
       } else if (sectionId === "introducere") {
         if (updatedSec["summary"]) {
           updates["extractedData.crmData.descriere.continut"] = updatedSec["summary"];
@@ -1310,7 +1376,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     multiline: boolean = false,
     options?: string[]
   ) => {
-    const isSecEditing = editingSection === sectionId;
+    const isSecEditing = editingSection === sectionId || (editingSection === "mobilare_dotari" && (sectionId === "mobilare" || sectionId === "dotari"));
     const originalVal = sectionData[sectionId]?.[label] ?? fallbackVal;
     const currentVal = isSecEditing 
       ? (draftSectionData[sectionId]?.[label] ?? originalVal) 
@@ -1501,19 +1567,29 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     return null;
   }, [isRent, crmData, lead?.price, sectionData, suprafataUtila]);
 
-  // Rent guarantees
-  const rentGuarantees = useMemo(() => {
+  // Clean price number extracted strictly as digits/separators to prevent duplicate currencies or units
+  const cleanPriceNumber = useMemo(() => {
+    const rawVal = crmData?.pret?.detalii?.pret || lead?.price || "500";
+    const cleaned = String(rawVal)
+      .replace(/[^\d.,\s]/g, "")
+      .trim();
+    return cleaned || "500";
+  }, [crmData?.pret?.detalii?.pret, lead?.price]);
+
+  // Clean rent guarantees (e.g. "1 luna garantie", "2 luni garantie")
+  const cleanGuaranteeText = useMemo(() => {
     if (!isRent) return null;
-    const rawGarantie = sectionData["acte"]?.["Garanție"] 
+    const rawGarantie = sectionData["tranzactie"]?.["Garanție"]
+      || sectionData["acte"]?.["Garanție"] 
       || crmData?.pret?.detalii?.garantie;
     if (rawGarantie && rawGarantie !== "-" && rawGarantie !== "") {
       const str = String(rawGarantie).trim();
       if (str.toLowerCase().includes("garan")) {
         return str;
       }
-      return `${str} garanție`;
+      return `${str} garantie`;
     }
-    return "1 lună garanție";
+    return "1 luna garantie";
   }, [isRent, sectionData, crmData]);
 
   // Sync document title with generated title on public shared page
@@ -1590,7 +1666,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         <div className={`w-full h-full flex items-center justify-between gap-3 shrink-0 ${isPublicShared ? "max-w-4xl mx-auto" : ""}`}>
           {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
           <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
-            {NAV_SECTIONS.map((sect) => {
+            {navSections.map((sect) => {
               const Icon = sect.icon;
               const isActive = activeSection === sect.id;
 
@@ -1677,7 +1753,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             {isPublicShared && (
               <div className="space-y-4">
                 {/* 1. Zona de poze sub forma celor atașate */}
-                <div className="w-full rounded-2xl overflow-hidden border border-gray-200 bg-gray-100 shadow-xs">
+                <div id="poze" className="w-full rounded-2xl overflow-hidden border border-gray-200 bg-gray-100 shadow-xs scroll-mt-28 sm:scroll-mt-32">
                   {imagesList.length === 0 ? (
                     <div className="w-full h-64 sm:h-80 flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
                       <Camera size={40} className="text-gray-300" />
@@ -1850,34 +1926,27 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   )}
                 </div>
 
-                {/* 2. Titlu imediat sub poze, cu prețul scris mai mare dar nu foarte mare și preț/mp (vânzări) sau număr garanții (închirieri) */}
+                {/* 2. Titlu imediat sub poze, cu subtitlu (font-size 14px, font-weight 400) și preț (font-size 18px, font-weight 700) */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5 sm:p-6 shadow-xs font-sans">
-                  <h1 className="text-sm sm:text-base md:text-[17px] font-bold text-gray-900 tracking-tight leading-snug">
+                  <h1 className="text-[14px] font-normal text-gray-700 tracking-tight leading-snug">
                     {generatedTitle}
                   </h1>
-                  <div className="mt-2.5 flex items-baseline gap-3 flex-wrap">
-                    <span className="text-2xl sm:text-3xl font-extrabold text-gray-950 font-mono tracking-tight">
-                      {formattedPrice}
-                    </span>
+                  <div className="mt-2 text-[18px] font-bold text-gray-900 font-sans tracking-tight">
                     {isRent ? (
-                      rentGuarantees && (
-                        <span className="text-xs sm:text-sm font-semibold text-gray-600 font-sans">
-                          {rentGuarantees}
-                        </span>
-                      )
+                      <span>
+                        {cleanPriceNumber} eur / luna{cleanGuaranteeText ? ` (  ${cleanGuaranteeText} )` : ""}
+                      </span>
                     ) : (
-                      pricePerSqm && (
-                        <span className="text-xs sm:text-sm font-semibold text-gray-500 font-mono">
-                          {pricePerSqm}
-                        </span>
-                      )
+                      <span>
+                        {cleanPriceNumber} eur{pricePerSqm ? `   ${pricePerSqm}` : ""}
+                      </span>
                     )}
                   </div>
                 </div>
               </div>
             )}
 
-            {/* #CARD 1: "PREȚ" (First card in Column 1 per user request) */}
+            {/* #CARD 1: "PREȚ & CONDIȚII" */}
             <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
@@ -1886,10 +1955,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </div>
                   <div>
                     <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                      PREȚ
+                      PREȚ &amp; CONDIȚII
                     </h2>
                     <span className="text-[11px] text-gray-500 font-sans">
-                      Preț, TVA și Comision agenție
+                      Preț, comision și condiții contractuale
                     </span>
                   </div>
                 </div>
@@ -1904,10 +1973,30 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="font-sans divide-y divide-gray-100">
-                {renderRow("tranzactie", "Preț", formattedPrice)}
-                {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
-                {renderRow("tranzactie", "Comision", defaultCommission, true)}
+              <div className="font-sans grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
+                {/* Coloana 1: Preț */}
+                <div className="divide-y divide-gray-100">
+                  {renderRow("tranzactie", "Preț", formattedPrice)}
+                  {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
+                  {renderRow("tranzactie", "Comision", defaultCommission, true)}
+                </div>
+
+                {/* Coloana 2: Condiții */}
+                <div className="divide-y divide-gray-100">
+                  {isRent ? (
+                    <>
+                      {renderRow("tranzactie", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
+                      {renderRow("tranzactie", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
+                      {renderRow("tranzactie", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
+                    </>
+                  ) : (
+                    <>
+                      {renderRow("tranzactie", "Situație juridică", "Fara probleme")}
+                      {renderRow("tranzactie", "Disponibilitate", "Imediată")}
+                      {renderRow("tranzactie", "Finanțare", "Credit bancar / fonduri proprii", true)}
+                    </>
+                  )}
+                </div>
               </div>
             </div>
 
@@ -2043,62 +2132,56 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </div>
                 </div>
 
-                {/* -Subcategorie "Mobilare" */}
+                {/* -Subcategorie "Mobilare & Dotări" (Comasate în același tabel) */}
                 <div>
                   <SubCategoryHeader 
-                    title="Mobilare" 
+                    title="Mobilare & Dotări" 
                     actions={
                       <SectionEditButton
-                        isEditing={editingSection === "mobilare"}
-                        isDirty={isSectionDirty("mobilare")}
-                        onStartEdit={() => handleStartEditSection("mobilare")}
-                        onCancel={() => handleCancelEditSection("mobilare")}
-                        onSave={() => handleSaveSection("mobilare")}
+                        isEditing={editingSection === "mobilare_dotari"}
+                        isDirty={isSectionDirty("mobilare_dotari")}
+                        onStartEdit={() => handleStartEditSection("mobilare_dotari")}
+                        onCancel={() => handleCancelEditSection("mobilare_dotari")}
+                        onSave={() => handleSaveSection("mobilare_dotari")}
                         disabled={isPublicShared}
                       />
                     }
                   />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
-                    {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
-                    {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
-                    {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
-                    {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
-                    {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
-                    {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
-                    {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
-                    {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
-                    {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
-                    {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
-                  </div>
-                </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
+                    {/* Coloana 1: Mobilare */}
+                    <div className="divide-y divide-gray-100">
+                      <div className="px-5 py-2 bg-gray-50/60 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                        Mobilare
+                      </div>
+                      {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
+                      {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
+                      {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
+                      {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
+                      {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
+                      {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
+                      {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
+                      {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
+                      {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
+                      {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
+                      {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
+                    </div>
 
-                {/* -Subcategorie "Dotari" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Dotări" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "dotari"}
-                        isDirty={isSectionDirty("dotari")}
-                        onStartEdit={() => handleStartEditSection("dotari")}
-                        onCancel={() => handleCancelEditSection("dotari")}
-                        onSave={() => handleSaveSection("dotari")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("dotari", "Living", "aer condiționat, smart TV")}
-                    {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
-                    {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
-                    {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
-                    {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
-                    {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
-                    {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
-                    {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
-                    {renderRow("dotari", "Hol", "interfon")}
-                    {renderRow("dotari", "Altele", "-", true)}
+                    {/* Coloana 2: Dotări */}
+                    <div className="divide-y divide-gray-100">
+                      <div className="px-5 py-2 bg-gray-50/60 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                        Dotări
+                      </div>
+                      {renderRow("dotari", "Living", "aer condiționat, smart TV")}
+                      {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
+                      {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
+                      {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
+                      {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
+                      {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
+                      {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
+                      {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
+                      {renderRow("dotari", "Hol", "interfon")}
+                      {renderRow("dotari", "Altele", "-", true)}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2224,44 +2307,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
-            {/* #CARD "CONDIȚII" */}
-            <div id="acte" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                    <ShieldCheck size={16} />
-                  </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    CONDIȚII
-                  </h2>
-                </div>
-
-                <SectionEditButton
-                  isEditing={editingSection === "acte"}
-                  isDirty={isSectionDirty("acte")}
-                  onStartEdit={() => handleStartEditSection("acte")}
-                  onCancel={() => handleCancelEditSection("acte")}
-                  onSave={() => handleSaveSection("acte")}
-                  disabled={isPublicShared}
-                />
-              </div>
-
-              <div className="font-sans divide-y divide-gray-100">
-                {isRent ? (
-                  <>
-                    {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
-                    {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
-                    {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
-                  </>
-                ) : (
-                  <>
-                    {renderRow("acte", "Situație juridică", "Fara probleme")}
-                    {renderRow("acte", "Disponibilitate", "Imediată")}
-                    {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
-                  </>
-                )}
-              </div>
-            </div>
 
             {/* Generous bottom spacing ensuring the last cards can scroll to the top under the jump links bar */}
             <div className="h-[60vh] min-h-[480px] pointer-events-none" aria-hidden="true" />
