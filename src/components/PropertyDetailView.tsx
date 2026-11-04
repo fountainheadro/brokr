@@ -1343,53 +1343,187 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     );
   };
 
-  // Subtitle items for public shared property header
-  const subtitleParts = useMemo(() => {
+  // Generated page title according to exact user specification:
+  // Order: numar camere | numar bai daca sunt mai mult de 1 | metri patrati | Distanta Metrou daca este cazul | Distanta Parc daca este cazul | Mobilat sau nemobilat | Utilat daca este cazul | obiectiv din zona
+  // Max 70 characters in total
+  const generatedTitle = useMemo(() => {
     const parts: string[] = [];
-    
-    // 1. Area (zonă)
-    const area = addressDetails.zona && addressDetails.zona !== "Nespecificat" 
-      ? addressDetails.zona 
-      : (lead?.zone || "");
-    if (area && area !== "-") parts.push(area);
-    
-    // 2. Surface area (suprafață utilă)
-    const suprafata = sectionData["configuratie"]?.["Suprafață utilă"] || suprafataUtila;
-    if (suprafata && suprafata !== "-") parts.push(suprafata);
-    
-    // 3. Number of rooms (număr camere)
-    const nrCamere = sectionData["configuratie"]?.["Număr camere"] || camere;
-    if (nrCamere && nrCamere !== "-") {
-      const nr = parseInt(nrCamere, 10);
-      if (!isNaN(nr)) {
-        parts.push(nr === 1 ? "1 cameră" : `${nr} camere`);
-      } else {
-        parts.push(nrCamere);
-      }
-    }
-    
-    // 4. Block level out of total block levels (etaj)
-    const etajDisp = sectionData["configuratie"]?.["Etaj"] || etaj;
-    if (etajDisp && etajDisp !== "-") {
-      const lower = etajDisp.toLowerCase();
-      if (lower.startsWith("etaj") || lower.startsWith("parter") || lower.startsWith("demisol") || lower.startsWith("mansard")) {
-        parts.push(etajDisp);
-      } else {
-        parts.push(`Etaj ${etajDisp}`);
-      }
-    }
-    
-    return parts;
-  }, [addressDetails.zona, lead?.zone, sectionData, suprafataUtila, camere, etaj]);
 
-  const depositValue = useMemo(() => {
+    // 1. Numar camere (ex: "2 cam", "1 cam", "3 cam")
+    const nrCamVal = sectionData["configuratie"]?.["Număr camere"] || camere;
+    const nrCamMatch = String(nrCamVal || "").match(/\d+/);
+    if (nrCamMatch) {
+      parts.push(`${nrCamMatch[0]} cam`);
+    } else if (String(nrCamVal || "").toLowerCase().includes("garsonier") || String(nrCamVal || "").toLowerCase().includes("studio")) {
+      parts.push("1 cam");
+    } else {
+      parts.push("2 cam");
+    }
+
+    // 2. Numar bai daca sunt mai mult de 1 (daca e 1 sau mai putin, se omite complet)
+    const nrBaiVal = sectionData["configuratie"]?.["Număr băi"] || bai;
+    const parsedBai = parseInt(String(nrBaiVal || "").match(/\d+/)?.[0] || "0", 10);
+    if (parsedBai > 1) {
+      parts.push(`${parsedBai} băi`);
+    }
+
+    // 3. Metri patrati (ex: "52mp")
+    const suprafataVal = sectionData["configuratie"]?.["Suprafață utilă"] || suprafataUtila;
+    const mpMatch = String(suprafataVal || "").match(/\d+/);
+    if (mpMatch) {
+      parts.push(`${mpMatch[0]}mp`);
+    }
+
+    // 4. Distanta Metrou daca este cazul (ex: "Metrou 50 metri", "Metrou 50m", "Metrou 5 min", "Metrou Teclu")
+    let metrouFragment = "";
+    const metroSources = [
+      sectionData["transport"]?.["Metrou"],
+      rawDescText
+    ].filter(Boolean).join(" ");
+    
+    const mDist = metroSources.match(/(?:la\s*)?(\d+)\s*(?:m|metri)\s*(?:de)?\s*metrou/i)
+      || metroSources.match(/metrou\s*(?:la\s*)?(\d+)\s*(?:m|metri)/i);
+    if (mDist) {
+      metrouFragment = `Metrou ${mDist[1]}m`;
+    } else {
+      const mMin = metroSources.match(/(?:la\s*)?(\d+)\s*(?:min|minute)\s*(?:de)?\s*metrou/i)
+        || metroSources.match(/metrou\s*(?:la\s*)?(\d+)\s*(?:min|minute)/i);
+      if (mMin) {
+        metrouFragment = `Metrou ${mMin[1]} min`;
+      } else {
+        const mStation = metroSources.match(/metrou\s+([A-ZĂÎÂȘȚ][a-zăîâșț0-9]+)/);
+        if (mStation && !["în", "in", "apropiere", "zona", "stație", "statie"].includes(mStation[1].toLowerCase())) {
+          metrouFragment = `Metrou ${mStation[1]}`;
+        }
+      }
+    }
+    if (metrouFragment) {
+      parts.push(metrouFragment);
+    }
+
+    // 5. Distanta Parc daca este cazul (ex: "Parc 200m", "Parc IOR", "Parc 5 min")
+    let parcFragment = "";
+    const parcSources = [
+      sectionData["imprejurimi"]?.["Relaxare"],
+      rawDescText
+    ].filter(Boolean).join(" ");
+
+    const pDist = parcSources.match(/(?:la\s*)?(\d+)\s*(?:m|metri)\s*(?:de)?\s*parc/i)
+      || parcSources.match(/parc(?:ul)?\s*(?:la\s*)?(\d+)\s*(?:m|metri)/i);
+    if (pDist) {
+      parcFragment = `Parc ${pDist[1]}m`;
+    } else {
+      const pMin = parcSources.match(/(?:la\s*)?(\d+)\s*(?:min|minute)\s*(?:de)?\s*parc/i)
+        || parcSources.match(/parc(?:ul)?\s*(?:la\s*)?(\d+)\s*(?:min|minute)/i);
+      if (pMin) {
+        parcFragment = `Parc ${pMin[1]} min`;
+      } else {
+        const pName = parcSources.match(/parc(?:ul)?\s+(Her[aă]str[aă]u|IOR|Ci[sș]migiu|Tineretului|Carol|Titan|Circului|Bordei|Plumbuita|Kiseleff)/i);
+        if (pName) {
+          parcFragment = `Parc ${pName[1]}`;
+        }
+      }
+    }
+    if (parcFragment) {
+      parts.push(parcFragment);
+    }
+
+    // 6. Mobilat sau nemobilat (ex: "Mobilat", "Nemobilat", "Mobilat parțial")
+    const lowerText = rawDescText.toLowerCase();
+    const crmMobilat = (crmData as any)?.dotari?.mobilat;
+    let mobFragment = "Mobilat";
+    if (crmMobilat === "Nemobilat" || lowerText.includes("nemobilat")) {
+      mobFragment = "Nemobilat";
+    } else if (crmMobilat === "Partial" || lowerText.includes("mobilat partial") || lowerText.includes("semi-mobilat")) {
+      mobFragment = "Mobilat parțial";
+    } else {
+      mobFragment = "Mobilat";
+    }
+    parts.push(mobFragment);
+
+    // 7. Utilat daca este cazul (ex: "Utilat")
+    const isUtilat = lowerText.includes("utilat") 
+      || (crmData as any)?.dotari?.bucatarie?.utilata 
+      || (sectionData["dotari"]?.["Bucătărie"] && sectionData["dotari"]["Bucătărie"] !== "-");
+    if (isUtilat) {
+      parts.push("Utilat");
+    }
+
+    // 8. Obiectiv din zona (ex: "Promenada", "Mall Vitan", etc.)
+    let obiectivFragment = "";
+    const objSources = [
+      sectionData["imprejurimi"]?.["Obiective"],
+      sectionData["imprejurimi"]?.["Comerț"],
+      rawDescText
+    ].filter(Boolean).join(" ");
+    const oMatch = objSources.match(/\b(Mall Vitan|AFI Palace|AFI Cotroceni|Promenada|Băneasa Shopping|Mega Mall|Plaza România|Sun Plaza|ParkLake|București Mall|Piața Unirii|Piața Victoriei|Universitate|Centrul Vechi|Timpuri Noi|Floreasca|Herăstrău|Aviației|Pipera)\b/i);
+    if (oMatch) {
+      obiectivFragment = oMatch[1];
+      parts.push(obiectivFragment);
+    }
+
+    // Ensure maximum 70 characters in total
+    let currentParts = [...parts];
+    let candidate = currentParts.join(" | ");
+
+    while (candidate.length > 70 && currentParts.length > 2) {
+      currentParts.pop(); // drop last element
+      candidate = currentParts.join(" | ");
+    }
+
+    if (candidate.length > 70) {
+      candidate = candidate.substring(0, 67) + "...";
+    }
+
+    return candidate;
+  }, [sectionData, camere, bai, suprafataUtila, rawDescText, crmData]);
+
+  // Price per square meter for sales
+  const pricePerSqm = useMemo(() => {
+    if (isRent) return null;
+    if (crmData?.pret?.detalii?.pretMp) {
+      const val = crmData.pret.detalii.pretMp;
+      return `${val} €/m²`;
+    }
+    const rawPriceStr = crmData?.pret?.detalii?.pret || lead?.price || "";
+    const priceNum = parseFloat(String(rawPriceStr).replace(/[^0-9.]/g, ""));
+    const rawSurfStr = sectionData["configuratie"]?.["Suprafață utilă"] || suprafataUtila || "";
+    const surfNum = parseFloat(String(rawSurfStr).replace(/[^0-9.]/g, ""));
+
+    if (priceNum && surfNum && surfNum > 0 && priceNum > 1000) {
+      const ppm = priceNum / surfNum;
+      const formatted = ppm.toLocaleString("ro-RO", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+      });
+      return `${formatted} €/m²`;
+    }
+    return null;
+  }, [isRent, crmData, lead?.price, sectionData, suprafataUtila]);
+
+  // Rent guarantees
+  const rentGuarantees = useMemo(() => {
+    if (!isRent) return null;
     const rawGarantie = sectionData["acte"]?.["Garanție"] 
       || crmData?.pret?.detalii?.garantie;
-    if (rawGarantie && rawGarantie !== "-") {
-      return rawGarantie;
+    if (rawGarantie && rawGarantie !== "-" && rawGarantie !== "") {
+      const str = String(rawGarantie).trim();
+      if (str.toLowerCase().includes("garan")) {
+        return str;
+      }
+      return `${str} garanție`;
     }
-    return isRent ? "1 luna" : "";
-  }, [sectionData, crmData, isRent]);
+    return "1 lună garanție";
+  }, [isRent, sectionData, crmData]);
+
+  // Sync document title with generated title on public shared page
+  useEffect(() => {
+    if (isPublicShared && generatedTitle) {
+      document.title = `${generatedTitle} • brokr.`;
+    } else if (displayTitle) {
+      document.title = `${displayTitle} • brokr.`;
+    }
+  }, [isPublicShared, generatedTitle, displayTitle]);
 
   return (
     <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden">
@@ -1451,42 +1585,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         </nav>
       )}
 
-      {/* Property Title & Summary Header (Public Shared View Only - placed before jump links menu) */}
-      {isPublicShared && (
-        <div className="shrink-0 bg-white border-b border-gray-200 z-25">
-          <div className="max-w-4xl mx-auto w-full px-4 sm:px-6 py-4 sm:py-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-            {/* Left: Property title & subtitle */}
-            <div className="min-w-0 flex-1">
-              <h1 className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900 tracking-tight leading-snug">
-                {displayTitle}
-              </h1>
-              {subtitleParts.length > 0 && (
-                <p className="text-xs sm:text-[13px] text-gray-500 font-medium mt-1.5 flex items-center flex-wrap gap-2">
-                  {subtitleParts.map((part, idx) => (
-                    <React.Fragment key={idx}>
-                      {idx > 0 && <span className="text-gray-300">•</span>}
-                      <span>{part}</span>
-                    </React.Fragment>
-                  ))}
-                </p>
-              )}
-            </div>
-
-            {/* Right: Price/month & deposit required */}
-            <div className="shrink-0 text-left sm:text-right flex flex-col sm:items-end">
-              <div className="text-xl sm:text-2xl md:text-3xl font-extrabold text-[#051D35] font-mono tracking-tight leading-none">
-                {formattedPrice}
-              </div>
-              {depositValue && isRent && (
-                <div className="text-xs text-gray-500 font-sans mt-1">
-                  Garanție: {depositValue}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Horizontal Fixed Menu with Jump Links (Left) and Actions (Right) - Matching Cereri subheader style */}
       <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20 px-4 sm:px-6 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
         <div className={`w-full h-full flex items-center justify-between gap-3 shrink-0 ${isPublicShared ? "max-w-4xl mx-auto" : ""}`}>
@@ -1501,10 +1599,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   key={sect.id}
                   type="button"
                   onClick={() => scrollToSection(sect.id)}
-                  className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                  className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans border ${
                     isActive
-                      ? "bg-[#051D35] text-white font-medium shadow-xs"
-                      : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                      ? "bg-[#051D35] text-white font-medium shadow-xs border-[#051D35]"
+                      : "text-gray-600 hover:text-[#051D35] bg-gray-50/70 hover:bg-gray-100 border-gray-200"
                   }`}
                 >
                   <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
@@ -1514,7 +1612,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             })}
           </div>
 
-          {/* Right: Actions (matching Cereri action button style) */}
+          {/* Right: Actions (print and share removed per user instruction) */}
           <div className="flex items-center gap-1.5 shrink-0">
             {/* 1. Șterge */}
             {!isPublicShared && onDelete && (
@@ -1528,27 +1626,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </button>
             )}
 
-            {/* 2. Printează */}
-            <button
-              type="button"
-              onClick={handlePrint}
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-              title="Tipărește oferta"
-            >
-              <Printer size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-            </button>
-
-            {/* 3. Distribuie */}
-            <button
-              type="button"
-              onClick={handleNativeShare}
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-              title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
-            >
-              <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-            </button>
-
-            {/* 4. Link extern (only for internal CRM view, removed on shared external page) */}
+            {/* 4. Link extern */}
             {!isPublicShared && (
               lead?.url ? (
                 <a
@@ -1577,7 +1655,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={onAddActivity}
-                className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
+                className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group border border-[#051D35]"
                 title="Adaugă activitate pentru această proprietate"
               >
                 <Plus size={13} className="text-[#BE9662]" />
@@ -1594,6 +1672,210 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           
           {/* Main Content Cards Column: Centered boxed container for public shared, 8 cols with right border for internal CRM */}
           <div className={isPublicShared ? "max-w-4xl w-full p-4 sm:p-6 lg:p-8 space-y-6" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200"}>
+
+            {/* PUBLIC SHARED HEADER: Zona de poze (5-Photo Mosaic Grid) + Titlu generat imediat sub poze + Preț & Preț/mp sau Garanții */}
+            {isPublicShared && (
+              <div className="space-y-4">
+                {/* 1. Zona de poze sub forma celor atașate */}
+                <div className="w-full rounded-2xl overflow-hidden border border-gray-200 bg-gray-100 shadow-xs">
+                  {imagesList.length === 0 ? (
+                    <div className="w-full h-64 sm:h-80 flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
+                      <Camera size={40} className="text-gray-300" />
+                      <span className="text-xs font-medium text-gray-500">Nicio fotografie disponibilă</span>
+                    </div>
+                  ) : imagesList.length === 1 ? (
+                    <div 
+                      onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                      className="relative w-full h-[320px] sm:h-[420px] cursor-pointer group bg-gray-200"
+                    >
+                      <img 
+                        src={imagesList[0]} 
+                        alt={generatedTitle}
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300" 
+                        referrerPolicy="no-referrer"
+                      />
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPhotoIndex(0);
+                          setIsGalleryOpen(true);
+                        }}
+                        className="absolute bottom-3 left-3 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
+                      >
+                        <Camera size={13} className="text-[#BE9662]" />
+                        <span>1 fotografie</span>
+                      </button>
+                    </div>
+                  ) : imagesList.length < 5 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5 sm:gap-2 h-[340px] sm:h-[400px] md:h-[440px] p-1.5 sm:p-2">
+                      <div 
+                        onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                        className="relative rounded-xl overflow-hidden cursor-pointer group bg-gray-200"
+                      >
+                        <img 
+                          src={imagesList[0]} 
+                          alt={generatedTitle}
+                          className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300" 
+                          referrerPolicy="no-referrer"
+                        />
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPhotoIndex(0);
+                            setIsGalleryOpen(true);
+                          }}
+                          className="absolute bottom-3 left-3 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
+                        >
+                          <Camera size={13} className="text-[#BE9662]" />
+                          <span>Galerie foto ({imagesList.length})</span>
+                        </button>
+                      </div>
+                      <div className={`grid ${imagesList.length === 2 ? "grid-rows-1" : "grid-rows-2"} gap-1.5 sm:gap-2`}>
+                        {imagesList.slice(1, 3).map((img, idx) => (
+                          <div 
+                            key={idx}
+                            onClick={() => { setSelectedPhotoIndex(idx + 1); setIsGalleryOpen(true); }}
+                            className="relative rounded-xl overflow-hidden cursor-pointer group bg-gray-200"
+                          >
+                            <img 
+                              src={img} 
+                              alt={`${generatedTitle} - ${idx + 2}`}
+                              className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300" 
+                              referrerPolicy="no-referrer"
+                            />
+                            {idx === 1 && imagesList.length > 3 && (
+                              <div className="absolute inset-0 bg-black/55 hover:bg-black/65 transition-colors flex items-center justify-center p-2 text-center">
+                                <span className="text-white text-sm sm:text-base font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
+                                  Toate imaginile ({imagesList.length})
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    /* Standard 5-Photo Mosaic matching attached reference */
+                    <div className="grid grid-cols-1 md:grid-cols-4 grid-rows-2 gap-1.5 sm:gap-2 h-[340px] sm:h-[400px] md:h-[440px] lg:h-[460px] p-1.5 sm:p-2">
+                      {/* 1. Main Large Hero Photo (spans 2 cols, 2 rows) */}
+                      <div 
+                        onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                        className="relative md:col-span-2 md:row-span-2 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
+                      >
+                        <img 
+                          src={imagesList[0]} 
+                          alt={`${generatedTitle} - imagine principală`}
+                          className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                        
+                        {/* Bottom-left badge */}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPhotoIndex(0);
+                            setIsGalleryOpen(true);
+                          }}
+                          className="absolute bottom-3 left-3 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
+                        >
+                          <Camera size={13} className="text-[#BE9662]" />
+                          <span>Galerie foto ({imagesList.length})</span>
+                        </button>
+                      </div>
+
+                      {/* 2. Top-Middle Photo */}
+                      <div 
+                        onClick={() => { setSelectedPhotoIndex(1); setIsGalleryOpen(true); }}
+                        className="relative rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
+                      >
+                        <img 
+                          src={imagesList[1]} 
+                          alt={`${generatedTitle} - foto 2`}
+                          className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                      </div>
+
+                      {/* 3. Top-Right Photo */}
+                      <div 
+                        onClick={() => { setSelectedPhotoIndex(2); setIsGalleryOpen(true); }}
+                        className="relative rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
+                      >
+                        <img 
+                          src={imagesList[2]} 
+                          alt={`${generatedTitle} - foto 3`}
+                          className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                      </div>
+
+                      {/* 4. Bottom-Middle Photo */}
+                      <div 
+                        onClick={() => { setSelectedPhotoIndex(3); setIsGalleryOpen(true); }}
+                        className="relative rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
+                      >
+                        <img 
+                          src={imagesList[3]} 
+                          alt={`${generatedTitle} - foto 4`}
+                          className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                      </div>
+
+                      {/* 5. Bottom-Right Photo with "Toate imaginile (N)" overlay */}
+                      <div 
+                        onClick={() => { setSelectedPhotoIndex(4); setIsGalleryOpen(true); }}
+                        className="relative rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
+                      >
+                        <img 
+                          src={imagesList[4]} 
+                          alt={`${generatedTitle} - foto 5`}
+                          className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
+                          <span className="text-white text-sm sm:text-base font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
+                            Toate imaginile ({imagesList.length})
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Titlu imediat sub poze, cu prețul scris mai mare dar nu foarte mare și preț/mp (vânzări) sau număr garanții (închirieri) */}
+                <div className="bg-white rounded-xl border border-gray-200 p-5 sm:p-6 shadow-xs font-sans">
+                  <h1 className="text-sm sm:text-base md:text-[17px] font-bold text-gray-900 tracking-tight leading-snug">
+                    {generatedTitle}
+                  </h1>
+                  <div className="mt-2.5 flex items-baseline gap-3 flex-wrap">
+                    <span className="text-2xl sm:text-3xl font-extrabold text-gray-950 font-mono tracking-tight">
+                      {formattedPrice}
+                    </span>
+                    {isRent ? (
+                      rentGuarantees && (
+                        <span className="text-xs sm:text-sm font-semibold text-gray-600 font-sans">
+                          {rentGuarantees}
+                        </span>
+                      )
+                    ) : (
+                      pricePerSqm && (
+                        <span className="text-xs sm:text-sm font-semibold text-gray-500 font-mono">
+                          {pricePerSqm}
+                        </span>
+                      )
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* #CARD 1: "PREȚ" (First card in Column 1 per user request) */}
             <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
