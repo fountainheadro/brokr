@@ -56,6 +56,7 @@ export interface PropertyDetailViewProps {
   showTopNavbar?: boolean;
   onDelete?: () => void;
   onAddActivity?: () => void;
+  onUpdateLead?: (updatedData: Partial<Lead>) => void;
 }
 
 interface NavSection {
@@ -328,7 +329,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onOpenEditForm,
   showTopNavbar = false,
   onDelete,
-  onAddActivity
+  onAddActivity,
+  onUpdateLead
 }) => {
   const navSections = useMemo<NavSection[]>(() => {
     if (isPublicShared) {
@@ -641,15 +643,38 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
   };
 
-  // Compile full image list
+  // Compile full image list with canonical deduplication
   const allImages = useMemo(() => {
+    const dedupeUrls = (urls: string[]) => {
+      const seen = new Set<string>();
+      const result: string[] = [];
+      for (const u of urls) {
+        if (!u || typeof u !== "string" || !u.trim()) continue;
+        const clean = u.trim();
+        const base = clean.split(/[?;]/)[0];
+        const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9_-]+)/i);
+        const uuidMatch = base.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+        const md5Match = base.match(/([a-f0-9]{32})/i);
+        const key = olxMatch 
+          ? `olx-${olxMatch[1].toLowerCase()}` 
+          : (uuidMatch 
+              ? `uuid-${uuidMatch[1].toLowerCase()}` 
+              : (md5Match ? `md5-${md5Match[1].toLowerCase()}` : clean));
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push(clean);
+        }
+      }
+      return result;
+    };
+
     // Priority 1: If lead has explicit images array, use it directly!
     const directImages = (lead as any)?.images;
     if (Array.isArray(directImages)) {
       const sanitized = directImages
         .map((item: any) => (typeof item === "string" ? item : item?.original))
         .filter((u: any): u is string => typeof u === "string" && u.trim().length > 0);
-      return [...new Set(sanitized)];
+      return dedupeUrls(sanitized);
     }
 
     const images: string[] = [];
@@ -671,7 +696,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         }
       });
     }
-    return images;
+    return dedupeUrls(images);
   }, [lead]);
 
   const crmData = lead?.extractedData?.crmData;
@@ -1114,16 +1139,24 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       const newCover = cleanImages[0] || "";
       const structuredImages = cleanImages.map(url => ({ original: url }));
 
+      const nextExtractedData = {
+        ...(lead.extractedData || {}),
+        crmData: {
+          ...(lead.extractedData?.crmData || {}),
+          imagini: {
+            living: structuredImages,
+            camera: [],
+            bucatarie: [],
+            baie: [],
+            alteSpatii: []
+          }
+        }
+      };
+
       const updates: any = {
         coverImage: newCover,
         images: cleanImages,
-        "extractedData.crmData.imagini": {
-          living: structuredImages,
-          camera: [],
-          bucatarie: [],
-          baie: [],
-          alteSpatii: []
-        }
+        extractedData: nextExtractedData
       };
 
       await leadsService.updateLeadData(lead.id, updates);
@@ -1140,6 +1173,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           alteSpatii: []
         };
       }
+
+      onUpdateLead?.(updates);
 
       setImagesList(cleanImages);
       setIsEditingPhotos(false);
@@ -1166,17 +1201,26 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     try {
       const newCover = nextList[0] || "";
       const structuredImages = nextList.map(url => ({ original: url }));
+      const nextExtractedData = {
+        ...(lead.extractedData || {}),
+        crmData: {
+          ...(lead.extractedData?.crmData || {}),
+          imagini: {
+            living: structuredImages,
+            camera: [],
+            bucatarie: [],
+            baie: [],
+            alteSpatii: []
+          }
+        }
+      };
+
       const updates: any = {
         coverImage: newCover,
         images: nextList,
-        "extractedData.crmData.imagini": {
-          living: structuredImages,
-          camera: [],
-          bucatarie: [],
-          baie: [],
-          alteSpatii: []
-        }
+        extractedData: nextExtractedData
       };
+
       await leadsService.updateLeadData(lead.id, updates);
       (lead as any).images = nextList;
       (lead as any).coverImage = newCover;
@@ -1189,6 +1233,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           alteSpatii: []
         };
       }
+
+      onUpdateLead?.(updates);
       toast.success("Fotografia a fost ștearsă definitiv!");
     } catch (err) {
       console.error("Failed to delete photo:", err);
@@ -1202,31 +1248,57 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     setIsPhotosDirty(false);
   };
 
-  const handleAddPhotoFiles = (files: FileList | File[]) => {
+  const handleAddPhotoFiles = async (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (fileArray.length === 0) {
       toast.error("Vă rugăm să selectați fișiere imagine valide (JPG, PNG, WEBP).");
       return;
     }
 
-    const newImgs: string[] = [];
-    let readCount = 0;
-    fileArray.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        if (e.target?.result && typeof e.target.result === "string") {
-          newImgs.push(e.target.result);
+    const toastId = toast.loading("Se încarcă fotografiile pe server...");
+    const uploadedUrls: string[] = [];
+
+    try {
+      for (const file of fileArray) {
+        const base64Promise = new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+        const dataUrl = await base64Promise;
+        const res = await fetch("/api/upload-photo", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dataUrl, filename: file.name })
+        });
+
+        if (!res.ok) {
+          throw new Error(`Upload failed with status ${res.status}`);
         }
-        readCount++;
-        if (readCount === fileArray.length) {
-          setImagesList(prev => [...prev, ...newImgs]);
-          setIsPhotosDirty(true);
-          setIsEditingPhotos(true);
-          toast.success(`${newImgs.length} ${newImgs.length === 1 ? "fotografie adăugată" : "fotografii adăugate"}!`);
+
+        const data = await res.json();
+        if (data.url) {
+          uploadedUrls.push(data.url);
         }
-      };
-      reader.readAsDataURL(file);
-    });
+      }
+
+      if (uploadedUrls.length > 0) {
+        setImagesList(prev => [...prev, ...uploadedUrls]);
+        setIsPhotosDirty(true);
+        setIsEditingPhotos(true);
+        toast.success(
+          `${uploadedUrls.length} ${uploadedUrls.length === 1 ? "fotografie adăugată" : "fotografii adăugate"}!`,
+          { id: toastId }
+        );
+      } else {
+        toast.error("Nu s-au putut încărca fotografiile.", { id: toastId });
+      }
+    } catch (err) {
+      console.error("[PropertyDetailView] Upload error:", err);
+      toast.error("Eroare la încărcarea fotografiilor.", { id: toastId });
+    }
   };
 
   useEffect(() => {
@@ -2749,12 +2821,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       </main>
 
       {/* Lightbox Photo Gallery Modal */}
-      {isGalleryOpen && allImages.length > 0 && (
+      {isGalleryOpen && imagesList.length > 0 && (
         <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col">
           <div className="h-14 px-6 flex items-center justify-between text-white border-b border-white/10 shrink-0">
             <div className="flex items-center gap-3">
               <span className="text-xs font-mono font-bold bg-white/10 px-2.5 py-1 rounded">
-                {selectedPhotoIndex + 1} / {allImages.length}
+                {selectedPhotoIndex + 1} / {imagesList.length}
               </span>
               <span className="text-xs text-gray-300 hidden sm:inline truncate max-w-md">
                 {displayTitle}

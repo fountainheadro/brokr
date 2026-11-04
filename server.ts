@@ -300,7 +300,53 @@ async function startServer() {
     next();
   });
 
-  app.use(express.json());
+  const uploadsDir = path.resolve("./public/uploads");
+  if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+  }
+
+  // Increase body size limit to 50mb for image uploads
+  app.use(express.json({ limit: "50mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+
+  // Serve uploaded images statically
+  app.use("/uploads", express.static(uploadsDir));
+
+  // Endpoint to store uploaded photos permanently on the local filesystem as clean URLs
+  app.post("/api/upload-photo", async (req, res) => {
+    try {
+      const { dataUrl, base64 } = req.body;
+      const raw = dataUrl || base64;
+      if (!raw || typeof raw !== "string") {
+        return res.status(400).json({ error: "Missing image data" });
+      }
+
+      let mimeType = "image/jpeg";
+      let base64Data = raw;
+      const matches = raw.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (matches) {
+        mimeType = matches[1];
+        base64Data = matches[2];
+      }
+
+      let ext = "jpg";
+      if (mimeType.includes("png")) ext = "png";
+      else if (mimeType.includes("webp")) ext = "webp";
+      else if (mimeType.includes("gif")) ext = "gif";
+      else if (mimeType.includes("avif")) ext = "avif";
+
+      const buffer = Buffer.from(base64Data, "base64");
+      const safeName = `prop_${Date.now()}_${Math.random().toString(36).substring(2, 8)}.${ext}`;
+      const targetPath = path.join(uploadsDir, safeName);
+      await fs.promises.writeFile(targetPath, buffer);
+
+      const publicUrl = `/uploads/${safeName}`;
+      res.json({ success: true, url: publicUrl });
+    } catch (err: any) {
+      console.error("[Server] /api/upload-photo error:", err);
+      res.status(500).json({ error: err.message || "Failed to upload photo" });
+    }
+  });
 
   // Mount AI Call Router
   app.use("/api/ai-call", aiCallRouter);
@@ -701,7 +747,10 @@ Returnează un JSON strict cu următoarele chei:
             const photoList = targetAd?.photos || targetAd?.images || targetAd?.gallery || targetAd?.media?.photos;
             if (Array.isArray(photoList) && photoList.length > 0) {
               photoList.forEach((item: any) => {
-                const candidate = item?.url || item?.large || item?.medium || (typeof item === 'string' ? item : null);
+                let candidate = item?.url || item?.large || item?.medium || item?.thumbnail || (typeof item === 'string' ? item : null);
+                if (!candidate && item?.filename) {
+                  candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
+                }
                 if (candidate && typeof candidate === 'string') {
                   const promoted = promoteToHighRes(candidate);
                   if (!isForbiddenGraphic(promoted)) {
@@ -742,7 +791,7 @@ Returnează un JSON strict cu următoarele chei:
         });
       }
 
-      // Priority 3: DOM Gallery elements (with aggressive stripping of recommendations and similar listings)
+      // Priority 3: DOM Gallery elements (with aggressive stripping of recommendations, ads, and similar listings)
       let domGalleryImages: string[] = [];
       if (nextDataTargetImages.length === 0 && jsonLdImages.length === 0) {
         const unrelatedSelectors = [
@@ -758,7 +807,12 @@ Returnează un JSON strict cu următoarele chei:
           ".cross-selling", ".cross-sell", ".banner", ".ad-banner", ".header-logo",
           ".site-header", ".site-footer", ".navbar", ".menu", ".sidebar", ".contact-agent-section",
           "[data-testid*=\"similar\"]", "[data-testid*=\"recommend\"]", "[data-testid*=\"promoted\"]",
-          "[data-cy*=\"similar\"]", "[data-cy*=\"recommend\"]", ".cards-container", ".slider-cards"
+          "[data-cy*=\"similar\"]", "[data-cy*=\"recommend\"]", "[data-cy*=\"ad-card\"]", "[data-cy*=\"listing\"]",
+          "[data-testid*=\"ad-card\"]", "[data-testid*=\"listing\"]",
+          ".cards-container", ".slider-cards",
+          "[class*=\"similar\"]", "[class*=\"recommend\"]", "[class*=\"suggested\"]",
+          "section:has(h2:contains(\"similare\"))", "section:has(h3:contains(\"similare\"))",
+          "section:has(h2:contains(\"recomand\"))", "section:has(h3:contains(\"recomand\"))"
         ];
         unrelatedSelectors.forEach(selector => {
           $(selector).remove();
@@ -771,7 +825,10 @@ Returnează un JSON strict cu următoarele chei:
           ".slider-galerie, #anunt-galerie"
         );
 
-        const searchScope = galleryContainers.length > 0 ? galleryContainers : $("main, article, #main-content, .offer-view, .ad-content, .listing-content, body");
+        // Never search full body to avoid grabbing thumbnails from recommendations and sidebar cards
+        const searchScope = galleryContainers.length > 0 
+          ? galleryContainers 
+          : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article");
 
         searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
           const $el = $(el);
@@ -823,13 +880,22 @@ Returnează un JSON strict cu următoarele chei:
 
         const getCanonical = (u: string) => {
           let base = u.split(/[?;]/)[0];
-          const roamMatch = base.match(/(prod-property-core-backend-media-imo\/\d+\/[a-f0-9-]+\.[a-z]+)/i);
-          if (roamMatch) return roamMatch[1];
-          const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9]+)\//);
-          if (olxMatch) return olxMatch[1];
-          base = base.replace(/_\d+x\d+(?=\.jpg)/i, "");
-          base = base.replace(/\/(small|medium|thumb|large|galerie)\//i, "/");
-          return base;
+          // 1. OLX / Storia file ID: /v1/files/([A-Za-z0-9_-]+)/
+          const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9_-]+)/i);
+          if (olxMatch) return `olx-file-${olxMatch[1].toLowerCase()}`;
+
+          // 2. Roamcdn / Imobiliare UUID or 32-char hex hash
+          const uuidMatch = base.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+          if (uuidMatch) return `uuid-${uuidMatch[1].toLowerCase()}`;
+          const md5Match = base.match(/([a-f0-9]{32})/i);
+          if (md5Match) return `md5-${md5Match[1].toLowerCase()}`;
+
+          // 3. Filename cleaning (strip dimensions and responsive suffixes)
+          const filename = base.split("/").pop() || base;
+          const cleanFilename = filename
+            .replace(/_\d+x\d+(?=\.[a-z]+)/i, "")
+            .replace(/-(?:full|small|medium|thumb|large|mini|1200w|1600w|800w|400w|600w|300w)/gi, "");
+          return cleanFilename.toLowerCase();
         };
 
         const getScore = (u: string) => {
@@ -857,7 +923,7 @@ Returnează un JSON strict cu următoarele chei:
         return Array.from(map.values()).filter(u => !isForbiddenGraphic(u));
       };
 
-      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 50);
+      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 25);
       console.log(`Found ${uniqueImages.length} unique images for ${url}`);
 
       // Extract seller name explicitly if possible (OLX/Storia patterns)

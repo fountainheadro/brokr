@@ -2249,6 +2249,10 @@ export const Home: React.FC = () => {
                 lead={selectedLead}
                 isPublicShared={false}
                 contacts={contacts.filter(c => c.propertyId === selectedLead.propertyId || c.propertyId === selectedLead.id)}
+                onUpdateLead={(updatedData) => {
+                  setSelectedLead(prev => prev ? { ...prev, ...updatedData } : null);
+                  setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, ...updatedData } : l));
+                }}
                 onOpenEditForm={() => {
                   setEditedName(selectedLead.ownerName || "");
                   setEditedPhone(selectedLead.ownerPhone || "");
