@@ -730,7 +730,7 @@ Returnează un JSON strict cu următoarele chei:
             const photoList = targetAd?.photos || targetAd?.images || targetAd?.gallery || targetAd?.media?.photos;
             if (Array.isArray(photoList) && photoList.length > 0) {
               photoList.forEach((item: any) => {
-                let candidate = item?.url || item?.large || item?.medium || item?.thumbnail || (typeof item === 'string' ? item : null);
+                let candidate = item?.large || item?.url || item?.medium || item?.small || item?.thumbnail || (typeof item === 'string' ? item : null);
                 if (!candidate && item?.filename) {
                   candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
                 }
@@ -863,8 +863,8 @@ Returnează un JSON strict cu următoarele chei:
 
         const getCanonical = (u: string) => {
           let base = u.split(/[?;]/)[0];
-          // 1. OLX / Storia file ID: /v1/files/([A-Za-z0-9_-]+)/
-          const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9_-]+)/i);
+          // 1. OLX / Storia file ID: /v1/files/([^/]+)/
+          const olxMatch = base.match(/\/v1\/files\/([^/]+)/i);
           if (olxMatch) return `olx-file-${olxMatch[1].toLowerCase()}`;
 
           // 2. Roamcdn / Imobiliare UUID or 32-char hex hash
@@ -884,6 +884,7 @@ Returnează un JSON strict cu următoarele chei:
         const getScore = (u: string) => {
           const lower = u.toLowerCase();
           let score = 0;
+          if (lower.includes("2048x") || lower.includes("1920x")) score += 300;
           if (lower.includes("1200w") || lower.includes("1600w")) score += 200;
           if (lower.includes("1000x700") || lower.includes("1280x") || lower.includes("900w")) score += 100;
           if (lower.includes("800x600")) score += 50;
@@ -906,7 +907,7 @@ Returnează un JSON strict cu următoarele chei:
         return Array.from(map.values()).filter(u => !isForbiddenGraphic(u));
       };
 
-      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 25);
+      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 50);
       console.log(`Found ${uniqueImages.length} unique images for ${url}`);
 
       // Extract seller name explicitly if possible (OLX/Storia patterns)

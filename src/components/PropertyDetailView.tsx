@@ -41,8 +41,9 @@ import {
   Edit3,
   Plus,
   Upload,
-  Image as ImageIcon,
-  Trash2
+  Trash2,
+  Sofa,
+  Tv
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
@@ -871,6 +872,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const parsedBai = parseInt(String(bai || "").match(/\d+/)?.[0] || "0", 10);
   const baiCount = Math.max(1, parsedBai || 1);
 
+  // Standardized list of extracted rooms for both Mobilare and Dotări
+  const roomsList = useMemo(() => {
+    const list: string[] = ["Living"];
+    const maxBedrooms = Math.min(Math.max(1, bedroomCount), 4);
+    for (let i = 1; i <= maxBedrooms; i++) {
+      list.push(`Camera ${i}`);
+    }
+    list.push("Bucătărie");
+    const maxBathrooms = Math.min(Math.max(1, baiCount), 4);
+    for (let i = 1; i <= maxBathrooms; i++) {
+      list.push(`Baie ${i}`);
+    }
+    list.push("Hol");
+    return list;
+  }, [bedroomCount, baiCount]);
+
   // Default agency commission per user rules:
   // - Sale: 0%
   // - Rent: 50%+TVA
@@ -1457,13 +1474,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     const valStr = typeof currentVal === "string" ? currentVal.trim() : (currentVal == null ? "" : String(currentVal).trim());
 
     // User rule: Where there is a "-", if no data has been found on the url provided for crawling, just remove that row of data in the page.
-    // Exception: "An construcție" and "Balcoane" must ALWAYS appear in read mode as explicitly requested.
-    const isAlwaysVisibleInReadMode = label === "An construcție" || label === "Balcoane" || label === "Balcon";
+    // Exception: "An construcție", "Balcoane", and rooms in "mobilare" & "dotari" must ALWAYS appear in read mode so both columns match identically.
+    const isAlwaysVisibleInReadMode = label === "An construcție" || label === "Balcoane" || label === "Balcon" || sectionId === "mobilare" || sectionId === "dotari";
     if (!isSecEditing && !isAlwaysVisibleInReadMode && (valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null")) {
       return null;
     }
 
-    const displayValue = (valStr === "-" && !isAlwaysVisibleInReadMode) ? "" : currentVal;
+    const displayValue = (valStr === "-" && !isAlwaysVisibleInReadMode) ? "" : (valStr || "-");
 
     return (
       <AttributeRow
@@ -1482,10 +1499,26 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   // Generated page title according to exact user specification:
-  // Order: numar camere | numar bai daca sunt mai mult de 1 | metri patrati | Distanta Metrou daca este cazul | Distanta Parc daca este cazul | Mobilat sau nemobilat | Utilat daca este cazul | obiectiv din zona
+  // Order: Tip proprietate | numar camere | numar bai daca sunt mai mult de 1 | metri patrati | Distanta Metrou daca este cazul | Distanta Parc daca este cazul | Mobilat sau nemobilat | Utilat daca este cazul | obiectiv din zona
   // Max 70 characters in total
   const generatedTitle = useMemo(() => {
     const parts: string[] = [];
+
+    // 0. Tip proprietate (Apartament, Casa, Teren, Spatiu Birouri, Spatiu Comercial, etc.)
+    const rawCat = (crmData?.detaliiGenerale?.categoria || lead?.categoria || "").toLowerCase();
+    const titleLower = (lead?.title || "").toLowerCase();
+    let propType = "Apartament";
+    if (titleLower.includes("penthouse") || rawCat.includes("penthouse")) propType = "Penthouse";
+    else if (rawCat.includes("cas") || rawCat.includes("vil")) propType = "Casă";
+    else if (rawCat.includes("teren")) propType = "Teren";
+    else if (rawCat.includes("birou")) propType = "Spațiu Birouri";
+    else if (rawCat.includes("comercial")) propType = "Spațiu Comercial";
+    else if (rawCat.includes("industrial") || rawCat.includes("depozit")) propType = "Spațiu Industrial";
+    else if (rawCat.includes("garsonier") || rawCat.includes("studio")) propType = "Studio";
+    else if (crmData?.detaliiGenerale?.categoria) {
+      propType = crmData.detaliiGenerale.categoria.replace(/e$/, "").replace(/i$/, "");
+    }
+    parts.push(propType);
 
     // 1. Numar camere (ex: "2 cam", "1 cam", "3 cam")
     const nrCamVal = sectionData["configuratie"]?.["Număr camere"] || camere;
@@ -1701,7 +1734,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={handlePrint}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-transparent hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
                 title="Tipărește oferta"
               >
                 <Printer size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
@@ -1710,7 +1743,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={handleNativeShare}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-r border-gray-200 bg-transparent hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
                 title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
               >
                 <Share2 size={16} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
@@ -1804,9 +1837,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       {/* Main Layout (Scrollable container below the fixed headers) */}
       <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth">
         
-        {/* PUBLIC SHARED FULL-WIDTH GALLERY (100% width, max 50vh, 0 padding, no rounded corners) */}
+        {/* PUBLIC SHARED FULL-WIDTH GALLERY (100% width, max 50vh, 10px white padding between images) */}
         {isPublicShared && (
-          <div id="poze" className="w-full h-[50vh] max-h-[50vh] bg-gray-900 border-b border-gray-200 overflow-hidden select-none scroll-mt-24 sm:scroll-mt-28">
+          <div id="poze" className="w-full h-[50vh] max-h-[50vh] bg-white border-b border-gray-200 overflow-hidden select-none scroll-mt-24 sm:scroll-mt-28">
             {imagesList.length === 0 ? (
               <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
                 <Camera size={40} className="text-gray-300" />
@@ -1814,11 +1847,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             ) : (
               <>
-                {/* Mobile Layout: show big image followed by the toate pozele one, max height 50vh, 100% width & height, 0 padding */}
-                <div className="flex md:hidden w-full h-full">
+                {/* Mobile Layout: show big image followed by the toate pozele one, max height 50vh, 10px gap */}
+                <div className="flex md:hidden w-full h-full gap-[10px] bg-white">
                   <div 
                     onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                    className="relative w-3/5 h-full cursor-pointer group bg-gray-800 border-r border-white/25 overflow-hidden"
+                    className="relative w-3/5 h-full cursor-pointer group bg-gray-100 overflow-hidden"
                   >
                     <img 
                       src={imagesList[0]} 
@@ -1829,7 +1862,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </div>
                   <div 
                     onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                    className="relative w-2/5 h-full cursor-pointer group bg-gray-800 overflow-hidden"
+                    className="relative w-2/5 h-full cursor-pointer group bg-gray-100 overflow-hidden"
                   >
                     <img 
                       src={imagesList[1] || imagesList[0]} 
@@ -1845,12 +1878,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </div>
                 </div>
 
-                {/* Desktop Layout: 1 (40%), 2&3 (10%), 4 (20%), 5&6 (10%), 7 (20% + more images button) */}
-                <div className="hidden md:flex w-full h-full">
+                {/* Desktop Layout: 1 (40%), 2&3 (10%), 4 (20%), 5&6 (10%), 7 (20% + more images button), with 10px white padding between */}
+                <div className="hidden md:flex w-full h-full gap-[10px] bg-white">
                   {/* 1 - biggest with 40% width */}
                   <div 
                     onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                    className="relative w-[40%] h-full cursor-pointer group select-none bg-gray-800 overflow-hidden border-r border-white/25"
+                    className="relative flex-[40] w-[40%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden"
                   >
                     <img 
                       src={imagesList[0]} 
@@ -1873,11 +1906,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     </button>
                   </div>
 
-                  {/* 2 and 3 - 10% width stacked vertically */}
-                  <div className="w-[10%] h-full flex flex-col border-r border-white/25">
+                  {/* 2 and 3 - 10% width stacked vertically with 10px white padding between */}
+                  <div className="flex-[10] w-[10%] h-full flex flex-col gap-[10px]">
                     <div 
                       onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden border-b border-white/25"
+                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
                     >
                       <img 
                         src={imagesList[1] || imagesList[0]} 
@@ -1890,7 +1923,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
                     <div 
                       onClick={() => { setSelectedPhotoIndex(imagesList.length > 2 ? 2 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden"
+                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
                     >
                       <img 
                         src={imagesList[2] || imagesList[1] || imagesList[0]} 
@@ -1905,7 +1938,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   {/* 4 - 20% width */}
                   <div 
                     onClick={() => { setSelectedPhotoIndex(imagesList.length > 3 ? 3 : 0); setIsGalleryOpen(true); }}
-                    className="relative w-[20%] h-full cursor-pointer group select-none bg-gray-800 overflow-hidden border-r border-white/25"
+                    className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden"
                   >
                     <img 
                       src={imagesList[3] || imagesList[0]} 
@@ -1916,11 +1949,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
                   </div>
 
-                  {/* 5 and 6 - 10% width stacked vertically */}
-                  <div className="w-[10%] h-full flex flex-col border-r border-white/25">
+                  {/* 5 and 6 - 10% width stacked vertically with 10px white padding between */}
+                  <div className="flex-[10] w-[10%] h-full flex flex-col gap-[10px]">
                     <div 
                       onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden border-b border-white/25"
+                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
                     >
                       <img 
                         src={imagesList[4] || imagesList[1] || imagesList[0]} 
@@ -1933,7 +1966,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
                     <div 
                       onClick={() => { setSelectedPhotoIndex(imagesList.length > 5 ? 5 : (imagesList.length > 2 ? 2 : 0)); setIsGalleryOpen(true); }}
-                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden"
+                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
                     >
                       <img 
                         src={imagesList[5] || imagesList[2] || imagesList[0]} 
@@ -1948,7 +1981,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   {/* 7 - 20% width and also is the more images button */}
                   <div 
                     onClick={() => { setSelectedPhotoIndex(imagesList.length > 6 ? 6 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
-                    className="relative w-[20%] h-full cursor-pointer group select-none bg-gray-800 overflow-hidden"
+                    className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden"
                   >
                     <img 
                       src={imagesList[6] || imagesList[3] || imagesList[imagesList.length - 1] || imagesList[0]} 
@@ -1973,22 +2006,34 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           {/* Main Content Cards Column: Centered boxed container for public shared, 8 cols with right border for internal CRM */}
           <div className={isPublicShared ? "max-w-4xl w-full px-4 sm:px-6 py-6 space-y-6" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200"}>
 
-            {/* PUBLIC SHARED HEADER: Titlu generat imediat sub poze + Preț & Preț/mp sau Garanții */}
+            {/* PUBLIC SHARED HEADER: Titlu generat imediat sub poze + Preț + ID intern in casuta patrata in dreapta */}
             {isPublicShared && (
-              <div className="bg-white rounded-xl border border-gray-200 p-5 sm:p-6 shadow-xs font-sans">
-                <h1 className="text-[14px] font-normal text-gray-700 tracking-tight leading-snug">
-                  {generatedTitle}
-                </h1>
-                <div className="mt-2 text-[18px] font-bold text-gray-900 font-sans tracking-tight">
-                  {isRent ? (
-                    <span>
-                      {cleanPriceNumber} eur / luna{cleanGuaranteeText ? ` (  ${cleanGuaranteeText} )` : ""}
-                    </span>
-                  ) : (
-                    <span>
-                      {cleanPriceNumber} eur{pricePerSqm ? `   ${pricePerSqm}` : ""}
-                    </span>
-                  )}
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans flex items-stretch">
+                <div className="flex-1 p-5 sm:p-6 min-w-0">
+                  <h1 className="text-[14px] font-normal text-gray-700 tracking-tight leading-snug">
+                    {generatedTitle}
+                  </h1>
+                  <div className="mt-2 text-[18px] font-bold text-gray-900 font-sans tracking-tight">
+                    {isRent ? (
+                      <span>
+                        {cleanPriceNumber} eur / luna
+                      </span>
+                    ) : (
+                      <span>
+                        {cleanPriceNumber} eur{pricePerSqm ? `   ${pricePerSqm}` : ""}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Internal ID in a square box to the right side, separated by border-l border-gray-200 */}
+                <div className="border-l border-gray-200 aspect-square min-w-[72px] sm:min-w-[84px] flex flex-col items-center justify-center p-3 text-center bg-gray-50/60 shrink-0 select-none">
+                  <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block font-sans">
+                    ID
+                  </span>
+                  <span className="font-mono font-bold text-[#051D35] text-sm sm:text-base tracking-tight mt-0.5">
+                    {internalCode}
+                  </span>
                 </div>
               </div>
             )}
@@ -2005,7 +2050,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       PREȚ &amp; CONDIȚII
                     </h2>
                     <span className="text-[11px] text-gray-500 font-sans">
-                      Preț, comision și condiții contractuale
+                      Condiții contractuale, preț și comision
                     </span>
                   </div>
                 </div>
@@ -2021,14 +2066,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
 
               <div className="font-sans grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
-                {/* Coloana 1: Preț */}
-                <div className="divide-y divide-gray-100">
-                  {renderRow("tranzactie", "Preț", formattedPrice)}
-                  {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
-                  {renderRow("tranzactie", "Comision", defaultCommission, true)}
-                </div>
-
-                {/* Coloana 2: Condiții */}
+                {/* Coloana 1: Condiții */}
                 <div className="divide-y divide-gray-100">
                   {isRent ? (
                     <>
@@ -2044,6 +2082,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     </>
                   )}
                 </div>
+
+                {/* Coloana 2: Preț */}
+                <div className="divide-y divide-gray-100">
+                  {renderRow("tranzactie", "Preț", formattedPrice)}
+                  {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
+                  {renderRow("tranzactie", "Comision", defaultCommission, true)}
+                </div>
               </div>
             </div>
 
@@ -2058,8 +2103,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                       INTRODUCERE
                     </h2>
-                    <span className="text-[11px] font-mono text-[#BE9662] font-semibold">
-                      (Cod intern: {internalCode})
+                    <span className="text-[11px] text-gray-500 font-sans">
+                      Descriere generală a imobilului
                     </span>
                   </div>
                 </div>
@@ -2179,11 +2224,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </div>
                 </div>
 
-                {/* -Subcategorie "Mobilare & Dotări" (Comasate în același tabel) */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Mobilare & Dotări" 
-                    actions={
+                {/* -Subcategorie "Mobilare & Dotări" cu antet pe două coloane (Mobilare și Dotări) */}
+                <div className="border-t border-gray-100">
+                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200 border-b border-gray-200 bg-gray-50/80">
+                    {/* Header Coloana 1: Mobilare */}
+                    <div className="px-6 py-3.5 flex items-center justify-between select-none">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                          <Sofa size={13} />
+                        </div>
+                        <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                          Mobilare
+                        </h3>
+                      </div>
                       <SectionEditButton
                         isEditing={editingSection === "mobilare_dotari"}
                         isDirty={isSectionDirty("mobilare_dotari")}
@@ -2192,42 +2245,52 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         onSave={() => handleSaveSection("mobilare_dotari")}
                         disabled={isPublicShared}
                       />
-                    }
-                  />
-                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
-                    {/* Coloana 1: Mobilare */}
-                    <div className="divide-y divide-gray-100">
-                      <div className="px-5 py-2 bg-gray-50/60 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                        Mobilare
-                      </div>
-                      {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
-                      {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
-                      {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
-                      {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
-                      {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
-                      {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
-                      {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
-                      {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
-                      {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
-                      {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
-                      {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
                     </div>
 
-                    {/* Coloana 2: Dotări */}
-                    <div className="divide-y divide-gray-100">
-                      <div className="px-5 py-2 bg-gray-50/60 text-[11px] font-bold text-gray-500 uppercase tracking-wider">
-                        Dotări
+                    {/* Header Coloana 2: Dotări */}
+                    <div className="px-6 py-3.5 flex items-center justify-between select-none">
+                      <div className="flex items-center gap-2">
+                        <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                          <Tv size={13} />
+                        </div>
+                        <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                          Dotări
+                        </h3>
                       </div>
-                      {renderRow("dotari", "Living", "aer condiționat, smart TV")}
-                      {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
-                      {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
-                      {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
-                      {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
-                      {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
-                      {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
-                      {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
-                      {renderRow("dotari", "Hol", "interfon")}
-                      {renderRow("dotari", "Altele", "-", true)}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
+                    {/* Coloana 1: Mobilare - EXACT aceleași camere ca Dotări */}
+                    <div className="divide-y divide-gray-100">
+                      {roomsList.map((room, idx) => (
+                        renderRow(
+                          "mobilare", 
+                          room, 
+                          room === "Living" ? "canapea, măsuță cafea, comodă" :
+                          room.startsWith("Camera") ? "pat, noptiere, dulap" :
+                          room === "Bucătărie" ? "mobilă de bucatarie premium" :
+                          room.startsWith("Baie") ? "obiecte sanitare premium" :
+                          room === "Hol" ? "cuier, pantofar" : "-",
+                          idx === roomsList.length - 1
+                        )
+                      ))}
+                    </div>
+
+                    {/* Coloana 2: Dotări - EXACT aceleași camere ca Mobilare */}
+                    <div className="divide-y divide-gray-100">
+                      {roomsList.map((room, idx) => (
+                        renderRow(
+                          "dotari", 
+                          room, 
+                          room === "Living" ? "aer condiționat, smart TV" :
+                          room.startsWith("Camera") ? "-" :
+                          room === "Bucătărie" ? "frigider, plită, cuptor, hotă" :
+                          room.startsWith("Baie") ? "-" :
+                          room === "Hol" ? "interfon" : "-",
+                          idx === roomsList.length - 1
+                        )
+                      ))}
                     </div>
                   </div>
                 </div>
