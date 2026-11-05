@@ -694,43 +694,26 @@ Returnează un JSON strict cu următoarele chei:
         return badPatterns.some(p => lower.includes(p));
       };
 
-      // Helper to promote known thumbnail image URLs to full/maximum resolution
+      // Helper to promote known thumbnail image URLs to full/maximum resolution safely
       const promoteToHighRes = (rawUrl: string): string => {
+        if (!rawUrl || typeof rawUrl !== "string") return "";
         let cleaned = rawUrl.trim().replace(/\\/g, "");
         if (cleaned.startsWith("//")) cleaned = "https:" + cleaned;
 
-        // Imobiliare.ro & Roamcdn high-resolution promotions
+        // Clean redundant port :443/
+        if (cleaned.includes(":443/")) {
+          cleaned = cleaned.replace(":443/", "/");
+        }
+
+        // Safe Imobiliare.ro & Roamcdn resolution boost: only replace small size tokens in filename
         if (cleaned.includes("imobiliare.ro") || cleaned.includes("roamcdn")) {
-          cleaned = cleaned
-            .replace(/_(?:75x75|150x150|160x120|400x300)\.jpg/gi, "_800x600.jpg")
-            .replace(/\/thumb\//gi, "/large/")
-            .replace(/\/small\//gi, "/large/")
-            .replace(/\/medium\//gi, "/large/");
-          if (cleaned.toLowerCase().includes("roamcdn")) {
-            cleaned = cleaned.replace(/gallery-[a-zA-Z0-9]+-watermark/gi, "gallery-full-1200w-watermark");
-          }
+          cleaned = cleaned.replace(/_(?:75x75|150x150|160x120|200x150|400x300)\.jpg/gi, "_800x600.jpg");
         }
 
-        // Publi24 promotions
-        if (cleaned.includes("publi24") || cleaned.includes("pstatic") || cleaned.includes("pcdnh")) {
-          cleaned = cleaned
-            .replace(/\/small\//gi, "/large/")
-            .replace(/\/medium\//gi, "/large/")
-            .replace(/\/thumb\//gi, "/large/");
-        }
-
-        // Storia / OLX Apollo / Akamaized promotions: enforce maximum 1000x700
+        // Storia / OLX Apollo: if it already specifies a small resolution via ;s=, normalize to ;s=1000x700
         if (cleaned.includes(";s=")) {
           cleaned = cleaned.replace(/;s=\d+x\d+/, ";s=1000x700");
-        } else if (
-          (cleaned.includes("akamaized.net") || cleaned.includes("apollo") || cleaned.includes("storia.ro") || cleaned.includes("olxcdn")) &&
-          (cleaned.includes("/files/") || cleaned.includes("/image") || cleaned.includes("/photos/"))
-        ) {
-          cleaned = cleaned + (cleaned.includes('?') ? '&' : ';') + "s=1000x700";
         }
-
-        // General small/medium/thumb to large
-        cleaned = cleaned.replace(/\/(?:small|thumb|mini)\//gi, "/large/");
 
         return cleaned;
       };
