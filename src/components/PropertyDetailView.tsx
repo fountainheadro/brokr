@@ -1697,11 +1697,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
-            <div className="flex items-stretch h-full shrink-0 border-r border-b border-gray-200">
+            <div className="flex items-stretch h-full shrink-0 border-r border-gray-200">
               <button
                 type="button"
                 onClick={handlePrint}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-b border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
                 title="Tipărește oferta"
               >
                 <Printer size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
@@ -1710,7 +1710,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={handleNativeShare}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-r border-b border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
                 title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
               >
                 <Share2 size={16} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
@@ -1803,198 +1803,192 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
       {/* Main Layout (Scrollable container below the fixed headers) */}
       <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth">
+        
+        {/* PUBLIC SHARED FULL-WIDTH GALLERY (100% width, max 50vh, 0 padding, no rounded corners) */}
+        {isPublicShared && (
+          <div id="poze" className="w-full h-[50vh] max-h-[50vh] bg-gray-900 border-b border-gray-200 overflow-hidden select-none scroll-mt-24 sm:scroll-mt-28">
+            {imagesList.length === 0 ? (
+              <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
+                <Camera size={40} className="text-gray-300" />
+                <span className="text-xs font-medium text-gray-500">Nicio fotografie disponibilă</span>
+              </div>
+            ) : (
+              <>
+                {/* Mobile Layout: show big image followed by the toate pozele one, max height 50vh, 100% width & height, 0 padding */}
+                <div className="flex md:hidden w-full h-full">
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                    className="relative w-3/5 h-full cursor-pointer group bg-gray-800 border-r border-white/25 overflow-hidden"
+                  >
+                    <img 
+                      src={imagesList[0]} 
+                      alt={`${generatedTitle} - 1`}
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300" 
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
+                    className="relative w-2/5 h-full cursor-pointer group bg-gray-800 overflow-hidden"
+                  >
+                    <img 
+                      src={imagesList[1] || imagesList[0]} 
+                      alt={`${generatedTitle} - 2`}
+                      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300" 
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
+                      <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
+                        Toate pozele ({imagesList.length})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Desktop Layout: 1 (40%), 2&3 (10%), 4 (20%), 5&6 (10%), 7 (20% + more images button) */}
+                <div className="hidden md:flex w-full h-full">
+                  {/* 1 - biggest with 40% width */}
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                    className="relative w-[40%] h-full cursor-pointer group select-none bg-gray-800 overflow-hidden border-r border-white/25"
+                  >
+                    <img 
+                      src={imagesList[0]} 
+                      alt={`${generatedTitle} - 1`}
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedPhotoIndex(0);
+                        setIsGalleryOpen(true);
+                      }}
+                      className="absolute bottom-3 left-3 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
+                    >
+                      <Camera size={13} className="text-[#BE9662]" />
+                      <span>Galerie foto ({imagesList.length})</span>
+                    </button>
+                  </div>
+
+                  {/* 2 and 3 - 10% width stacked vertically */}
+                  <div className="w-[10%] h-full flex flex-col border-r border-white/25">
+                    <div 
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
+                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden border-b border-white/25"
+                    >
+                      <img 
+                        src={imagesList[1] || imagesList[0]} 
+                        alt={`${generatedTitle} - 2`}
+                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                    </div>
+
+                    <div 
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 2 ? 2 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
+                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden"
+                    >
+                      <img 
+                        src={imagesList[2] || imagesList[1] || imagesList[0]} 
+                        alt={`${generatedTitle} - 3`}
+                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* 4 - 20% width */}
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(imagesList.length > 3 ? 3 : 0); setIsGalleryOpen(true); }}
+                    className="relative w-[20%] h-full cursor-pointer group select-none bg-gray-800 overflow-hidden border-r border-white/25"
+                  >
+                    <img 
+                      src={imagesList[3] || imagesList[0]} 
+                      alt={`${generatedTitle} - 4`}
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                  </div>
+
+                  {/* 5 and 6 - 10% width stacked vertically */}
+                  <div className="w-[10%] h-full flex flex-col border-r border-white/25">
+                    <div 
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
+                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden border-b border-white/25"
+                    >
+                      <img 
+                        src={imagesList[4] || imagesList[1] || imagesList[0]} 
+                        alt={`${generatedTitle} - 5`}
+                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                    </div>
+
+                    <div 
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 5 ? 5 : (imagesList.length > 2 ? 2 : 0)); setIsGalleryOpen(true); }}
+                      className="relative w-full h-1/2 cursor-pointer group select-none bg-gray-800 overflow-hidden"
+                    >
+                      <img 
+                        src={imagesList[5] || imagesList[2] || imagesList[0]} 
+                        alt={`${generatedTitle} - 6`}
+                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                    </div>
+                  </div>
+
+                  {/* 7 - 20% width and also is the more images button */}
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(imagesList.length > 6 ? 6 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
+                    className="relative w-[20%] h-full cursor-pointer group select-none bg-gray-800 overflow-hidden"
+                  >
+                    <img 
+                      src={imagesList[6] || imagesList[3] || imagesList[imagesList.length - 1] || imagesList[0]} 
+                      alt={`${generatedTitle} - 7`}
+                      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
+                      <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
+                        Toate pozele ({imagesList.length})
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         <div className={isPublicShared ? "w-full min-h-full flex justify-center bg-gray-50/20" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
           
           {/* Main Content Cards Column: Centered boxed container for public shared, 8 cols with right border for internal CRM */}
           <div className={isPublicShared ? "max-w-4xl w-full px-4 sm:px-6 py-6 space-y-6" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200"}>
 
-            {/* PUBLIC SHARED HEADER: Zona de poze (5-Photo Mosaic Grid) + Titlu generat imediat sub poze + Preț & Preț/mp sau Garanții */}
+            {/* PUBLIC SHARED HEADER: Titlu generat imediat sub poze + Preț & Preț/mp sau Garanții */}
             {isPublicShared && (
-              <div className="space-y-4">
-                {/* 1. Zona de poze conform cerințelor - 100% lățime, max 50vh înălțime */}
-                <div id="poze" className="w-full rounded-2xl overflow-hidden border border-gray-200 bg-gray-100 shadow-xs scroll-mt-28 sm:scroll-mt-32 h-[50vh] max-h-[50vh]">
-                  {imagesList.length === 0 ? (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
-                      <Camera size={40} className="text-gray-300" />
-                      <span className="text-xs font-medium text-gray-500">Nicio fotografie disponibilă</span>
-                    </div>
+              <div className="bg-white rounded-xl border border-gray-200 p-5 sm:p-6 shadow-xs font-sans">
+                <h1 className="text-[14px] font-normal text-gray-700 tracking-tight leading-snug">
+                  {generatedTitle}
+                </h1>
+                <div className="mt-2 text-[18px] font-bold text-gray-900 font-sans tracking-tight">
+                  {isRent ? (
+                    <span>
+                      {cleanPriceNumber} eur / luna{cleanGuaranteeText ? ` (  ${cleanGuaranteeText} )` : ""}
+                    </span>
                   ) : (
-                    <>
-                      {/* Mobile Layout: show only the big image followed by the toate imaginile one, max height 50vh */}
-                      <div className="grid grid-cols-2 gap-1.5 p-1.5 w-full h-full md:hidden">
-                        {/* Big image */}
-                        <div 
-                          onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                          className="relative rounded-xl overflow-hidden cursor-pointer group bg-gray-200 h-full"
-                        >
-                          <img 
-                            src={imagesList[0]} 
-                            alt={`${generatedTitle} - 1`}
-                            className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300" 
-                            referrerPolicy="no-referrer"
-                          />
-                        </div>
-
-                        {/* Followed by the toate imaginile one */}
-                        <div 
-                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                          className="relative rounded-xl overflow-hidden cursor-pointer group bg-gray-200 h-full"
-                        >
-                          <img 
-                            src={imagesList[1] || imagesList[0]} 
-                            alt={`${generatedTitle} - 2`}
-                            className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300" 
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
-                            <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
-                              Toate imaginile ({imagesList.length})
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Desktop Layout: 100% width, one big horizontal image at left, then 2 small, then one as big as 2 columns, then small again (with toate pozele link to lightbox), max height 50vh */}
-                      <div className="hidden md:grid grid-cols-6 grid-rows-2 gap-2 p-2 w-full h-full">
-                        {/* 1. One big horizontal orientation image at the left (cols 1-2, rows 1-2) */}
-                        <div 
-                          onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                          className="relative col-span-2 row-span-2 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
-                        >
-                          <img 
-                            src={imagesList[0]} 
-                            alt={`${generatedTitle} - principală`}
-                            className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedPhotoIndex(0);
-                              setIsGalleryOpen(true);
-                            }}
-                            className="absolute bottom-3 left-3 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
-                          >
-                            <Camera size={13} className="text-[#BE9662]" />
-                            <span>Galerie foto ({imagesList.length})</span>
-                          </button>
-                        </div>
-
-                        {/* 2 & 3. And then 2 small images stacked vertically in column 3 */}
-                        <div 
-                          onClick={() => { setSelectedPhotoIndex(1 < imagesList.length ? 1 : 0); setIsGalleryOpen(true); }}
-                          className="relative col-span-1 row-span-1 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
-                        >
-                          <img 
-                            src={imagesList[1] || imagesList[0]} 
-                            alt={`${generatedTitle} - foto 2`}
-                            className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
-                        </div>
-
-                        <div 
-                          onClick={() => { setSelectedPhotoIndex(2 < imagesList.length ? 2 : 0); setIsGalleryOpen(true); }}
-                          className="relative col-span-1 row-span-1 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
-                        >
-                          <img 
-                            src={imagesList[2] || imagesList[1] || imagesList[0]} 
-                            alt={`${generatedTitle} - foto 3`}
-                            className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
-                        </div>
-
-                        {/* 4. And then one as big as 2 columns (cols 4-5, rows 1-2) */}
-                        <div 
-                          onClick={() => { setSelectedPhotoIndex(3 < imagesList.length ? 3 : 0); setIsGalleryOpen(true); }}
-                          className="relative col-span-2 row-span-2 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
-                        >
-                          <img 
-                            src={imagesList[3] || imagesList[0]} 
-                            alt={`${generatedTitle} - foto 4`}
-                            className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                            referrerPolicy="no-referrer"
-                          />
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
-                        </div>
-
-                        {/* 5. And then small again in column 6 (in the last image, place the toate pozele link to lightbox) */}
-                        {imagesList.length >= 6 ? (
-                          <>
-                            <div 
-                              onClick={() => { setSelectedPhotoIndex(4); setIsGalleryOpen(true); }}
-                              className="relative col-span-1 row-span-1 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
-                            >
-                              <img 
-                                src={imagesList[4]} 
-                                alt={`${generatedTitle} - foto 5`}
-                                className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                                referrerPolicy="no-referrer"
-                              />
-                              <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
-                            </div>
-
-                            <div 
-                              onClick={() => { setSelectedPhotoIndex(5); setIsGalleryOpen(true); }}
-                              className="relative col-span-1 row-span-1 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
-                            >
-                              <img 
-                                src={imagesList[5]} 
-                                alt={`${generatedTitle} - foto 6`}
-                                className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                                referrerPolicy="no-referrer"
-                              />
-                              <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
-                                <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
-                                  Toate pozele ({imagesList.length})
-                                </span>
-                              </div>
-                            </div>
-                          </>
-                        ) : (
-                          <div 
-                            onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
-                            className="relative col-span-1 row-span-2 rounded-xl overflow-hidden cursor-pointer group select-none bg-gray-200"
-                          >
-                            <img 
-                              src={imagesList[4] || imagesList[imagesList.length - 1] || imagesList[0]} 
-                              alt={`${generatedTitle} - ultima foto`}
-                              className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                              referrerPolicy="no-referrer"
-                            />
-                            <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
-                              <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
-                                Toate pozele ({imagesList.length})
-                              </span>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </>
+                    <span>
+                      {cleanPriceNumber} eur{pricePerSqm ? `   ${pricePerSqm}` : ""}
+                    </span>
                   )}
-                </div>
-
-                {/* 2. Titlu imediat sub poze, cu subtitlu (font-size 14px, font-weight 400) și preț (font-size 18px, font-weight 700) */}
-                <div className="bg-white rounded-xl border border-gray-200 p-5 sm:p-6 shadow-xs font-sans">
-                  <h1 className="text-[14px] font-normal text-gray-700 tracking-tight leading-snug">
-                    {generatedTitle}
-                  </h1>
-                  <div className="mt-2 text-[18px] font-bold text-gray-900 font-sans tracking-tight">
-                    {isRent ? (
-                      <span>
-                        {cleanPriceNumber} eur / luna{cleanGuaranteeText ? ` (  ${cleanGuaranteeText} )` : ""}
-                      </span>
-                    ) : (
-                      <span>
-                        {cleanPriceNumber} eur{pricePerSqm ? `   ${pricePerSqm}` : ""}
-                      </span>
-                    )}
-                  </div>
                 </div>
               </div>
             )}

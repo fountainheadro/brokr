@@ -21,14 +21,14 @@ export interface VersionData {
 
 export type UpdateComplexity = 'small' | 'medium' | 'large' | number;
 
-const STORAGE_KEY = "brokr_app_version_state_v29";
-export const BASE_AI_INPUTS_COUNT = 165;
+const STORAGE_KEY = "brokr_app_version_state_v30";
+export const BASE_AI_INPUTS_COUNT = 166;
 
 // Initial version state updated (+1 prompt to AI Studio inputs count)
 const DEFAULT_VERSION: VersionData = {
   major: 0,
   minor: 16,
-  patch: 165,
+  patch: 166,
   aiInputsCount: BASE_AI_INPUTS_COUNT,
   lastUpdated: new Date().toISOString()
 };
