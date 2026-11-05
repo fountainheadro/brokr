@@ -845,7 +845,10 @@ export const Home: React.FC = () => {
         return filteredUrls;
       };
 
-      const images = await filterImagesBySize(rawImages || []);
+      let images = await filterImagesBySize(rawImages || []);
+      if (!images || images.length === 0) {
+        images = rawImages || [];
+      }
 
       setExtractionStatus("Salvare date...");
       // All crawler images are put in crmData.imagini.alteSpatii so user can categorize them
@@ -880,7 +883,10 @@ export const Home: React.FC = () => {
         if (!finalCrmData.imagini) {
           finalCrmData.imagini = { living: [], bucatarie: [], camera: [], baie: [], alteSpatii: [] };
         }
-        finalCrmData.imagini.alteSpatii = images.map((img: string) => ({ original: img }));
+        const hasExistingCategorized = Object.values(finalCrmData.imagini).some((arr: any) => Array.isArray(arr) && arr.length > 0);
+        if (!hasExistingCategorized) {
+          finalCrmData.imagini.alteSpatii = images.map((img: string) => ({ original: img }));
+        }
       }
 
       const extraction = {
@@ -904,7 +910,8 @@ export const Home: React.FC = () => {
         ownerPhone: ownerPhone || finalCrmData.detaliiGenerale?.contacteAditionale || lead.ownerPhone || "Nespecificat",
         transactionType: transType as "Închiriere" | "Vânzare",
         zone: zone || (finalCrmData.detaliiGenerale?.localizare?.zona?.[0] || lead.zone || "București"),
-        coverImage: deepCoverImage
+        coverImage: deepCoverImage,
+        images: images && images.length > 0 ? images : (rawImages || lead.images || [])
       };
 
       await leadsService.updateLeadData(lead.id!, updatedFields);

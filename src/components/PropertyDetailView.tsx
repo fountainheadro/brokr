@@ -653,7 +653,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         if (!u || typeof u !== "string" || !u.trim()) continue;
         const clean = u.trim();
         const base = clean.split(/[?;]/)[0];
-        const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9_-]+)/i);
+        const olxMatch = base.match(/\/v1\/files\/([^/]+)/i);
         const uuidMatch = base.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
         const md5Match = base.match(/([a-f0-9]{32})/i);
         const key = olxMatch 
@@ -669,20 +669,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       return result;
     };
 
-    // Priority 1: If lead has explicit images array, use it directly!
-    const directImages = (lead as any)?.images;
-    if (Array.isArray(directImages)) {
-      const sanitized = directImages
-        .map((item: any) => (typeof item === "string" ? item : item?.original))
-        .filter((u: any): u is string => typeof u === "string" && u.trim().length > 0);
-      return dedupeUrls(sanitized);
-    }
-
-    const images: string[] = [];
-    if (lead?.coverImage && !images.includes(lead.coverImage)) {
-      images.push(lead.coverImage);
-    }
     const crmImagini = lead?.extractedData?.crmData?.imagini;
+    const crmImages: string[] = [];
     if (crmImagini) {
       const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
       categories.forEach(cat => {
@@ -690,14 +678,29 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         if (Array.isArray(list)) {
           list.forEach(item => {
             const url = typeof item === "string" ? item : item?.original;
-            if (url && typeof url === "string" && !images.includes(url)) {
-              images.push(url);
+            if (url && typeof url === "string" && url.trim().length > 0) {
+              crmImages.push(url.trim());
             }
           });
         }
       });
     }
-    return dedupeUrls(images);
+
+    const directImages = (lead as any)?.images;
+    const directSanitized = Array.isArray(directImages)
+      ? directImages
+          .map((item: any) => (typeof item === "string" ? item : item?.original))
+          .filter((u: any): u is string => typeof u === "string" && u.trim().length > 0)
+      : [];
+
+    // Pool all sources to guarantee we never miss images from either lead.images or crmData.imagini
+    const combined = [
+      ...directSanitized,
+      ...crmImages,
+      ...(lead?.coverImage ? [lead.coverImage] : [])
+    ];
+
+    return dedupeUrls(combined);
   }, [lead]);
 
   const crmData = lead?.extractedData?.crmData;
