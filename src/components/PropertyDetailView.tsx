@@ -48,6 +48,7 @@ import {
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
 import { auth } from "../lib/firebase";
+import { ProtectedImage } from "./ProtectedImage";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -1851,29 +1852,28 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             ) : (
               <>
                 {/* Mobile Layout: show big image followed by the toate pozele one, max height 50vh, 10px gap */}
-                <div className="flex md:hidden w-full h-full gap-[10px] bg-white">
-                  <div 
-                    onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                    className="relative w-3/5 h-full cursor-pointer group bg-gray-100 overflow-hidden"
-                  >
-                    <img 
+                <div className="flex md:hidden w-full h-full gap-[10px] bg-white select-none" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
+                  <div className="relative w-3/5 h-full cursor-pointer group bg-gray-100 overflow-hidden">
+                    <ProtectedImage 
                       src={imagesList[0]} 
                       alt={`${generatedTitle} - 1`}
-                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300" 
-                      referrerPolicy="no-referrer"
+                      className="w-full h-full"
+                      imageClassName="group-hover:scale-102"
+                      onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
                     />
                   </div>
-                  <div 
-                    onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                    className="relative w-2/5 h-full cursor-pointer group bg-gray-100 overflow-hidden"
-                  >
-                    <img 
+                  <div className="relative w-2/5 h-full cursor-pointer group bg-gray-100 overflow-hidden">
+                    <ProtectedImage 
                       src={imagesList[1] || imagesList[0]} 
                       alt={`${generatedTitle} - 2`}
-                      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300" 
-                      referrerPolicy="no-referrer"
+                      className="w-full h-full"
+                      imageClassName="group-hover:scale-103"
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
                     />
-                    <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
+                    <div 
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
+                      className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer"
+                    >
                       <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
                         Toate pozele ({imagesList.length})
                       </span>
@@ -1882,19 +1882,17 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
 
                 {/* Desktop Layout: 1 (40%), 2&3 (10%), 4 (20%), 5&6 (10%), 7 (20% + more images button), with 10px white padding between */}
-                <div className="hidden md:flex w-full h-full gap-[10px] bg-white">
+                <div className="hidden md:flex w-full h-full gap-[10px] bg-white select-none" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
                   {/* 1 - biggest with 40% width */}
-                  <div 
-                    onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                    className="relative flex-[40] w-[40%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden"
-                  >
-                    <img 
+                  <div className="relative flex-[40] w-[40%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                    <ProtectedImage 
                       src={imagesList[0]} 
                       alt={`${generatedTitle} - 1`}
-                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
+                      className="w-full h-full"
+                      imageClassName="group-hover:scale-102"
+                      onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
                     />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
                     <button
                       type="button"
                       onClick={(e) => {
@@ -1902,7 +1900,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         setSelectedPhotoIndex(0);
                         setIsGalleryOpen(true);
                       }}
-                      className="absolute bottom-3 left-3 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
+                      className="absolute bottom-3 left-3 z-30 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
                     >
                       <Camera size={13} className="text-[#BE9662]" />
                       <span>Galerie foto ({imagesList.length})</span>
@@ -1911,88 +1909,79 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
                   {/* 2 and 3 - 10% width stacked vertically with 10px white padding between */}
                   <div className="flex-[10] w-[10%] h-full flex flex-col gap-[10px]">
-                    <div 
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
-                    >
-                      <img 
+                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                      <ProtectedImage 
                         src={imagesList[1] || imagesList[0]} 
                         alt={`${generatedTitle} - 2`}
-                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
+                        className="w-full h-full"
+                        imageClassName="group-hover:scale-103"
+                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
                       />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
                     </div>
 
-                    <div 
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 2 ? 2 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
-                    >
-                      <img 
+                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                      <ProtectedImage 
                         src={imagesList[2] || imagesList[1] || imagesList[0]} 
                         alt={`${generatedTitle} - 3`}
-                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
+                        className="w-full h-full"
+                        imageClassName="group-hover:scale-103"
+                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 2 ? 2 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
                       />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
                     </div>
                   </div>
 
                   {/* 4 - 20% width */}
-                  <div 
-                    onClick={() => { setSelectedPhotoIndex(imagesList.length > 3 ? 3 : 0); setIsGalleryOpen(true); }}
-                    className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden"
-                  >
-                    <img 
+                  <div className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                    <ProtectedImage 
                       src={imagesList[3] || imagesList[0]} 
                       alt={`${generatedTitle} - 4`}
-                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
+                      className="w-full h-full"
+                      imageClassName="group-hover:scale-102"
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 3 ? 3 : 0); setIsGalleryOpen(true); }}
                     />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
                   </div>
 
                   {/* 5 and 6 - 10% width stacked vertically with 10px white padding between */}
                   <div className="flex-[10] w-[10%] h-full flex flex-col gap-[10px]">
-                    <div 
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
-                    >
-                      <img 
+                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                      <ProtectedImage 
                         src={imagesList[4] || imagesList[1] || imagesList[0]} 
                         alt={`${generatedTitle} - 5`}
-                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
+                        className="w-full h-full"
+                        imageClassName="group-hover:scale-103"
+                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
                       />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
                     </div>
 
-                    <div 
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 5 ? 5 : (imagesList.length > 2 ? 2 : 0)); setIsGalleryOpen(true); }}
-                      className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden"
-                    >
-                      <img 
+                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                      <ProtectedImage 
                         src={imagesList[5] || imagesList[2] || imagesList[0]} 
                         alt={`${generatedTitle} - 6`}
-                        className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
+                        className="w-full h-full"
+                        imageClassName="group-hover:scale-103"
+                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 5 ? 5 : (imagesList.length > 2 ? 2 : 0)); setIsGalleryOpen(true); }}
                       />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
                     </div>
                   </div>
 
                   {/* 7 - 20% width and also is the more images button */}
-                  <div 
-                    onClick={() => { setSelectedPhotoIndex(imagesList.length > 6 ? 6 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
-                    className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden"
-                  >
-                    <img 
+                  <div className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                    <ProtectedImage 
                       src={imagesList[6] || imagesList[3] || imagesList[imagesList.length - 1] || imagesList[0]} 
                       alt={`${generatedTitle} - 7`}
-                      className="w-full h-full object-cover group-hover:scale-103 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
+                      className="w-full h-full"
+                      imageClassName="group-hover:scale-103"
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 6 ? 6 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
                     />
-                    <div className="absolute inset-0 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center">
+                    <div 
+                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 6 ? 6 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
+                      className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer"
+                    >
                       <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
                         Toate pozele ({imagesList.length})
                       </span>
@@ -2229,71 +2218,69 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
                 {/* -Subcategorie "Mobilare & Dotări" cu antet pe două coloane (Mobilare și Dotări) */}
                 <div className="border-t border-gray-100">
-                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200 border-b border-gray-200 bg-gray-50/80">
-                    {/* Header Coloana 1: Mobilare */}
-                    <div className="px-6 py-3.5 flex items-center justify-between select-none">
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                          <Sofa size={13} />
+                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                    {/* Coloana 1: Mobilare (Header + Rânduri) */}
+                    <div className="flex flex-col">
+                      <div className="px-6 py-3.5 flex items-center justify-between select-none border-b border-gray-200 bg-gray-50/80">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                            <Sofa size={13} />
+                          </div>
+                          <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                            Mobilare
+                          </h3>
                         </div>
-                        <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                          Mobilare
-                        </h3>
+                        <SectionEditButton
+                          isEditing={editingSection === "mobilare_dotari"}
+                          isDirty={isSectionDirty("mobilare_dotari")}
+                          onStartEdit={() => handleStartEditSection("mobilare_dotari")}
+                          onCancel={() => handleCancelEditSection("mobilare_dotari")}
+                          onSave={() => handleSaveSection("mobilare_dotari")}
+                          disabled={isPublicShared}
+                        />
                       </div>
-                      <SectionEditButton
-                        isEditing={editingSection === "mobilare_dotari"}
-                        isDirty={isSectionDirty("mobilare_dotari")}
-                        onStartEdit={() => handleStartEditSection("mobilare_dotari")}
-                        onCancel={() => handleCancelEditSection("mobilare_dotari")}
-                        onSave={() => handleSaveSection("mobilare_dotari")}
-                        disabled={isPublicShared}
-                      />
+                      <div className="divide-y divide-gray-100">
+                        {roomsList.map((room, idx) => (
+                          renderRow(
+                            "mobilare", 
+                            room, 
+                            room === "Living" ? "canapea, măsuță cafea, comodă" :
+                            room.startsWith("Camera") ? "pat, noptiere, dulap" :
+                            room === "Bucătărie" ? "mobilă de bucatarie premium" :
+                            room.startsWith("Baie") ? "obiecte sanitare premium" :
+                            room === "Hol" ? "cuier, pantofar" : "-",
+                            idx === roomsList.length - 1
+                          )
+                        ))}
+                      </div>
                     </div>
 
-                    {/* Header Coloana 2: Dotări */}
-                    <div className="px-6 py-3.5 flex items-center justify-between select-none">
-                      <div className="flex items-center gap-2">
-                        <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                          <Tv size={13} />
+                    {/* Coloana 2: Dotări (Header + Rânduri) */}
+                    <div className="flex flex-col">
+                      <div className="px-6 py-3.5 flex items-center justify-between select-none border-b border-gray-200 bg-gray-50/80">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                            <Tv size={13} />
+                          </div>
+                          <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                            Dotări
+                          </h3>
                         </div>
-                        <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                          Dotări
-                        </h3>
                       </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
-                    {/* Coloana 1: Mobilare - EXACT aceleași camere ca Dotări */}
-                    <div className="divide-y divide-gray-100">
-                      {roomsList.map((room, idx) => (
-                        renderRow(
-                          "mobilare", 
-                          room, 
-                          room === "Living" ? "canapea, măsuță cafea, comodă" :
-                          room.startsWith("Camera") ? "pat, noptiere, dulap" :
-                          room === "Bucătărie" ? "mobilă de bucatarie premium" :
-                          room.startsWith("Baie") ? "obiecte sanitare premium" :
-                          room === "Hol" ? "cuier, pantofar" : "-",
-                          idx === roomsList.length - 1
-                        )
-                      ))}
-                    </div>
-
-                    {/* Coloana 2: Dotări - EXACT aceleași camere ca Mobilare */}
-                    <div className="divide-y divide-gray-100">
-                      {roomsList.map((room, idx) => (
-                        renderRow(
-                          "dotari", 
-                          room, 
-                          room === "Living" ? "aer condiționat, smart TV" :
-                          room.startsWith("Camera") ? "-" :
-                          room === "Bucătărie" ? "frigider, plită, cuptor, hotă" :
-                          room.startsWith("Baie") ? "-" :
-                          room === "Hol" ? "interfon" : "-",
-                          idx === roomsList.length - 1
-                        )
-                      ))}
+                      <div className="divide-y divide-gray-100">
+                        {roomsList.map((room, idx) => (
+                          renderRow(
+                            "dotari", 
+                            room, 
+                            room === "Living" ? "aer condiționat, smart TV" :
+                            room.startsWith("Camera") ? "-" :
+                            room === "Bucătărie" ? "frigider, plită, cuptor, hotă" :
+                            room.startsWith("Baie") ? "-" :
+                            room === "Hol" ? "interfon" : "-",
+                            idx === roomsList.length - 1
+                          )
+                        ))}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2599,12 +2586,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 <div className="relative aspect-[4/3] bg-gray-100 rounded-lg group select-none overflow-hidden border border-gray-200">
                   {imagesList.length > 0 ? (
                     <>
-                      <img 
+                      <ProtectedImage 
                         src={imagesList[carouselIndex] || imagesList[0]} 
                         alt={`${displayTitle} - foto ${carouselIndex + 1}`}
                         onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
-                        className="w-full h-full object-cover cursor-pointer group-hover:scale-102 transition-transform duration-300" 
-                        referrerPolicy="no-referrer"
+                        className="w-full h-full cursor-pointer"
+                        imageClassName="object-cover group-hover:scale-102"
                       />
 
                       {/* Delete Current Photo Button in Edit Mode */}
@@ -2900,19 +2887,26 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
           </div>
 
-          <div className="flex-1 relative flex items-center justify-center p-4">
-            <img 
-              src={imagesList[selectedPhotoIndex] || imagesList[0]} 
-              alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
-              className="max-h-[82vh] max-w-[90vw] object-contain rounded shadow-2xl transition-all"
-              referrerPolicy="no-referrer"
-            />
+          <div 
+            className="flex-1 relative flex items-center justify-center p-4 select-none"
+            onContextMenu={(e) => e.preventDefault()}
+            onDragStart={(e) => e.preventDefault()}
+          >
+            <div className="relative max-h-[82vh] max-w-[90vw] overflow-hidden rounded shadow-2xl">
+              <ProtectedImage 
+                src={imagesList[selectedPhotoIndex] || imagesList[0]} 
+                alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
+                className="max-h-[82vh] max-w-[90vw]"
+                imageClassName="max-h-[82vh] max-w-[90vw] object-contain"
+                showAgencyShield={true}
+              />
+            </div>
 
             {imagesList.length > 1 && (
               <button
                 type="button"
                 onClick={() => setSelectedPhotoIndex(prev => (prev === 0 ? imagesList.length - 1 : prev - 1))}
-                className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
+                className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm z-30"
                 title="Fotografia anterioară"
               >
                 <ChevronLeft size={24} />
@@ -2923,7 +2917,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedPhotoIndex(prev => (prev === imagesList.length - 1 ? 0 : prev + 1))}
-                className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
+                className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm z-30"
                 title="Următoarea fotografie"
               >
                 <ChevronRight size={24} />
@@ -2931,7 +2925,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             )}
           </div>
 
-          <div className="h-20 bg-black/60 border-t border-white/10 px-4 flex items-center justify-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+          <div className="h-20 bg-black/60 border-t border-white/10 px-4 flex items-center justify-center gap-2 overflow-x-auto no-scrollbar shrink-0 select-none">
             {imagesList.map((img, idx) => (
               <button
                 key={idx}
@@ -2943,7 +2937,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     : "border-transparent opacity-50 hover:opacity-100"
                 }`}
               >
-                <img src={img} alt={`thumb-${idx}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                <ProtectedImage src={img} alt={`thumb-${idx}`} className="w-full h-full" imageClassName="object-cover" />
               </button>
             ))}
           </div>

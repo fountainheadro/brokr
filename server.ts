@@ -14,6 +14,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { defaultFormats, defaultPlugins } from "jimp";
 import { createJimp } from "@jimp/core";
 import webp from "@jimp/wasm-webp";
+import { inpaintTelea } from "./src/utils/teleaInpainting";
 
 // Intercept global fetch so we can load @jsquash/webp WASM files locally instead of triggering sandbox fetch errors
 const originalFetch = global.fetch;
@@ -73,207 +74,83 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
   if (!mimeType.startsWith("image/") || mimeType.includes("svg")) {
     return buffer;
   }
-  
-  // Circuit breaker: if quota/credits exhausted recently, serve original image directly
-  if (Date.now() < watermarkDisabledUntil) {
-    return buffer;
-  }
-
-  if (!process.env.GEMINI_API_KEY) {
-    return buffer;
-  }
 
   try {
-    console.log(`[Watermark Remover] Reading image: ${imageUrl.substring(0, 100)}...`);
     const image = await Jimp.read(buffer);
     const { width, height } = image;
     
-    // Skip tiny images
-    if (width < 300 || height < 300) {
+    // Skip tiny images/icons
+    if (width < 250 || height < 200) {
       return buffer;
     }
-    
-    console.log(`[Watermark Remover] Image dimensions: ${width}x${height}. Detecting watermarks with Gemini...`);
-    
-    const base64 = buffer.toString("base64");
-    const prompt = "Detect all prominent watermarks, text overlays (like owner or agent phone/email/names, e.g. 'George Leotescu', 'Storia', agency logos), stamp overlays, banner labels, or company logos overlayed on this photo. For each item found, provide its exact ymin, xmin, ymax, xmax coordinates normalized from 0 to 1000.";
-    
-    const genResponse = await ai.models.generateContent({
-      model: "gemini-3.1-flash-lite",
-      contents: [
-        {
-          inlineData: {
-            data: base64,
-            mimeType: mimeType
-          }
-        },
-        prompt
-      ],
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            watermarks: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  ymin: { type: Type.INTEGER, description: "Normalized ymin from 0 to 1000" },
-                  xmin: { type: Type.INTEGER, description: "Normalized xmin from 0 to 1000" },
-                  ymax: { type: Type.INTEGER, description: "Normalized ymax from 0 to 1000" },
-                  xmax: { type: Type.INTEGER, description: "Normalized xmax from 0 to 1000" },
-                  label: { type: Type.STRING, description: "Text or type of overlay found" }
-                },
-                required: ["ymin", "xmin", "ymax", "xmax"]
-              }
-            }
-          },
-          required: ["watermarks"]
-        }
-      }
-    });
-    
-    const resText = genResponse.text;
-    if (!resText) {
-      console.log(`[Watermark Remover] No response from Gemini watermark detector`);
-      return buffer;
-    }
-    
-    const parsed = JSON.parse(resText);
-    const watermarks = parsed?.watermarks || [];
-    console.log(`[Watermark Remover] Gemini detected ${watermarks.length} watermarks:`, JSON.stringify(watermarks));
-    
-    if (watermarks.length === 0) {
-      console.log(`[Watermark Remover] Image is already clean.`);
-      return buffer;
-    }
-    
-    for (const box of watermarks) {
-      let { ymin, xmin, ymax, xmax } = box;
-      if (ymin > ymax) [ymin, ymax] = [ymax, ymin];
-      if (xmin > xmax) [xmin, xmax] = [xmax, xmin];
-      
-      ymin = Math.max(0, Math.min(1000, ymin));
-      xmin = Math.max(0, Math.min(1000, xmin));
-      ymax = Math.max(0, Math.min(1000, ymax));
-      xmax = Math.max(0, Math.min(1000, xmax));
-      
-      const startY = Math.floor((ymin / 1000) * height);
-      const startX = Math.floor((xmin / 1000) * width);
-      const boxHeight = Math.ceil(((ymax - ymin) / 1000) * height);
-      const boxWidth = Math.ceil(((xmax - xmin) / 1000) * width);
-      
-      if (boxWidth > 5 && boxHeight > 5 && startX + boxWidth <= width && startY + boxHeight <= height) {
-        console.log(`[Watermark Remover] Reconstructing region using inpainting: x=${startX}, y=${startY}, w=${boxWidth}, h=${boxHeight}`);
-        
-        // Setup border pixel cache for extremely fast lookups
-        const borderLeft: number[] = [];
-        const borderRight: number[] = [];
-        const borderTop: number[] = [];
-        const borderBottom: number[] = [];
 
-        // Pre-fetch left border safely (at startX - 2 or clamped)
-        const leftX = Math.max(0, startX - 2);
-        for (let y = 0; y < boxHeight; y++) {
-          borderLeft.push(image.getPixelColor(leftX, startY + y));
-        }
+    const lowerUrl = imageUrl.toLowerCase();
+    const isStoriaOlx = lowerUrl.includes("apollo.olxcdn.com") || lowerUrl.includes("storia.ro") || lowerUrl.includes("olx.ro");
+    const isImobiliare = lowerUrl.includes("imobiliare.ro");
 
-        // Pre-fetch right border safely (at startX + boxWidth + 1 or clamped)
-        const rightX = Math.min(width - 1, startX + boxWidth + 1);
-        for (let y = 0; y < boxHeight; y++) {
-          borderRight.push(image.getPixelColor(rightX, startY + y));
-        }
+    // Detect watermark footprint mathematically without any AI API calls
+    const targetBoxes: { xmin: number; xmax: number; ymin: number; ymax: number; label: string }[] = [];
 
-        // Pre-fetch top border safely (at startY - 2 or clamped)
-        const topY = Math.max(0, startY - 2);
-        for (let x = 0; x < boxWidth; x++) {
-          borderTop.push(image.getPixelColor(startX + x, topY));
-        }
-
-        // Pre-fetch bottom border safely (at startY + boxHeight + 1 or clamped)
-        const bottomY = Math.min(height - 1, startY + boxHeight + 1);
-        for (let x = 0; x < boxWidth; x++) {
-          borderBottom.push(image.getPixelColor(startX + x, bottomY));
-        }
-
-        const getRGBA = (color: number) => {
-          return {
-            r: (color >> 24) & 0xFF,
-            g: (color >> 16) & 0xFF,
-            b: (color >> 8) & 0xFF,
-            a: color & 0xFF
-          };
-        };
-
-        // Fill the region using Inverse Distance Weighting (IDW)
-        for (let y = 0; y < boxHeight; y++) {
-          const globalY = startY + y;
-          for (let x = 0; x < boxWidth; x++) {
-            const globalX = startX + x;
-
-            const dxLeft = x + 1;
-            const dxRight = boxWidth - x;
-            const dyTop = y + 1;
-            const dyBottom = boxHeight - y;
-
-            const wLeft = 1 / (dxLeft * dxLeft);
-            const wRight = 1 / (dxRight * dxRight);
-            const wTop = 1 / (dyTop * dyTop);
-            const wBottom = 1 / (dyBottom * dyBottom);
-
-            const sumW = wLeft + wRight + wTop + wBottom;
-
-            if (sumW > 0) {
-              const cLeft = getRGBA(borderLeft[y]);
-              const cRight = getRGBA(borderRight[y]);
-              const cTop = getRGBA(borderTop[x]);
-              const cBottom = getRGBA(borderBottom[x]);
-
-              let r = (cLeft.r * wLeft + cRight.r * wRight + cTop.r * wTop + cBottom.r * wBottom) / sumW;
-              let g = (cLeft.g * wLeft + cRight.g * wRight + cTop.g * wTop + cBottom.g * wBottom) / sumW;
-              let b = (cLeft.b * wLeft + cRight.b * wRight + cTop.b * wTop + cBottom.b * wBottom) / sumW;
-              let a = (cLeft.a * wLeft + cRight.a * wRight + cTop.a * wTop + cBottom.a * wBottom) / sumW;
-
-              // Add a very subtle amount of camera sensor noise (±1.5 range) to preserve image texture naturally
-              const noiseRange = 1.5;
-              const noise = (Math.random() - 0.5) * noiseRange;
-              r = Math.max(0, Math.min(255, r + noise));
-              g = Math.max(0, Math.min(255, g + noise));
-              b = Math.max(0, Math.min(255, b + noise));
-
-              // Convert back to 32-bit unsigned RGBA color integer
-              const newColor = (((Math.round(r) & 0xFF) << 24) |
-                                ((Math.round(g) & 0xFF) << 16) |
-                                ((Math.round(b) & 0xFF) << 8) |
-                                (Math.round(a) & 0xFF)) >>> 0;
-
-              image.setPixelColor(newColor, globalX, globalY);
-            }
-          }
-        }
-      }
-    }
-    
-    const cleanedBuffer = await image.getBuffer(mimeType as any);
-    console.log(`[Watermark Remover] Cleaned! Original size: ${buffer.length}, Cleaned size: ${cleanedBuffer.length}`);
-    return cleanedBuffer;
-  } catch (err: any) {
-    const rawError = typeof err?.message === "string" ? err.message : JSON.stringify(err || "");
-    const isQuotaOrCredit = 
-      rawError.includes("402") || 
-      rawError.includes("RESOURCE_EXHAUSTED") || 
-      rawError.includes("prepayment credits") || 
-      rawError.includes("429") || 
-      rawError.includes("Quota exceeded");
-
-    if (isQuotaOrCredit) {
-      // Pause watermark detection calls for 20 minutes to avoid repeated failed requests
-      watermarkDisabledUntil = Date.now() + 20 * 60 * 1000;
-      console.warn(`[Watermark Remover] Prepayment/quota limit reached. Temporarily serving original images directly.`);
+    if (isStoriaOlx) {
+      // Storia/OLX watermark standard position: bottom-right
+      targetBoxes.push({
+        xmin: Math.floor(width * 0.74),
+        xmax: width - 2,
+        ymin: Math.floor(height * 0.88),
+        ymax: height - 2,
+        label: "Storia/OLX watermark"
+      });
+    } else if (isImobiliare) {
+      // Imobiliare.ro watermark standard position: bottom-right
+      targetBoxes.push({
+        xmin: Math.floor(width * 0.75),
+        xmax: width - 2,
+        ymin: Math.floor(height * 0.89),
+        ymax: height - 2,
+        label: "Imobiliare.ro watermark"
+      });
     } else {
-      console.warn(`[Watermark Remover] Could not clean watermark for image (serving original): ${rawError.substring(0, 120)}`);
+      // General real estate platforms
+      targetBoxes.push({
+        xmin: Math.floor(width * 0.76),
+        xmax: width - 2,
+        ymin: Math.floor(height * 0.89),
+        ymax: height - 2,
+        label: "Portal watermark"
+      });
     }
+
+    // Build mask for Telea inpainting
+    const mask = new Uint8Array(width * height);
+    let hasMaskPixels = false;
+
+    for (const box of targetBoxes) {
+      const bXmin = Math.max(0, Math.min(width - 1, box.xmin));
+      const bXmax = Math.max(0, Math.min(width - 1, box.xmax));
+      const bYmin = Math.max(0, Math.min(height - 1, box.ymin));
+      const bYmax = Math.max(0, Math.min(height - 1, box.ymax));
+
+      for (let y = bYmin; y <= bYmax; y++) {
+        const row = y * width;
+        for (let x = bXmin; x <= bXmax; x++) {
+          mask[row + x] = 1;
+          hasMaskPixels = true;
+        }
+      }
+    }
+
+    if (hasMaskPixels) {
+      console.log(`[Telea Inpainter] Running classical inpainting on ${imageUrl.substring(0, 80)}...`);
+      // Run Alexandru Telea Fast Marching inpainting algorithm directly on image bitmap buffer
+      inpaintTelea(image.bitmap.data, mask, width, height, { radius: 4 });
+      const cleanedBuffer = await image.getBuffer(mimeType as any);
+      console.log(`[Telea Inpainter] Inpainted successfully! Dimensions: ${width}x${height}`);
+      return cleanedBuffer;
+    }
+
+    return buffer;
+  } catch (err: any) {
+    console.warn(`[Telea Inpainter] Non-fatal inpainting error (serving original):`, err?.message || err);
     return buffer;
   }
 }
@@ -1830,9 +1707,8 @@ Returnează un JSON strict cu următoarele chei:
         }
 
         let finalData = response.data;
-        // Watermark detection with Gemini is disabled by default to eliminate budget spend on image views.
-        // It runs ONLY if explicitly requested via ?clean=true
-        if (req.query.clean === "true") {
+        // Inpaint portal watermarks using classical Alexandru Telea Fast Marching algorithm (non-AI, zero API cost)
+        if (req.query.noclean !== "true") {
           finalData = await cleanImageWatermarks(response.data, contentType, cleanUrl);
           addToImageCache(cleanUrl, { mimeType: contentType, data: finalData });
         }
