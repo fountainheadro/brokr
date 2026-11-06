@@ -1549,6 +1549,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       parts.push(`${mpMatch[0]}mp`);
     }
 
+    // 3.1 Zona mentionata in anuntul original (dupa suprafata)
+    const propertyZona = lead?.zone || crmData?.detaliiGenerale?.localizare?.zona?.[0] || "";
+    if (propertyZona && propertyZona.toLowerCase() !== "bucurești" && propertyZona.toLowerCase() !== "bucuresti") {
+      parts.push(propertyZona);
+    }
+
     // 4. Distanta Metrou daca este cazul (ex: "Metrou 50 metri", "Metrou 50m", "Metrou 5 min", "Metrou Teclu")
     let metrouFragment = "";
     const metroSources = [
@@ -1711,7 +1717,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   }, [isPublicShared, generatedTitle, displayTitle]);
 
   return (
-    <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden">
+    <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden select-none" style={{ WebkitUserSelect: "none", userSelect: "none" }}>
       
       {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
       {showTopNavbar && (
@@ -2221,24 +2227,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
                     {/* Coloana 1: Mobilare (Header + Rânduri) */}
                     <div className="flex flex-col">
-                      <div className="px-6 py-3.5 flex items-center justify-between select-none border-b border-gray-200 bg-gray-50/80">
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                            <Sofa size={13} />
-                          </div>
-                          <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                            Mobilare
-                          </h3>
-                        </div>
-                        <SectionEditButton
-                          isEditing={editingSection === "mobilare_dotari"}
-                          isDirty={isSectionDirty("mobilare_dotari")}
-                          onStartEdit={() => handleStartEditSection("mobilare_dotari")}
-                          onCancel={() => handleCancelEditSection("mobilare_dotari")}
-                          onSave={() => handleSaveSection("mobilare_dotari")}
-                          disabled={isPublicShared}
-                        />
-                      </div>
+                      <SubCategoryHeader 
+                        title="Mobilare" 
+                        actions={
+                          <SectionEditButton
+                            isEditing={editingSection === "mobilare_dotari"}
+                            isDirty={isSectionDirty("mobilare_dotari")}
+                            onStartEdit={() => handleStartEditSection("mobilare_dotari")}
+                            onCancel={() => handleCancelEditSection("mobilare_dotari")}
+                            onSave={() => handleSaveSection("mobilare_dotari")}
+                            disabled={isPublicShared}
+                          />
+                        }
+                      />
                       <div className="divide-y divide-gray-100">
                         {roomsList.map((room, idx) => (
                           renderRow(
@@ -2257,16 +2258,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
                     {/* Coloana 2: Dotări (Header + Rânduri) */}
                     <div className="flex flex-col">
-                      <div className="px-6 py-3.5 flex items-center justify-between select-none border-b border-gray-200 bg-gray-50/80">
-                        <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                            <Tv size={13} />
-                          </div>
-                          <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                            Dotări
-                          </h3>
-                        </div>
-                      </div>
+                      <SubCategoryHeader 
+                        title="Dotări" 
+                      />
                       <div className="divide-y divide-gray-100">
                         {roomsList.map((room, idx) => (
                           renderRow(

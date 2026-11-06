@@ -230,7 +230,9 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
                 ) : (
                   <>
                     <Zap size={14} className="text-amber-400 fill-amber-400" />
-                    <span>Scanează & Adaugă</span>
+                    <span>
+                      {leadRole === 'Proprietar' ? 'Adaugă Proprietar' : leadRole === 'Chirias' ? 'Adaugă Chiriaș' : 'Adaugă Cumpărător'}
+                    </span>
                   </>
                 )}
               </button>

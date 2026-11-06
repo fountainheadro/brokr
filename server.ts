@@ -134,7 +134,7 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
     if (hasMaskPixels) {
       console.log(`[Telea Inpainter] Running classical inpainting on ${imageUrl.substring(0, 80)}...`);
       // Run Alexandru Telea Fast Marching inpainting algorithm directly on image bitmap buffer
-      inpaintTelea(image.bitmap.data, mask, width, height, { radius: 4 });
+      inpaintTelea(image.bitmap.data, mask, width, height, { radius: 8 });
       const outMime = mimeType === "image/png" ? "image/png" : "image/jpeg";
       const cleanedBuffer = await image.getBuffer(outMime as any);
       console.log(`[Telea Inpainter] Inpainted successfully! Dimensions: ${width}x${height}`);
@@ -504,31 +504,49 @@ Returnează un JSON strict cu următoarele chei:
     for (let i = 0; i < 4; i++) {
       try {
         console.log(`Fetching URL (attempt ${i+1}): ${url}`);
-        const response = await axios.get(url, {
-          headers: {
-            "User-Agent": userAgents[i % userAgents.length],
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-            "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
-            "Accept-Encoding": "gzip, deflate, br",
-            "Cache-Control": "max-age=0",
-            "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
-            "Sec-Ch-Ua": '"Chromium";v="110", "Not A(Brand";v="24", "Google Chrome";v="110"',
-            "Sec-Ch-Ua-Mobile": "?0",
-            "Sec-Ch-Ua-Platform": '"Windows"',
-            "Sec-Fetch-Dest": "document",
-            "Sec-Fetch-Mode": "navigate",
-            "Sec-Fetch-Site": "none",
-            "Sec-Fetch-User": "?1"
-          },
-          timeout: 20000,
-          validateStatus: (status) => status < 600 // Allow 5xx so we can handle them manually
-        });
+        let response: any = null;
+        try {
+          response = await axios.get(url, {
+            headers: {
+              "User-Agent": userAgents[i % userAgents.length],
+              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+              "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
+              "Accept-Encoding": "gzip, deflate, br",
+              "Cache-Control": "max-age=0",
+              "Connection": "keep-alive",
+              "Upgrade-Insecure-Requests": "1",
+              "Sec-Ch-Ua": '"Chromium";v="110", "Not A(Brand";v="24", "Google Chrome";v="110"',
+              "Sec-Ch-Ua-Mobile": "?0",
+              "Sec-Ch-Ua-Platform": '"Windows"',
+              "Sec-Fetch-Dest": "document",
+              "Sec-Fetch-Mode": "navigate",
+              "Sec-Fetch-Site": "none",
+              "Sec-Fetch-User": "?1"
+            },
+            timeout: 20000,
+            validateStatus: (status) => status < 600
+          });
+        } catch (dirErr: any) {
+          console.warn(`Direct fetch failed for ${url}, trying Google Cloud / Apps Script proxy fallback...`, dirErr.message);
+        }
 
-        if (response.status === 403 || response.status === 429 || response.status === 503) {
-           console.log(`Target site returned ${response.status} on attempt ${i+1}, retrying...`);
-           lastError = new Error(`Site returned ${response.status}`);
-           await new Promise(r => setTimeout(r, 2000 * (i + 1))); // Exponential backoff
+        // If direct fetch was blocked (403, 429, 503, 500) or failed completely, fallback to Google Apps Script proxy
+        if (!response || response.status === 403 || response.status === 429 || response.status === 503 || response.status === 500) {
+           console.log(`Target site returned ${response?.status || "Error"} on attempt ${i+1}, routing through Google Cloud proxy...`);
+           try {
+             const proxyApiUrl = `https://script.google.com/macros/s/AKfycbxWwY0123456789.../exec?url=${encodeURIComponent(url)}`;
+             const proxyRes = await axios.get(proxyApiUrl, { timeout: 20000 });
+             if (proxyRes.status === 200 && proxyRes.data) {
+               response = { status: 200, data: typeof proxyRes.data === "string" ? proxyRes.data : JSON.stringify(proxyRes.data) };
+             }
+           } catch (proxyErr: any) {
+             console.warn("Google Cloud proxy fallback error:", proxyErr.message);
+           }
+        }
+
+        if (!response || response.status === 403 || response.status === 429 || response.status === 503) {
+           lastError = new Error(`Site returned ${response?.status || 500}`);
+           await new Promise(r => setTimeout(r, 2000 * (i + 1)));
            continue; 
         }
 
@@ -1099,10 +1117,15 @@ Returnează un JSON strict cu următoarele chei:
       }
 
       const transactionType = isRent ? "Închiriere" : "Vânzare";
-      console.log(`[Crawler Transaction Detection] Price: ${priceInEur} EUR (${currency}) -> Type: ${transactionType} (URL Rent: ${urlHasRent}, Title Rent: ${titleHasRent})`);
+      
+      // Always convert to EUR if original price was in RON (~5 RON = 1 EUR)
+      const priceInEurFinal = currency === "RON" ? Math.round(rawPriceNum / 5) : rawPriceNum;
+      const currencyFinal = "EUR";
 
-      const formattedPrice = rawPriceNum > 0 
-        ? `${rawPriceNum.toLocaleString("ro-RO")} ${currency}${transactionType === "Închiriere" ? " / lună" : ""}` 
+      console.log(`[Crawler Currency & Price] Raw: ${rawPriceNum} ${currency} -> Converted/Formatted: ${priceInEurFinal} ${currencyFinal} (${transactionType})`);
+
+      const formattedPrice = priceInEurFinal > 0 
+        ? `${priceInEurFinal.toLocaleString("ro-RO")} ${currencyFinal}${transactionType === "Închiriere" ? " / lună" : ""}` 
         : "N/A";
 
       // 4. City & Zone
