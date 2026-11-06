@@ -1549,7 +1549,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       parts.push(`${mpMatch[0]}mp`);
     }
 
-    // 4. Distanta Metrou daca este cazul (ex: "Metrou 50 metri", "Metrou 50m", "Metrou 5 min", "Metrou Teclu")
+    // 4. Zona menționată în anunțul original (plasată imediat după suprafață)
+    const rawZoneName = addressDetails.zona && addressDetails.zona !== "Nespecificat"
+      ? addressDetails.zona
+      : (lead?.zone && lead.zone !== "Nespecificat" ? lead.zone : "");
+    if (rawZoneName) {
+      // Clean up extra prefix/suffixes if any, keep clean zone name
+      const cleanZone = rawZoneName.split(",")[0].trim();
+      if (cleanZone) {
+        parts.push(cleanZone);
+      }
+    }
+
+    // 5. Distanta Metrou daca este cazul (ex: "Metrou 50 metri", "Metrou 50m", "Metrou 5 min", "Metrou Teclu")
     let metrouFragment = "";
     const metroSources = [
       sectionData["transport"]?.["Metrou"],
@@ -1576,7 +1588,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       parts.push(metrouFragment);
     }
 
-    // 5. Distanta Parc daca este cazul (ex: "Parc 200m", "Parc IOR", "Parc 5 min")
+    // 6. Distanta Parc daca este cazul (ex: "Parc 200m", "Parc IOR", "Parc 5 min")
     let parcFragment = "";
     const parcSources = [
       sectionData["imprejurimi"]?.["Relaxare"],
@@ -1603,7 +1615,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       parts.push(parcFragment);
     }
 
-    // 6. Mobilat sau nemobilat (ex: "Mobilat", "Nemobilat", "Mobilat parțial")
+    // 7. Mobilat sau nemobilat (ex: "Mobilat", "Nemobilat", "Mobilat parțial")
     const lowerText = rawDescText.toLowerCase();
     const crmMobilat = (crmData as any)?.dotari?.mobilat;
     let mobFragment = "Mobilat";
@@ -1616,7 +1628,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
     parts.push(mobFragment);
 
-    // 7. Utilat daca este cazul (ex: "Utilat")
+    // 8. Utilat daca este cazul (ex: "Utilat")
     const isUtilat = lowerText.includes("utilat") 
       || (crmData as any)?.dotari?.bucatarie?.utilata 
       || (sectionData["dotari"]?.["Bucătărie"] && sectionData["dotari"]["Bucătărie"] !== "-");
@@ -1624,7 +1636,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       parts.push("Utilat");
     }
 
-    // 8. Obiectiv din zona (ex: "Promenada", "Mall Vitan", etc.)
+    // 9. Obiectiv din zona (ex: "Promenada", "Mall Vitan", etc.)
     let obiectivFragment = "";
     const objSources = [
       sectionData["imprejurimi"]?.["Obiective"],
@@ -1651,7 +1663,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
 
     return candidate;
-  }, [sectionData, camere, bai, suprafataUtila, rawDescText, crmData]);
+  }, [sectionData, camere, bai, suprafataUtila, addressDetails, lead, rawDescText, crmData]);
 
   // Price per square meter for sales
   const pricePerSqm = useMemo(() => {
@@ -2218,17 +2230,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
                 {/* -Subcategorie "Mobilare & Dotări" cu antet pe două coloane (Mobilare și Dotări) */}
                 <div className="border-t border-gray-100">
-                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
                     {/* Coloana 1: Mobilare (Header + Rânduri) */}
                     <div className="flex flex-col">
-                      <div className="px-6 py-3.5 flex items-center justify-between select-none border-b border-gray-200 bg-gray-50/80">
+                      <div className="min-h-9 py-1 px-3.5 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between gap-2 select-none font-sans">
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                            <Sofa size={13} />
-                          </div>
-                          <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-[#051D35] font-sans">
                             Mobilare
-                          </h3>
+                          </span>
                         </div>
                         <SectionEditButton
                           isEditing={editingSection === "mobilare_dotari"}
@@ -2257,14 +2267,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
                     {/* Coloana 2: Dotări (Header + Rânduri) */}
                     <div className="flex flex-col">
-                      <div className="px-6 py-3.5 flex items-center justify-between select-none border-b border-gray-200 bg-gray-50/80">
+                      <div className="min-h-9 py-1 px-3.5 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between gap-2 select-none font-sans">
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-md bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                            <Tv size={13} />
-                          </div>
-                          <h3 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                          <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
+                          <span className="text-[11px] font-bold uppercase tracking-wider text-[#051D35] font-sans">
                             Dotări
-                          </h3>
+                          </span>
                         </div>
                       </div>
                       <div className="divide-y divide-gray-100">

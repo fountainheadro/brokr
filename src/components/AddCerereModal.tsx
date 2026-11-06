@@ -231,17 +231,19 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+                className="px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
               >
                 Anulează
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="px-4 py-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                className="px-4 py-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
               >
                 {loading && <Loader2 size={13} className="animate-spin" />}
-                <span>Salvează Cererea</span>
+                <span>
+                  {transactionType === "Închiriere" ? "Adaugă Chiriaș" : "Adaugă Cumpărător"}
+                </span>
               </button>
             </div>
           </form>

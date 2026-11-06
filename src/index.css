@@ -122,7 +122,11 @@
     font-family: var(--font-sans);
     font-size: 13px;
     line-height: 1.45;
-    @apply antialiased selection:bg-[#051D35] selection:text-[#BE9662];
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    @apply antialiased selection:bg-transparent selection:text-inherit;
     margin: 0;
     padding: 0;
     overflow: hidden;
@@ -138,6 +142,10 @@
     padding: 0;
     font-family: var(--font-sans);
     font-size: 14px;
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
   }
 
   #root {
