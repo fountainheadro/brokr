@@ -73,27 +73,15 @@ export function initGlobalSecurityProtection(): () => void {
     return false;
   };
 
-  // 4. Block text selection globally, except within inputs or textareas
-  const handleSelectStart = (e: Event) => {
-    const target = e.target as HTMLElement;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-      return true;
-    }
-    e.preventDefault();
-    return false;
-  };
-
-  // 5. Attach event listeners in CAPTURING phase to intercept before any component
+  // 4. Attach event listeners in CAPTURING phase to intercept before any component
   window.addEventListener("contextmenu", handleContextMenu, true);
   document.addEventListener("contextmenu", handleContextMenu, true);
   window.addEventListener("keydown", handleKeyDown, true);
   document.addEventListener("keydown", handleKeyDown, true);
   window.addEventListener("dragstart", handleDragStart, true);
   document.addEventListener("dragstart", handleDragStart, true);
-  window.addEventListener("selectstart", handleSelectStart, true);
-  document.addEventListener("selectstart", handleSelectStart, true);
 
-  // 6. Active Anti-DevTools Trap (for when user opens Inspect from the 3-dots browser menu)
+  // 5. Active Anti-DevTools Trap (for when user opens Inspect from the 3-dots browser menu)
   // When DevTools is opened, the browser triggers the debugger statement on each tick,
   // freezing any inspection and preventing DOM traversal.
   let trapInterval: any = null;
@@ -129,7 +117,5 @@ export function initGlobalSecurityProtection(): () => void {
     document.removeEventListener("keydown", handleKeyDown, true);
     window.removeEventListener("dragstart", handleDragStart, true);
     document.removeEventListener("dragstart", handleDragStart, true);
-    window.removeEventListener("selectstart", handleSelectStart, true);
-    document.removeEventListener("selectstart", handleSelectStart, true);
   };
 }
