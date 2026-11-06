@@ -2892,12 +2892,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             onContextMenu={(e) => e.preventDefault()}
             onDragStart={(e) => e.preventDefault()}
           >
-            <div className="relative max-h-[82vh] max-w-[90vw] overflow-hidden rounded shadow-2xl">
+            <div className="relative w-[90vw] h-[82vh] overflow-hidden rounded shadow-2xl flex items-center justify-center">
               <ProtectedImage 
                 src={imagesList[selectedPhotoIndex] || imagesList[0]} 
                 alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
-                className="max-h-[82vh] max-w-[90vw]"
-                imageClassName="max-h-[82vh] max-w-[90vw] object-contain"
+                className="w-full h-full"
+                fit="contain"
                 showAgencyShield={true}
               />
             </div>

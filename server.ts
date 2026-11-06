@@ -11,38 +11,8 @@ import { aiCallRouter, setupWebSocket } from "./server/ai-call/router";
 import { setupBackgroundNotifications, registerNotificationRoutes } from "./server/background-notifications";
 import { serverExtractBasicData, serverExtractData } from "./server/geminiService";
 import { GoogleGenAI, Type } from "@google/genai";
-import { defaultFormats, defaultPlugins } from "jimp";
-import { createJimp } from "@jimp/core";
-import webp from "@jimp/wasm-webp";
+import { Jimp } from "jimp";
 import { inpaintTelea } from "./src/utils/teleaInpainting";
-
-// Intercept global fetch so we can load @jsquash/webp WASM files locally instead of triggering sandbox fetch errors
-const originalFetch = global.fetch;
-global.fetch = async function(input: any, init: any) {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input && input.url ? input.url : "");
-  if (url && (url.endsWith(".wasm") || url.includes(".wasm"))) {
-    const fileName = path.basename(url.split("?")[0]);
-    let wasmPath = "";
-    if (fileName.includes("dec")) {
-      wasmPath = path.resolve("./node_modules/@jsquash/webp/codec/dec", fileName);
-    } else if (fileName.includes("enc")) {
-      wasmPath = path.resolve("./node_modules/@jsquash/webp/codec/enc", fileName);
-    }
-    
-    if (wasmPath && fs.existsSync(wasmPath)) {
-      const buffer = fs.readFileSync(wasmPath);
-      return new Response(buffer, {
-        headers: { "Content-Type": "application/wasm" }
-      });
-    }
-  }
-  return originalFetch(input, init);
-} as any;
-
-const Jimp = createJimp({
-  formats: [...defaultFormats, webp],
-  plugins: defaultPlugins
-});
 
 const ai = new GoogleGenAI({ 
   apiKey: process.env.GEMINI_API_KEY || "",
@@ -92,31 +62,53 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
     const targetBoxes: { xmin: number; xmax: number; ymin: number; ymax: number; label: string }[] = [];
 
     if (isStoriaOlx) {
-      // Storia/OLX watermark standard position: bottom-right
+      // 1. Storia/OLX watermark is standard in the BOTTOM-LEFT corner (Apollo p: "10,-10")
+      targetBoxes.push({
+        xmin: 0,
+        xmax: Math.floor(width * 0.22),
+        ymin: Math.floor(height * 0.88),
+        ymax: height - 1,
+        label: "Storia/OLX bottom-left logo"
+      });
+      // 2. Also cover bottom-right in case of agency stamp overlay
       targetBoxes.push({
         xmin: Math.floor(width * 0.74),
-        xmax: width - 2,
+        xmax: width - 1,
         ymin: Math.floor(height * 0.88),
-        ymax: height - 2,
-        label: "Storia/OLX watermark"
+        ymax: height - 1,
+        label: "Storia/OLX bottom-right stamp"
       });
     } else if (isImobiliare) {
-      // Imobiliare.ro watermark standard position: bottom-right
+      // Imobiliare.ro watermark: bottom-right and bottom-left
       targetBoxes.push({
-        xmin: Math.floor(width * 0.75),
-        xmax: width - 2,
-        ymin: Math.floor(height * 0.89),
-        ymax: height - 2,
-        label: "Imobiliare.ro watermark"
+        xmin: Math.floor(width * 0.74),
+        xmax: width - 1,
+        ymin: Math.floor(height * 0.88),
+        ymax: height - 1,
+        label: "Imobiliare.ro watermark bottom-right"
+      });
+      targetBoxes.push({
+        xmin: 0,
+        xmax: Math.floor(width * 0.20),
+        ymin: Math.floor(height * 0.88),
+        ymax: height - 1,
+        label: "Imobiliare.ro watermark bottom-left"
       });
     } else {
-      // General real estate platforms
+      // General real estate platforms: cover both bottom corners
       targetBoxes.push({
-        xmin: Math.floor(width * 0.76),
-        xmax: width - 2,
-        ymin: Math.floor(height * 0.89),
-        ymax: height - 2,
-        label: "Portal watermark"
+        xmin: 0,
+        xmax: Math.floor(width * 0.20),
+        ymin: Math.floor(height * 0.88),
+        ymax: height - 1,
+        label: "Portal bottom-left watermark"
+      });
+      targetBoxes.push({
+        xmin: Math.floor(width * 0.74),
+        xmax: width - 1,
+        ymin: Math.floor(height * 0.88),
+        ymax: height - 1,
+        label: "Portal bottom-right watermark"
       });
     }
 
@@ -143,7 +135,8 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
       console.log(`[Telea Inpainter] Running classical inpainting on ${imageUrl.substring(0, 80)}...`);
       // Run Alexandru Telea Fast Marching inpainting algorithm directly on image bitmap buffer
       inpaintTelea(image.bitmap.data, mask, width, height, { radius: 4 });
-      const cleanedBuffer = await image.getBuffer(mimeType as any);
+      const outMime = mimeType === "image/png" ? "image/png" : "image/jpeg";
+      const cleanedBuffer = await image.getBuffer(outMime as any);
       console.log(`[Telea Inpainter] Inpainted successfully! Dimensions: ${width}x${height}`);
       return cleanedBuffer;
     }
@@ -1660,7 +1653,7 @@ Returnează un JSON strict cu următoarele chei:
           responseType: "arraybuffer",
           headers: {
             "User-Agent": userAgents[i % userAgents.length],
-            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+            "Accept": "image/jpeg,image/png,image/*;q=0.8",
             "Referer": referer,
             "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
             "Cache-Control": "no-cache",
@@ -1707,18 +1700,22 @@ Returnează un JSON strict cu următoarele chei:
         }
 
         let finalData = response.data;
+        let finalContentType = contentType;
         // Inpaint portal watermarks using classical Alexandru Telea Fast Marching algorithm (non-AI, zero API cost)
         if (req.query.noclean !== "true") {
           finalData = await cleanImageWatermarks(response.data, contentType, cleanUrl);
-          addToImageCache(cleanUrl, { mimeType: contentType, data: finalData });
+          if (finalData !== response.data) {
+            finalContentType = contentType === "image/png" ? "image/png" : "image/jpeg";
+          }
+          addToImageCache(cleanUrl, { mimeType: finalContentType, data: finalData });
         }
 
         const base64 = finalData.toString("base64");
         // Check if client wants raw binary or json
         if (req.query.json === "true") {
-          res.json({ base64, contentType });
+          res.json({ base64, contentType: finalContentType });
         } else {
-          res.setHeader("Content-Type", contentType);
+          res.setHeader("Content-Type", finalContentType);
           res.setHeader("Cache-Control", "public, max-age=3600");
           res.send(finalData);
         }

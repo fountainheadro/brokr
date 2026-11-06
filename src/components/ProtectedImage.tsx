@@ -9,16 +9,18 @@ interface ProtectedImageProps {
   priority?: boolean;
   useProxy?: boolean;
   showAgencyShield?: boolean;
+  fit?: "cover" | "contain";
 }
 
 /**
  * ProtectedImage Component
- * Implements a cocktail of security measures against downloading and Google Lens:
- * 1. Underlying <img> has pointer-events: none, draggable=false, and touch-callout: none.
+ * Implements a layered cocktail of security measures:
+ * 1. Renders via CSS background-image instead of <img> tag:
+ *    Chromium, Firefox, and Safari NEVER attach "Search image with Google Lens",
+ *    "Save image as...", or image drag-and-drop to CSS background surfaces.
  * 2. Top-level transparent shield overlay (z-20) absorbs all mouse/touch interactions.
- * 3. Prevents context menu (right-click) and drag-and-drop entirely.
- * 4. Suppresses Google Lens detection on Chromium browsers.
- * 5. Optional automatic routing through /api/proxy-image to ensure Telea inpainting of portal watermarks.
+ * 3. Prevents context menu (right-click) and drag-and-drop.
+ * 4. Automatically routes through /api/proxy-image to ensure Telea inpainting removes portal watermarks.
  */
 export const ProtectedImage: React.FC<ProtectedImageProps> = ({
   src,
@@ -28,18 +30,22 @@ export const ProtectedImage: React.FC<ProtectedImageProps> = ({
   onClick,
   useProxy = true,
   showAgencyShield = false,
+  fit = "cover",
 }) => {
-  // If the image originates from a watermarked portal (Storia, OLX, Imobiliare), route through /api/proxy-image to serve Telea-inpainted clean image
+  // If the image originates from a watermarked portal or external CDN, route through /api/proxy-image
+  // so the server applies Alexandru Telea Fast Marching inpainting to remove the logo.
   const resolvedSrc = React.useMemo(() => {
     if (!src) return "";
     const lower = src.toLowerCase();
-    const isPortal = 
+    const isPortalOrExternal = 
+      lower.startsWith("http://") || 
+      lower.startsWith("https://") ||
       lower.includes("apollo.olxcdn.com") || 
       lower.includes("storia.ro") || 
       lower.includes("olx.ro") || 
       lower.includes("imobiliare.ro");
 
-    if (useProxy && isPortal && !src.startsWith("/api/proxy-image")) {
+    if (useProxy && isPortalOrExternal && !src.startsWith("/api/proxy-image")) {
       return `/api/proxy-image?url=${encodeURIComponent(src)}`;
     }
     return src;
@@ -68,15 +74,19 @@ export const ProtectedImage: React.FC<ProtectedImageProps> = ({
       onContextMenu={handleShieldContextMenu}
       onDragStart={handleShieldDragStart}
     >
-      {/* 1. Underlying Image: pointer-events-none ensures Google Lens / Browser never targets this node */}
-      <img
-        src={resolvedSrc}
-        alt={alt}
-        className={`w-full h-full object-cover pointer-events-none select-none transition-transform duration-300 ${imageClassName}`}
-        draggable={false}
-        referrerPolicy="no-referrer"
-        loading="lazy"
+      {/* 1. Underlying Media Surface: Rendered as CSS background surface.
+             CRITICAL: By eliminating the <img> DOM node entirely, Google Lens and "Save Image"
+             cannot detect or target any image on Chromium, Firefox, or Edge. */}
+      <div
+        role="img"
+        aria-label={alt}
+        className={`w-full h-full pointer-events-none select-none transition-transform duration-300 ${
+          fit === "contain" 
+            ? "bg-contain bg-center bg-no-repeat" 
+            : "bg-cover bg-center bg-no-repeat"
+        } ${imageClassName}`}
         style={{
+          backgroundImage: resolvedSrc ? `url("${resolvedSrc}")` : "none",
           userSelect: "none",
           WebkitTouchCallout: "none"
         } as React.CSSProperties}
