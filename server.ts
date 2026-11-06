@@ -13,6 +13,7 @@ import { serverExtractBasicData, serverExtractData } from "./server/geminiServic
 import { GoogleGenAI, Type } from "@google/genai";
 import { Jimp } from "jimp";
 import { inpaintTelea } from "./src/utils/teleaInpainting";
+import { processAllImportedImages } from "./src/utils/imageWatermarkProcessor";
 
 const ai = new GoogleGenAI({ 
   apiKey: process.env.GEMINI_API_KEY || "",
@@ -215,6 +216,21 @@ async function startServer() {
     } catch (err: any) {
       console.error("[Server] /api/upload-photo error:", err);
       res.status(500).json({ error: err.message || "Failed to upload photo" });
+    }
+  });
+
+  // Endpoint to batch inpaint images on import and return clean local URLs
+  app.post("/api/inpaint-images", async (req, res) => {
+    try {
+      const { urls } = req.body;
+      if (!Array.isArray(urls)) {
+        return res.status(400).json({ error: "urls array is required" });
+      }
+      const processed = await processAllImportedImages(urls, uploadsDir);
+      res.json({ success: true, images: processed });
+    } catch (err: any) {
+      console.error("[Server] /api/inpaint-images error:", err);
+      res.status(500).json({ error: err.message || "Failed to inpaint images" });
     }
   });
 
@@ -1491,7 +1507,7 @@ Returnează un JSON strict cu următoarele chei:
         }
       };
 
-      res.json({
+      const crawlPayload = {
         title: cleanTitle,
         price: formattedPrice,
         zone: zona,
@@ -1516,6 +1532,41 @@ Returnează un JSON strict cu următoarele chei:
         crmData: crmData,
         presentationSections: presentationSections,
         text: text.substring(0, 8000)
+      };
+
+      // Process inpainting ONLY at import time as requested
+      console.log(`[Import] Inpainting and applying agency watermark on ${uniqueImages.length} images...`);
+      const processedImages = await processAllImportedImages(uniqueImages, uploadsDir);
+
+      if (crmData?.imagini) {
+        const urlMap = new Map<string, string>();
+        uniqueImages.forEach((orig, idx) => {
+          if (processedImages[idx]) urlMap.set(orig, processedImages[idx]);
+        });
+        
+        const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
+        categories.forEach(cat => {
+          const list = crmData.imagini[cat];
+          if (Array.isArray(list)) {
+            list.forEach((item: any) => {
+              const origUrl = typeof item === "string" ? item : item?.original;
+              if (origUrl && urlMap.has(origUrl)) {
+                if (typeof item === "string") {
+                  item = urlMap.get(origUrl)!;
+                } else if (item && typeof item === "object") {
+                  item.original = urlMap.get(origUrl)!;
+                }
+              }
+            });
+          }
+        });
+      }
+
+      res.json({
+        ...crawlPayload,
+        images: processedImages,
+        coverImage: processedImages.length > 0 ? processedImages[0] : null,
+        crmData: crmData
       });
       return; // Success!
     } catch (error: any) {
@@ -1699,25 +1750,14 @@ Returnează un JSON strict cu următoarele chei:
           return res.status(400).json({ error: "Gemini does not support SVG images" });
         }
 
-        let finalData = response.data;
-        let finalContentType = contentType;
-        // Inpaint portal watermarks using classical Alexandru Telea Fast Marching algorithm (non-AI, zero API cost)
-        if (req.query.noclean !== "true") {
-          finalData = await cleanImageWatermarks(response.data, contentType, cleanUrl);
-          if (finalData !== response.data) {
-            finalContentType = contentType === "image/png" ? "image/png" : "image/jpeg";
-          }
-          addToImageCache(cleanUrl, { mimeType: finalContentType, data: finalData });
-        }
-
-        const base64 = finalData.toString("base64");
+        const base64 = response.data.toString("base64");
         // Check if client wants raw binary or json
         if (req.query.json === "true") {
-          res.json({ base64, contentType: finalContentType });
+          res.json({ base64, contentType });
         } else {
-          res.setHeader("Content-Type", finalContentType);
+          res.setHeader("Content-Type", contentType);
           res.setHeader("Cache-Control", "public, max-age=3600");
-          res.send(finalData);
+          res.send(response.data);
         }
         return;
       } catch (error: any) {
