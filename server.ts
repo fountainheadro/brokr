@@ -1039,20 +1039,66 @@ Returnează un JSON strict cu următoarele chei:
       // 2. Price & Currency extraction
       let rawPriceNum = 0;
       let currency = "EUR";
-      if (nextAdData?.price?.regularPrice?.value) {
-        rawPriceNum = Number(nextAdData.price.regularPrice.value);
-        const currSym = String(nextAdData.price.regularPrice.currencySymbol || "").toUpperCase();
-        currency = currSym.includes("LEI") || currSym.includes("RON") ? "RON" : "EUR";
-      } else if (jsonLdData?.offers?.price) {
-        rawPriceNum = Number(jsonLdData.offers.price);
-        currency = String(jsonLdData.offers.priceCurrency || "EUR").toUpperCase();
-      } else {
-        const priceRegex = /(?:pre[t\u021b]|chirie|\b)\s*[:\-–]?\s*(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i;
-        const pMatch = text.match(priceRegex) || title.match(/(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i);
-        if (pMatch) {
-          rawPriceNum = parseInt(pMatch[1].replace(/[^0-9]/g, ""), 10) || 0;
-          const currStr = pMatch[2].toLowerCase();
-          currency = currStr.includes("ron") || currStr.includes("lei") ? "RON" : "EUR";
+      let isRent = false;
+
+      // Specific targeted selectors for Storia.ro & OLX.ro
+      const isStoria = url.includes("storia.ro");
+      const isOLX = url.includes("olx.ro");
+
+      if (isStoria) {
+        const storiaPriceText = $('strong[aria-label="Preț"]').text().trim();
+        if (storiaPriceText) {
+          const digits = parseInt(storiaPriceText.replace(/[^0-9]/g, ""), 10) || 0;
+          if (digits > 0) {
+            rawPriceNum = digits;
+            const lowerPriceText = storiaPriceText.toLowerCase();
+            currency = lowerPriceText.includes("ron") || lowerPriceText.includes("lei") ? "RON" : "EUR";
+          }
+        }
+        const storiaHeader = $('h2.type-headline-medium').text().toLowerCase();
+        if (storiaHeader.includes("închiriat") || storiaHeader.includes("închiriere") || storiaHeader.includes("chirie")) {
+          isRent = true;
+        } else if (storiaHeader.includes("vânzare") || storiaHeader.includes("vanzare")) {
+          isRent = false;
+        }
+      }
+
+      if (isOLX) {
+        const olxPriceText = $('div[data-testid="ad-price-container"] h3').text().trim() || $('div[data-testid="ad-price-container"]').text().trim();
+        if (olxPriceText) {
+          const digits = parseInt(olxPriceText.replace(/[^0-9]/g, ""), 10) || 0;
+          if (digits > 0) {
+            rawPriceNum = digits;
+            const lowerPriceText = olxPriceText.toLowerCase();
+            currency = lowerPriceText.includes("ron") || lowerPriceText.includes("lei") ? "RON" : "EUR";
+          }
+        }
+        const breadcrumbText = $('nav[role="navigation"] ol[data-testid="breadcrumbs"] li:nth-child(3)').text().toLowerCase() || $('nav ol li:nth-child(3)').text().toLowerCase();
+        const breadcrumbHref = $('nav[role="navigation"] ol[data-testid="breadcrumbs"] li:nth-child(3) a').attr('href')?.toLowerCase() || "";
+        const crumbCombo = breadcrumbText + " " + breadcrumbHref;
+        if (crumbCombo.includes("inchiriat") || crumbCombo.includes("inchiriere") || crumbCombo.includes("chirie")) {
+          isRent = true;
+        } else if (crumbCombo.includes("vanzare") || crumbCombo.includes("vânzare")) {
+          isRent = false;
+        }
+      }
+
+      if (rawPriceNum === 0) {
+        if (nextAdData?.price?.regularPrice?.value) {
+          rawPriceNum = Number(nextAdData.price.regularPrice.value);
+          const currSym = String(nextAdData.price.regularPrice.currencySymbol || "").toUpperCase();
+          currency = currSym.includes("LEI") || currSym.includes("RON") ? "RON" : "EUR";
+        } else if (jsonLdData?.offers?.price) {
+          rawPriceNum = Number(jsonLdData.offers.price);
+          currency = String(jsonLdData.offers.priceCurrency || "EUR").toUpperCase();
+        } else {
+          const priceRegex = /(?:pre[t\u021b]|chirie|\b)\s*[:\-–]?\s*(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i;
+          const pMatch = text.match(priceRegex) || title.match(/(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i);
+          if (pMatch) {
+            rawPriceNum = parseInt(pMatch[1].replace(/[^0-9]/g, ""), 10) || 0;
+            const currStr = pMatch[2].toLowerCase();
+            currency = currStr.includes("ron") || currStr.includes("lei") ? "RON" : "EUR";
+          }
         }
       }
 
@@ -1072,7 +1118,8 @@ Returnează un JSON strict cu următoarele chei:
       const structuredIsRent = structuredCat.includes("inchiri") || structuredTarget.includes("rent");
       const structuredIsSale = structuredCat.includes("vanza") || structuredTarget.includes("sell") || structuredTarget.includes("sale");
 
-      let isRent = false;
+      // isRent already declared above
+
 
       if (priceInEur >= 20000) {
         // High price (20,000+ EUR) is overwhelmingly a SALE (e.g. 50,000€, 120,000€, 300,000€).
@@ -1495,7 +1542,7 @@ Returnează un JSON strict cu următoarele chei:
           "Parcare": "Publica in zona"
         },
         acte: transactionType === "Închiriere" ? {
-          "Condiții contractuale": "12 luni",
+          "Durata contract": "12 luni",
           "Avans": "1 luna",
           "Garanție": "1 luna"
         } : {

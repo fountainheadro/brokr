@@ -1103,7 +1103,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Situație juridică": saved.acte?.["Situație juridică"] || "Fara probleme",
         "Disponibilitate": saved.acte?.["Disponibilitate"] || "Imediată",
         "Finanțare": saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii",
-        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "12 luni",
+        "Durata contract": saved.acte?.["Durata contract"] || saved.acte?.["Condiții contractuale"] || "12 luni",
         "Avans": saved.acte?.["Avans"] || "1 luna",
         "Garanție": saved.acte?.["Garanție"] || "1 luna",
         ...(saved.acte || {})
@@ -1112,7 +1112,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Preț": saved.tranzactie?.["Preț"] || formattedPrice,
         "TVA": saved.tranzactie?.["TVA"] || "Scutit de TVA / conform legislației în vigoare",
         "Comision": saved.tranzactie?.["Comision"] || defaultCommission,
-        "Condiții contractuale": saved.tranzactie?.["Condiții contractuale"] || saved.acte?.["Condiții contractuale"] || "12 luni",
+        "Durata contract": saved.tranzactie?.["Durata contract"] || saved.tranzactie?.["Condiții contractuale"] || saved.acte?.["Durata contract"] || saved.acte?.["Condiții contractuale"] || "12 luni",
         "Avans": saved.tranzactie?.["Avans"] || saved.acte?.["Avans"] || "1 luna",
         "Garanție": saved.tranzactie?.["Garanție"] || saved.acte?.["Garanție"] || "1 luna",
         "Situație juridică": saved.tranzactie?.["Situație juridică"] || saved.acte?.["Situație juridică"] || "Fara probleme",
@@ -2048,7 +2048,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       PREȚ &amp; CONDIȚII
                     </h2>
                     <span className="text-[11px] text-gray-500 font-sans">
-                      Condiții contractuale, preț și comision
+                      Durata contract, preț și comision
                     </span>
                   </div>
                 </div>
@@ -2068,7 +2068,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 <div className="divide-y divide-gray-100">
                   {isRent ? (
                     <>
-                      {renderRow("tranzactie", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
+                      {renderRow("tranzactie", "Durata contract", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
                       {renderRow("tranzactie", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
                       {renderRow("tranzactie", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
                     </>
@@ -2164,61 +2164,64 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
 
-              <div className="font-sans divide-y divide-gray-100">
-                {/* -Subcategorie "Configuratie" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Configurație" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "configuratie"}
-                        isDirty={isSectionDirty("configuratie")}
-                        onStartEdit={() => handleStartEditSection("configuratie")}
-                        onCancel={() => handleCancelEditSection("configuratie")}
-                        onSave={() => handleSaveSection("configuratie")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
-                    {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
-                    {renderRow("configuratie", "Etaj", etaj)}
-                    {renderRow("configuratie", "An construcție", anConstructie)}
-                    {renderRow("configuratie", "Număr camere", String(camere))}
-                    {renderRow("configuratie", "Număr băi", String(bai))}
-                    {renderRow("configuratie", "Balcoane", String(balcoane))}
-                    {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
+              <div className="font-sans">
+                {/* -Subcategorii "Configuratie" și "Finisaje" pe două coloane */}
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                  {/* Coloana 1: Configurație */}
+                  <div className="flex flex-col">
+                    <SubCategoryHeader 
+                      title="Configurație" 
+                      actions={
+                        <SectionEditButton
+                          isEditing={editingSection === "configuratie"}
+                          isDirty={isSectionDirty("configuratie")}
+                          onStartEdit={() => handleStartEditSection("configuratie")}
+                          onCancel={() => handleCancelEditSection("configuratie")}
+                          onSave={() => handleSaveSection("configuratie")}
+                          disabled={isPublicShared}
+                        />
+                      }
+                    />
+                    <div className="divide-y divide-gray-100">
+                      {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
+                      {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
+                      {renderRow("configuratie", "Etaj", etaj)}
+                      {renderRow("configuratie", "An construcție", anConstructie)}
+                      {renderRow("configuratie", "Număr camere", String(camere))}
+                      {renderRow("configuratie", "Număr băi", String(bai))}
+                      {renderRow("configuratie", "Balcoane", String(balcoane))}
+                      {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
+                    </div>
                   </div>
-                </div>
 
-                {/* -Subcategorie "Finisaje" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Finisaje" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "finisaje"}
-                        isDirty={isSectionDirty("finisaje")}
-                        onStartEdit={() => handleStartEditSection("finisaje")}
-                        onCancel={() => handleCancelEditSection("finisaje")}
-                        onSave={() => handleSaveSection("finisaje")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
-                    {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
-                    {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
-                    {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
-                    {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
-                    {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
-                    {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
+                  {/* Coloana 2: Finisaje */}
+                  <div className="flex flex-col">
+                    <SubCategoryHeader 
+                      title="Finisaje" 
+                      actions={
+                        <SectionEditButton
+                          isEditing={editingSection === "finisaje"}
+                          isDirty={isSectionDirty("finisaje")}
+                          onStartEdit={() => handleStartEditSection("finisaje")}
+                          onCancel={() => handleCancelEditSection("finisaje")}
+                          onSave={() => handleSaveSection("finisaje")}
+                          disabled={isPublicShared}
+                        />
+                      }
+                    />
+                    <div className="divide-y divide-gray-100">
+                      {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
+                      {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
+                      {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
+                      {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
+                      {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
+                      {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
+                      {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
+                    </div>
                   </div>
                 </div>
 
