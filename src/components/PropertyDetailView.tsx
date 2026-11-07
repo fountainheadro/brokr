@@ -41,14 +41,12 @@ import {
   Edit3,
   Plus,
   Upload,
-  Trash2,
-  Sofa,
-  Tv
+  Image as ImageIcon,
+  Trash2
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
 import { auth } from "../lib/firebase";
-import { ProtectedImage } from "./ProtectedImage";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -58,7 +56,7 @@ export interface PropertyDetailViewProps {
   showTopNavbar?: boolean;
   onDelete?: () => void;
   onAddActivity?: () => void;
-  onUpdateLead?: (updatedData: Partial<Lead>) => void;
+  onUpdateLead?: (updatedData: any) => void;
 }
 
 interface NavSection {
@@ -74,7 +72,8 @@ const NAV_SECTIONS: NavSection[] = [
   { id: "bloc", label: "Bloc", icon: Building2 },
   { id: "imprejurimi", label: "Împrejurimi", icon: Compass },
   { id: "transport", label: "Transport", icon: Bus },
-  { id: "parcare", label: "Parcare", icon: Car }
+  { id: "parcare", label: "Parcare", icon: Car },
+  { id: "acte", label: "Condiții", icon: ShieldCheck }
 ];
 
 const COMPARTIMENTARE_OPTIONS = ["Decomandat", "Semidecomandat", "Nedecomandat", "Circular", "Open Space"];
@@ -334,23 +333,16 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onAddActivity,
   onUpdateLead
 }) => {
-  const navSections = useMemo<NavSection[]>(() => {
-    if (isPublicShared) {
-      return [{ id: "poze", label: "Poze", icon: Camera }, ...NAV_SECTIONS];
-    }
-    return NAV_SECTIONS;
-  }, [isPublicShared]);
-
-  const [activeSection, setActiveSection] = useState<string>(isPublicShared ? "poze" : (NAV_SECTIONS[0]?.id || "tranzactie"));
+  const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
   const [isCopied, setIsCopied] = useState<boolean>(false);
   
-  // Ensure default active tab is always the first in jump links on mount or property change (Poze on public shared)
+  // Ensure default active tab is always the first in jump links on mount or property change
   useEffect(() => {
-    setActiveSection(isPublicShared ? "poze" : (navSections[0]?.id || "tranzactie"));
+    setActiveSection(NAV_SECTIONS[0]?.id || "tranzactie");
     if (mainScrollRef.current) {
       mainScrollRef.current.scrollTop = 0;
     }
-  }, [lead?.id, isPublicShared, navSections]);
+  }, [lead?.id]);
   
   // Persistent favorite stored in browser localStorage
   const favoriteStorageKey = `brokr_fav_prop_${lead.propertyId || lead.id || "default"}`;
@@ -419,13 +411,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       // Check if user is scrolled to the absolute bottom of the container
       const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
       if (isAtBottom) {
-        setActiveSection(navSections[navSections.length - 1].id);
+        setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
         return;
       }
 
       // If at or near the top of the container, force the first jump link tab
       if (scrollContainer.scrollTop <= 40) {
-        setActiveSection(navSections[0].id);
+        setActiveSection(NAV_SECTIONS[0].id);
         return;
       }
 
@@ -434,8 +426,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       const triggerLine = containerTop + 70;
 
       // Find the last section whose top has reached or passed the trigger line
-      let currentSectionId = navSections[0].id;
-      for (const sect of navSections) {
+      let currentSectionId = NAV_SECTIONS[0].id;
+      for (const sect of NAV_SECTIONS) {
         const el = document.getElementById(sect.id);
         if (el) {
           const rect = el.getBoundingClientRect();
@@ -456,7 +448,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         clearTimeout(scrollTimeoutRef.current);
       }
     };
-  }, [navSections]);
+  }, []);
 
   const toggleCard = (cardId: string) => {
     setCollapsedCards(prev => ({
@@ -645,33 +637,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
   };
 
-  // Compile full image list with canonical deduplication
+  // Compile full image list
   const allImages = useMemo(() => {
-    const dedupeUrls = (urls: string[]) => {
-      const seen = new Set<string>();
-      const result: string[] = [];
-      for (const u of urls) {
-        if (!u || typeof u !== "string" || !u.trim()) continue;
-        const clean = u.trim();
-        const base = clean.split(/[?;]/)[0];
-        const olxMatch = base.match(/\/v1\/files\/([^/]+)/i);
-        const uuidMatch = base.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
-        const md5Match = base.match(/([a-f0-9]{32})/i);
-        const key = olxMatch 
-          ? `olx-${olxMatch[1].toLowerCase()}` 
-          : (uuidMatch 
-              ? `uuid-${uuidMatch[1].toLowerCase()}` 
-              : (md5Match ? `md5-${md5Match[1].toLowerCase()}` : clean));
-        if (!seen.has(key)) {
-          seen.add(key);
-          result.push(clean);
-        }
-      }
-      return result;
-    };
-
+    const images: string[] = [];
+    if (lead?.coverImage && !images.includes(lead.coverImage)) {
+      images.push(lead.coverImage);
+    }
     const crmImagini = lead?.extractedData?.crmData?.imagini;
-    const crmImages: string[] = [];
     if (crmImagini) {
       const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
       categories.forEach(cat => {
@@ -679,29 +651,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         if (Array.isArray(list)) {
           list.forEach(item => {
             const url = typeof item === "string" ? item : item?.original;
-            if (url && typeof url === "string" && url.trim().length > 0) {
-              crmImages.push(url.trim());
+            if (url && typeof url === "string" && !images.includes(url)) {
+              images.push(url);
             }
           });
         }
       });
     }
-
-    const directImages = (lead as any)?.images;
-    const directSanitized = Array.isArray(directImages)
-      ? directImages
-          .map((item: any) => (typeof item === "string" ? item : item?.original))
-          .filter((u: any): u is string => typeof u === "string" && u.trim().length > 0)
-      : [];
-
-    // Pool all sources to guarantee we never miss images from either lead.images or crmData.imagini
-    const combined = [
-      ...directSanitized,
-      ...crmImages,
-      ...(lead?.coverImage ? [lead.coverImage] : [])
-    ];
-
-    return dedupeUrls(combined);
+    return images;
   }, [lead]);
 
   const crmData = lead?.extractedData?.crmData;
@@ -859,7 +816,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     if (m) balcoaneFromText = m[1];
   }
   const balcoaneRaw = leadBalcoaneRaw || balcoaneFromText;
-  const balcoane = (balcoaneRaw && balcoaneRaw !== "0" && balcoaneRaw !== "-") ? String(balcoaneRaw) : "1";
+  const balcoane = balcoaneRaw ? String(balcoaneRaw) : "-";
 
   const leadStareRaw = (crmData?.utilitati?.finisaje?.stare && crmData.utilitati.finisaje.stare.length > 0)
     ? (Array.isArray(crmData.utilitati.finisaje.stare) ? crmData.utilitati.finisaje.stare.join(", ") : String(crmData.utilitati.finisaje.stare))
@@ -875,22 +832,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     : (parsedCamere > 1 ? parsedCamere - 1 : (parsedCamere === 1 ? 1 : 1));
   const parsedBai = parseInt(String(bai || "").match(/\d+/)?.[0] || "0", 10);
   const baiCount = Math.max(1, parsedBai || 1);
-
-  // Standardized list of extracted rooms for both Mobilare and Dotări
-  const roomsList = useMemo(() => {
-    const list: string[] = ["Living"];
-    const maxBedrooms = Math.min(Math.max(1, bedroomCount), 4);
-    for (let i = 1; i <= maxBedrooms; i++) {
-      list.push(`Camera ${i}`);
-    }
-    list.push("Bucătărie");
-    const maxBathrooms = Math.min(Math.max(1, baiCount), 4);
-    for (let i = 1; i <= maxBathrooms; i++) {
-      list.push(`Baie ${i}`);
-    }
-    list.push("Hol");
-    return list;
-  }, [bedroomCount, baiCount]);
 
   // Default agency commission per user rules:
   // - Sale: 0%
@@ -1026,7 +967,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "An construcție": saved.configuratie?.["An construcție"] || anConstructie,
         "Număr camere": saved.configuratie?.["Număr camere"] || String(camere),
         "Număr băi": saved.configuratie?.["Număr băi"] || String(bai),
-        "Balcoane": saved.configuratie?.["Balcoane"] || saved.configuratie?.["Balcon"] || String(balcoane),
+        "Balcon": saved.configuratie?.["Balcon"] || String(balcoane),
         "Stare": saved.configuratie?.["Stare"] || stareInterior,
         ...(saved.configuratie || {})
       },
@@ -1103,7 +1044,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Situație juridică": saved.acte?.["Situație juridică"] || "Fara probleme",
         "Disponibilitate": saved.acte?.["Disponibilitate"] || "Imediată",
         "Finanțare": saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii",
-        "Durata contract": saved.acte?.["Durata contract"] || saved.acte?.["Condiții contractuale"] || "12 luni",
+        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "12 luni",
         "Avans": saved.acte?.["Avans"] || "1 luna",
         "Garanție": saved.acte?.["Garanție"] || "1 luna",
         ...(saved.acte || {})
@@ -1112,12 +1053,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Preț": saved.tranzactie?.["Preț"] || formattedPrice,
         "TVA": saved.tranzactie?.["TVA"] || "Scutit de TVA / conform legislației în vigoare",
         "Comision": saved.tranzactie?.["Comision"] || defaultCommission,
-        "Durata contract": saved.tranzactie?.["Durata contract"] || saved.tranzactie?.["Condiții contractuale"] || saved.acte?.["Durata contract"] || saved.acte?.["Condiții contractuale"] || "12 luni",
-        "Avans": saved.tranzactie?.["Avans"] || saved.acte?.["Avans"] || "1 luna",
-        "Garanție": saved.tranzactie?.["Garanție"] || saved.acte?.["Garanție"] || "1 luna",
-        "Situație juridică": saved.tranzactie?.["Situație juridică"] || saved.acte?.["Situație juridică"] || "Fara probleme",
-        "Disponibilitate": saved.tranzactie?.["Disponibilitate"] || saved.acte?.["Disponibilitate"] || "Imediată",
-        "Finanțare": saved.tranzactie?.["Finanțare"] || saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii",
         ...(saved.tranzactie || {})
       }
     };
@@ -1156,48 +1091,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const handleSavePhotos = async () => {
     if (!lead?.id) return;
     try {
-      const cleanImages = imagesList.filter(img => typeof img === "string" && img.trim().length > 0);
-      const newCover = cleanImages[0] || "";
-      const structuredImages = cleanImages.map(url => ({ original: url }));
-
-      const nextExtractedData = {
-        ...(lead.extractedData || {}),
-        crmData: {
-          ...(lead.extractedData?.crmData || {}),
-          imagini: {
-            living: structuredImages,
-            camera: [],
-            bucatarie: [],
-            baie: [],
-            alteSpatii: []
-          }
-        }
-      };
-
+      const newCover = imagesList[0] || "";
       const updates: any = {
         coverImage: newCover,
-        images: cleanImages,
-        extractedData: nextExtractedData
+        "extractedData.crmData.imagini.living": imagesList
       };
-
       await leadsService.updateLeadData(lead.id, updates);
-
-      // Mutate local lead object in place so that useMemo(allImages) immediately updates without resurrecting deleted images
-      (lead as any).images = cleanImages;
-      (lead as any).coverImage = newCover;
-      if (lead.extractedData?.crmData) {
-        lead.extractedData.crmData.imagini = {
-          living: structuredImages as any,
-          camera: [],
-          bucatarie: [],
-          baie: [],
-          alteSpatii: []
-        };
-      }
-
-      onUpdateLead?.(updates);
-
-      setImagesList(cleanImages);
       setIsEditingPhotos(false);
       setIsPhotosDirty(false);
       toast.success("Fotografiile au fost salvate cu succes!");
@@ -1207,119 +1106,37 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
   };
 
-  const handleDeleteCurrentPhoto = async (indexToDelete: number) => {
-    if (imagesList.length === 0) return;
-    const nextList = imagesList.filter((_, i) => i !== indexToDelete);
-    setImagesList(nextList);
-    if (selectedPhotoIndex >= nextList.length) {
-      setSelectedPhotoIndex(Math.max(0, nextList.length - 1));
-    }
-    if (carouselIndex >= nextList.length) {
-      setCarouselIndex(Math.max(0, nextList.length - 1));
-    }
-
-    if (!lead?.id) return;
-    try {
-      const newCover = nextList[0] || "";
-      const structuredImages = nextList.map(url => ({ original: url }));
-      const nextExtractedData = {
-        ...(lead.extractedData || {}),
-        crmData: {
-          ...(lead.extractedData?.crmData || {}),
-          imagini: {
-            living: structuredImages,
-            camera: [],
-            bucatarie: [],
-            baie: [],
-            alteSpatii: []
-          }
-        }
-      };
-
-      const updates: any = {
-        coverImage: newCover,
-        images: nextList,
-        extractedData: nextExtractedData
-      };
-
-      await leadsService.updateLeadData(lead.id, updates);
-      (lead as any).images = nextList;
-      (lead as any).coverImage = newCover;
-      if (lead.extractedData?.crmData) {
-        lead.extractedData.crmData.imagini = {
-          living: structuredImages as any,
-          camera: [],
-          bucatarie: [],
-          baie: [],
-          alteSpatii: []
-        };
-      }
-
-      onUpdateLead?.(updates);
-      toast.success("Fotografia a fost ștearsă definitiv!");
-    } catch (err) {
-      console.error("Failed to delete photo:", err);
-      toast.error("Eroare la ștergerea fotografiei.");
-    }
-  };
-
   const handleCancelPhotos = () => {
     setImagesList(allImages);
     setIsEditingPhotos(false);
     setIsPhotosDirty(false);
   };
 
-  const handleAddPhotoFiles = async (files: FileList | File[]) => {
+  const handleAddPhotoFiles = (files: FileList | File[]) => {
     const fileArray = Array.from(files).filter(f => f.type.startsWith("image/"));
     if (fileArray.length === 0) {
       toast.error("Vă rugăm să selectați fișiere imagine valide (JPG, PNG, WEBP).");
       return;
     }
 
-    const toastId = toast.loading("Se încarcă fotografiile pe server...");
-    const uploadedUrls: string[] = [];
-
-    try {
-      for (const file of fileArray) {
-        const base64Promise = new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
-        const dataUrl = await base64Promise;
-        const res = await fetch("/api/upload-photo", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ dataUrl, filename: file.name })
-        });
-
-        if (!res.ok) {
-          throw new Error(`Upload failed with status ${res.status}`);
+    const newImgs: string[] = [];
+    let readCount = 0;
+    fileArray.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        if (e.target?.result && typeof e.target.result === "string") {
+          newImgs.push(e.target.result);
         }
-
-        const data = await res.json();
-        if (data.url) {
-          uploadedUrls.push(data.url);
+        readCount++;
+        if (readCount === fileArray.length) {
+          setImagesList(prev => [...prev, ...newImgs]);
+          setIsPhotosDirty(true);
+          setIsEditingPhotos(true);
+          toast.success(`${newImgs.length} ${newImgs.length === 1 ? "fotografie adăugată" : "fotografii adăugate"}!`);
         }
-      }
-
-      if (uploadedUrls.length > 0) {
-        setImagesList(prev => [...prev, ...uploadedUrls]);
-        setIsPhotosDirty(true);
-        setIsEditingPhotos(true);
-        toast.success(
-          `${uploadedUrls.length} ${uploadedUrls.length === 1 ? "fotografie adăugată" : "fotografii adăugate"}!`,
-          { id: toastId }
-        );
-      } else {
-        toast.error("Nu s-au putut încărca fotografiile.", { id: toastId });
-      }
-    } catch (err) {
-      console.error("[PropertyDetailView] Upload error:", err);
-      toast.error("Eroare la încărcarea fotografiilor.", { id: toastId });
-    }
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   useEffect(() => {
@@ -1331,30 +1148,17 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   const handleStartEditSection = (sectionId: string) => {
     setEditingSection(sectionId);
-    if (sectionId === "mobilare_dotari") {
-      setDraftSectionData(prev => ({
-        ...prev,
-        mobilare: { ...(sectionData["mobilare"] || {}) },
-        dotari: { ...(sectionData["dotari"] || {}) }
-      }));
-    } else {
-      setDraftSectionData(prev => ({
-        ...prev,
-        [sectionId]: { ...(sectionData[sectionId] || {}) }
-      }));
-    }
+    setDraftSectionData(prev => ({
+      ...prev,
+      [sectionId]: { ...(sectionData[sectionId] || {}) }
+    }));
   };
 
   const handleCancelEditSection = (sectionId: string) => {
     setEditingSection(null);
     setDraftSectionData(prev => {
       const copy = { ...prev };
-      if (sectionId === "mobilare_dotari") {
-        delete copy["mobilare"];
-        delete copy["dotari"];
-      } else {
-        delete copy[sectionId];
-      }
+      delete copy[sectionId];
       return copy;
     });
   };
@@ -1371,15 +1175,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   const isSectionDirty = (sectionId: string) => {
     if (editingSection !== sectionId) return false;
-    if (sectionId === "mobilare_dotari") {
-      const mDraft = draftSectionData["mobilare"];
-      const mOrig = sectionData["mobilare"] || {};
-      const mDirty = mDraft ? Object.keys(mDraft).some(k => (mDraft[k] ?? "") !== (mOrig[k] ?? "")) : false;
-      const dDraft = draftSectionData["dotari"];
-      const dOrig = sectionData["dotari"] || {};
-      const dDirty = dDraft ? Object.keys(dDraft).some(k => (dDraft[k] ?? "") !== (dOrig[k] ?? "")) : false;
-      return mDirty || dDirty;
-    }
     const currentDraft = draftSectionData[sectionId];
     if (!currentDraft) return false;
     const original = sectionData[sectionId] || {};
@@ -1387,32 +1182,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   const handleSaveSection = async (sectionId: string) => {
-    if (sectionId === "mobilare_dotari") {
-      const updatedMob = { ...(draftSectionData["mobilare"] || sectionData["mobilare"]) };
-      const updatedDot = { ...(draftSectionData["dotari"] || sectionData["dotari"]) };
-      const nextSectionData = {
-        ...sectionData,
-        mobilare: updatedMob,
-        dotari: updatedDot
-      };
-      setSectionData(nextSectionData);
-      setEditingSection(null);
-
-      if (lead?.id) {
-        try {
-          const updates: any = {
-            "extractedData.presentationSections": nextSectionData
-          };
-          await leadsService.updateLeadData(lead.id, updates);
-          toast.success("Modificările au fost salvate cu succes!");
-        } catch (e) {
-          console.error("Failed to save inline changes:", e);
-          toast.error("Eroare la salvarea modificărilor.");
-        }
-      }
-      return;
-    }
-
     const updatedSec = { ...(draftSectionData[sectionId] || sectionData[sectionId]) };
     const nextSectionData = {
       ...sectionData,
@@ -1434,18 +1203,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         if (updatedSec["An construcție"]) updates["extractedData.crmData.caracteristici.alteDetalii.anConstructie"] = updatedSec["An construcție"];
         if (updatedSec["Număr camere"]) updates["extractedData.crmData.caracteristici.detalii.camere"] = updatedSec["Număr camere"];
         if (updatedSec["Număr băi"]) updates["extractedData.crmData.caracteristici.detalii.bai"] = updatedSec["Număr băi"];
-        if (updatedSec["Balcoane"] || updatedSec["Balcon"]) updates["extractedData.crmData.caracteristici.suprafete.balcoane"] = updatedSec["Balcoane"] || updatedSec["Balcon"];
+        if (updatedSec["Balcon"]) updates["extractedData.crmData.caracteristici.suprafete.balcoane"] = updatedSec["Balcon"];
         if (updatedSec["Stare"]) updates["extractedData.crmData.caracteristici.alteDetalii.stadiuConstructie"] = updatedSec["Stare"];
       } else if (sectionId === "tranzactie") {
         if (updatedSec["Preț"]) {
           updates["price"] = updatedSec["Preț"];
           updates["extractedData.crmData.pret.detalii.pret"] = updatedSec["Preț"];
-        }
-        if (updatedSec["Garanție"]) {
-          updates["extractedData.crmData.pret.detalii.garantie"] = updatedSec["Garanție"];
-        }
-        if (updatedSec["Avans"]) {
-          updates["extractedData.crmData.pret.detalii.avans"] = updatedSec["Avans"];
         }
       } else if (sectionId === "introducere") {
         if (updatedSec["summary"]) {
@@ -1454,6 +1217,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       }
 
       await leadsService.updateLeadData(lead.id, updates);
+      onUpdateLead?.(updates);
       toast.success("Modificările au fost salvate cu succes!");
     } catch (e) {
       console.error("Failed to save inline changes:", e);
@@ -1469,7 +1233,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     multiline: boolean = false,
     options?: string[]
   ) => {
-    const isSecEditing = editingSection === sectionId || (editingSection === "mobilare_dotari" && (sectionId === "mobilare" || sectionId === "dotari"));
+    const isSecEditing = editingSection === sectionId;
     const originalVal = sectionData[sectionId]?.[label] ?? fallbackVal;
     const currentVal = isSecEditing 
       ? (draftSectionData[sectionId]?.[label] ?? originalVal) 
@@ -1478,19 +1242,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     const valStr = typeof currentVal === "string" ? currentVal.trim() : (currentVal == null ? "" : String(currentVal).trim());
 
     // User rule: Where there is a "-", if no data has been found on the url provided for crawling, just remove that row of data in the page.
-    // Exception: "An construcție", "Balcoane", and rooms in "mobilare" & "dotari" must ALWAYS appear in read mode so both columns match identically.
-    const isAlwaysVisibleInReadMode = label === "An construcție" || label === "Balcoane" || label === "Balcon" || sectionId === "mobilare" || sectionId === "dotari";
-    if (!isSecEditing && !isAlwaysVisibleInReadMode && (valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null")) {
+    if (!isSecEditing && (valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null")) {
       return null;
     }
-
-    const displayValue = (valStr === "-" && !isAlwaysVisibleInReadMode) ? "" : (valStr || "-");
 
     return (
       <AttributeRow
         key={label}
         label={label}
-        value={displayValue}
+        value={valStr === "-" ? "" : currentVal}
         copyValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
         isEditing={isSecEditing}
         editValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
@@ -1502,249 +1262,46 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     );
   };
 
-  // Generated page title according to exact user specification:
-  // Order: Tip proprietate | numar camere | numar bai daca sunt mai mult de 1 | metri patrati | Distanta Metrou daca este cazul | Distanta Parc daca este cazul | Mobilat sau nemobilat | Utilat daca este cazul | obiectiv din zona
-  // Max 70 characters in total
-  const generatedTitle = useMemo(() => {
-    const parts: string[] = [];
-
-    // 0. Tip proprietate (Apartament, Casa, Teren, Spatiu Birouri, Spatiu Comercial, etc.)
-    const rawCat = (crmData?.detaliiGenerale?.categoria || lead?.categoria || "").toLowerCase();
-    const titleLower = (lead?.title || "").toLowerCase();
-    let propType = "Apartament";
-    if (titleLower.includes("penthouse") || rawCat.includes("penthouse")) propType = "Penthouse";
-    else if (rawCat.includes("cas") || rawCat.includes("vil")) propType = "Casă";
-    else if (rawCat.includes("teren")) propType = "Teren";
-    else if (rawCat.includes("birou")) propType = "Spațiu Birouri";
-    else if (rawCat.includes("comercial")) propType = "Spațiu Comercial";
-    else if (rawCat.includes("industrial") || rawCat.includes("depozit")) propType = "Spațiu Industrial";
-    else if (rawCat.includes("garsonier") || rawCat.includes("studio")) propType = "Studio";
-    else if (crmData?.detaliiGenerale?.categoria) {
-      propType = crmData.detaliiGenerale.categoria.replace(/e$/, "").replace(/i$/, "");
-    }
-    parts.push(propType);
-
-    // 1. Numar camere (ex: "2 cam", "1 cam", "3 cam")
-    const nrCamVal = sectionData["configuratie"]?.["Număr camere"] || camere;
-    const nrCamMatch = String(nrCamVal || "").match(/\d+/);
-    if (nrCamMatch) {
-      parts.push(`${nrCamMatch[0]} cam`);
-    } else if (String(nrCamVal || "").toLowerCase().includes("garsonier") || String(nrCamVal || "").toLowerCase().includes("studio")) {
-      parts.push("1 cam");
-    } else {
-      parts.push("2 cam");
-    }
-
-    // 2. Numar bai daca sunt mai mult de 1 (daca e 1 sau mai putin, se omite complet)
-    const nrBaiVal = sectionData["configuratie"]?.["Număr băi"] || bai;
-    const parsedBai = parseInt(String(nrBaiVal || "").match(/\d+/)?.[0] || "0", 10);
-    if (parsedBai > 1) {
-      parts.push(`${parsedBai} băi`);
-    }
-
-    // 3. Metri patrati (ex: "52mp")
-    const suprafataVal = sectionData["configuratie"]?.["Suprafață utilă"] || suprafataUtila;
-    const mpMatch = String(suprafataVal || "").match(/\d+/);
-    if (mpMatch) {
-      parts.push(`${mpMatch[0]}mp`);
-    }
-
-    // 3.1 Zona mentionata in anuntul original (dupa suprafata)
-    const propertyZona = lead?.zone || crmData?.detaliiGenerale?.localizare?.zona?.[0] || "";
-    if (propertyZona && propertyZona.toLowerCase() !== "bucurești" && propertyZona.toLowerCase() !== "bucuresti") {
-      parts.push(propertyZona);
-    }
-
-    // 4. Distanta Metrou daca este cazul (ex: "Metrou 50 metri", "Metrou 50m", "Metrou 5 min", "Metrou Teclu")
-    let metrouFragment = "";
-    const metroSources = [
-      sectionData["transport"]?.["Metrou"],
-      rawDescText
-    ].filter(Boolean).join(" ");
-    
-    const mDist = metroSources.match(/(?:la\s*)?(\d+)\s*(?:m|metri)\s*(?:de)?\s*metrou/i)
-      || metroSources.match(/metrou\s*(?:la\s*)?(\d+)\s*(?:m|metri)/i);
-    if (mDist) {
-      metrouFragment = `Metrou ${mDist[1]}m`;
-    } else {
-      const mMin = metroSources.match(/(?:la\s*)?(\d+)\s*(?:min|minute)\s*(?:de)?\s*metrou/i)
-        || metroSources.match(/metrou\s*(?:la\s*)?(\d+)\s*(?:min|minute)/i);
-      if (mMin) {
-        metrouFragment = `Metrou ${mMin[1]} min`;
-      } else {
-        const mStation = metroSources.match(/metrou\s+([A-ZĂÎÂȘȚ][a-zăîâșț0-9]+)/);
-        if (mStation && !["în", "in", "apropiere", "zona", "stație", "statie"].includes(mStation[1].toLowerCase())) {
-          metrouFragment = `Metrou ${mStation[1]}`;
-        }
-      }
-    }
-    if (metrouFragment) {
-      parts.push(metrouFragment);
-    }
-
-    // 5. Distanta Parc daca este cazul (ex: "Parc 200m", "Parc IOR", "Parc 5 min")
-    let parcFragment = "";
-    const parcSources = [
-      sectionData["imprejurimi"]?.["Relaxare"],
-      rawDescText
-    ].filter(Boolean).join(" ");
-
-    const pDist = parcSources.match(/(?:la\s*)?(\d+)\s*(?:m|metri)\s*(?:de)?\s*parc/i)
-      || parcSources.match(/parc(?:ul)?\s*(?:la\s*)?(\d+)\s*(?:m|metri)/i);
-    if (pDist) {
-      parcFragment = `Parc ${pDist[1]}m`;
-    } else {
-      const pMin = parcSources.match(/(?:la\s*)?(\d+)\s*(?:min|minute)\s*(?:de)?\s*parc/i)
-        || parcSources.match(/parc(?:ul)?\s*(?:la\s*)?(\d+)\s*(?:min|minute)/i);
-      if (pMin) {
-        parcFragment = `Parc ${pMin[1]} min`;
-      } else {
-        const pName = parcSources.match(/parc(?:ul)?\s+(Her[aă]str[aă]u|IOR|Ci[sș]migiu|Tineretului|Carol|Titan|Circului|Bordei|Plumbuita|Kiseleff)/i);
-        if (pName) {
-          parcFragment = `Parc ${pName[1]}`;
-        }
-      }
-    }
-    if (parcFragment) {
-      parts.push(parcFragment);
-    }
-
-    // 6. Mobilat sau nemobilat (ex: "Mobilat", "Nemobilat", "Mobilat parțial")
-    const lowerText = rawDescText.toLowerCase();
-    const crmMobilat = (crmData as any)?.dotari?.mobilat;
-    let mobFragment = "Mobilat";
-    if (crmMobilat === "Nemobilat" || lowerText.includes("nemobilat")) {
-      mobFragment = "Nemobilat";
-    } else if (crmMobilat === "Partial" || lowerText.includes("mobilat partial") || lowerText.includes("semi-mobilat")) {
-      mobFragment = "Mobilat parțial";
-    } else {
-      mobFragment = "Mobilat";
-    }
-    parts.push(mobFragment);
-
-    // 7. Utilat daca este cazul (ex: "Utilat")
-    const isUtilat = lowerText.includes("utilat") 
-      || (crmData as any)?.dotari?.bucatarie?.utilata 
-      || (sectionData["dotari"]?.["Bucătărie"] && sectionData["dotari"]["Bucătărie"] !== "-");
-    if (isUtilat) {
-      parts.push("Utilat");
-    }
-
-    // 8. Obiectiv din zona (ex: "Promenada", "Mall Vitan", etc.)
-    let obiectivFragment = "";
-    const objSources = [
-      sectionData["imprejurimi"]?.["Obiective"],
-      sectionData["imprejurimi"]?.["Comerț"],
-      rawDescText
-    ].filter(Boolean).join(" ");
-    const oMatch = objSources.match(/\b(Mall Vitan|AFI Palace|AFI Cotroceni|Promenada|Băneasa Shopping|Mega Mall|Plaza România|Sun Plaza|ParkLake|București Mall|Piața Unirii|Piața Victoriei|Universitate|Centrul Vechi|Timpuri Noi|Floreasca|Herăstrău|Aviației|Pipera)\b/i);
-    if (oMatch) {
-      obiectivFragment = oMatch[1];
-      parts.push(obiectivFragment);
-    }
-
-    // Ensure maximum 70 characters in total
-    let currentParts = [...parts];
-    let candidate = currentParts.join(" | ");
-
-    while (candidate.length > 70 && currentParts.length > 2) {
-      currentParts.pop(); // drop last element
-      candidate = currentParts.join(" | ");
-    }
-
-    if (candidate.length > 70) {
-      candidate = candidate.substring(0, 67) + "...";
-    }
-
-    return candidate;
-  }, [sectionData, camere, bai, suprafataUtila, rawDescText, crmData]);
-
-  // Price per square meter for sales
-  const pricePerSqm = useMemo(() => {
-    if (isRent) return null;
-    if (crmData?.pret?.detalii?.pretMp) {
-      const val = crmData.pret.detalii.pretMp;
-      return `${val} €/m²`;
-    }
-    const rawPriceStr = crmData?.pret?.detalii?.pret || lead?.price || "";
-    const priceNum = parseFloat(String(rawPriceStr).replace(/[^0-9.]/g, ""));
-    const rawSurfStr = sectionData["configuratie"]?.["Suprafață utilă"] || suprafataUtila || "";
-    const surfNum = parseFloat(String(rawSurfStr).replace(/[^0-9.]/g, ""));
-
-    if (priceNum && surfNum && surfNum > 0 && priceNum > 1000) {
-      const ppm = priceNum / surfNum;
-      const formatted = ppm.toLocaleString("ro-RO", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      });
-      return `${formatted} €/m²`;
-    }
-    return null;
-  }, [isRent, crmData, lead?.price, sectionData, suprafataUtila]);
-
-  // Clean price number extracted strictly as digits/separators to prevent duplicate currencies or units
-  const cleanPriceNumber = useMemo(() => {
-    const rawVal = crmData?.pret?.detalii?.pret || lead?.price || "500";
-    const cleaned = String(rawVal)
-      .replace(/[^\d.,\s]/g, "")
-      .trim();
-    return cleaned || "500";
-  }, [crmData?.pret?.detalii?.pret, lead?.price]);
-
-  // Clean rent guarantees (e.g. "1 luna garantie", "2 luni garantie")
-  const cleanGuaranteeText = useMemo(() => {
-    if (!isRent) return null;
-    const rawGarantie = sectionData["tranzactie"]?.["Garanție"]
-      || sectionData["acte"]?.["Garanție"] 
-      || crmData?.pret?.detalii?.garantie;
-    if (rawGarantie && rawGarantie !== "-" && rawGarantie !== "") {
-      const str = String(rawGarantie).trim();
-      if (str.toLowerCase().includes("garan")) {
-        return str;
-      }
-      return `${str} garantie`;
-    }
-    return "1 luna garantie";
-  }, [isRent, sectionData, crmData]);
-
-  // Sync document title with generated title on public shared page
-  useEffect(() => {
-    if (isPublicShared && generatedTitle) {
-      document.title = `${generatedTitle} • brokr.`;
-    } else if (displayTitle) {
-      document.title = `${displayTitle} • brokr.`;
-    }
-  }, [isPublicShared, generatedTitle, displayTitle]);
-
   return (
-    <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden select-none" style={{ WebkitUserSelect: "none", userSelect: "none" }}>
+    <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden">
       
       {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
       {showTopNavbar && (
         <nav className="h-[50px] shrink-0 bg-white border-b border-gray-200 select-none z-30">
-          <div className={`w-full h-[50px] flex items-center justify-between p-0 ${isPublicShared ? "max-w-[1240px] mx-auto px-4 sm:px-6" : ""}`}>
+          <div className="w-full h-[50px] flex items-center justify-between p-0">
             <div className="flex items-center h-full">
-              {!isPublicShared && (
-                <a 
-                  href="/"
-                  className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 select-none group"
-                  title="Înapoi la pagina principală"
-                >
-                  <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-                </a>
-              )}
-              <div className={!isPublicShared ? "px-4 flex items-center gap-1.5 focus:outline-none" : "flex items-center gap-1.5 focus:outline-none"}>
-                <span className="text-[22px] font-bold tracking-tight text-[#051D35] font-sans leading-none flex items-center">
+              <a 
+                href="/"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 select-none group"
+                title="Înapoi la pagina principală"
+              >
+                <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+              </a>
+              <div className="px-4 flex items-center gap-1.5 focus:outline-none">
+                <span className="font-extrabold text-base tracking-tight text-[#051D35] font-sans flex items-center">
                   brokr<span className="text-[#BE9662]">.</span>
                 </span>
               </div>
             </div>
 
-            <div className="flex items-stretch h-full shrink-0 border-r border-gray-200">
+            <div className="flex items-stretch h-full shrink-0">
+              <button
+                type="button"
+                onClick={handleToggleFavorite}
+                className={`h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 transition-colors cursor-pointer select-none group ${
+                  isFavorite 
+                    ? "bg-amber-50/50 text-[#BE9662]" 
+                    : "bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900"
+                }`}
+                title={isFavorite ? "Elimină din favorite" : "Salvează ca favorit"}
+              >
+                <Bookmark size={16} className={isFavorite ? "fill-[#BE9662] text-[#BE9662]" : "text-gray-500 group-hover:text-[#BE9662] transition-colors"} />
+              </button>
+
               <button
                 type="button"
                 onClick={handlePrint}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-transparent hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
                 title="Tipărește oferta"
               >
                 <Printer size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
@@ -1753,7 +1310,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={handleNativeShare}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-r border-gray-200 bg-transparent hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
                 title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
               >
                 <Share2 size={16} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
@@ -1763,308 +1320,141 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         </nav>
       )}
 
-      {/* Horizontal Fixed Menu with Jump Links (Left) and Actions (Right) - Perfectly aligned with logo and containers below */}
-      <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-        <div className={`w-full h-full flex items-center justify-between gap-3 shrink-0 ${isPublicShared ? "max-w-[1240px] mx-auto px-4 sm:px-6" : "px-4 sm:px-6"}`}>
-          {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
-          <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
-            {navSections.map((sect) => {
-              const Icon = sect.icon;
-              const isActive = activeSection === sect.id;
+      {/* Horizontal Fixed Menu with Jump Links (Left) and Actions (Right) - Matching Cereri subheader style */}
+      <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20 px-4 sm:px-6 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+        {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
+        <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
+          {NAV_SECTIONS.map((sect) => {
+            const Icon = sect.icon;
+            const isActive = activeSection === sect.id;
 
-              return (
-                <button
-                  key={sect.id}
-                  type="button"
-                  onClick={() => scrollToSection(sect.id)}
-                  className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans border ${
-                    isActive
-                      ? "bg-[#051D35] text-white font-medium shadow-xs border-[#051D35]"
-                      : "text-gray-600 hover:text-[#051D35] bg-gray-50/70 hover:bg-gray-100 border-gray-200"
-                  }`}
-                >
-                  <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
-                  <span>{sect.label}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Right: Actions (print and share removed per user instruction) */}
-          <div className="flex items-center gap-1.5 shrink-0">
-            {/* 1. Șterge */}
-            {!isPublicShared && onDelete && (
-              <button 
-                type="button"
-                onClick={onDelete}
-                className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer shadow-2xs group"
-                title="Mută în Șterse"
-              >
-                <Trash2 size={14} className="text-gray-500 group-hover:text-red-600 transition-colors" />
-              </button>
-            )}
-
-            {/* 4. Link extern */}
-            {!isPublicShared && (
-              lead?.url ? (
-                <a
-                  href={lead.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-                  title="Deschide anunțul sursă extern"
-                >
-                  <ExternalLink size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  disabled
-                  className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed shrink-0"
-                  title="Fără link sursă extern"
-                >
-                  <ExternalLink size={14} className="text-gray-300" />
-                </button>
-              )
-            )}
-
-            {/* 5. Activitate (PRIMARY) */}
-            {!isPublicShared && onAddActivity && (
+            return (
               <button
+                key={sect.id}
                 type="button"
-                onClick={onAddActivity}
-                className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group border border-[#051D35]"
-                title="Adaugă activitate pentru această proprietate"
+                onClick={() => scrollToSection(sect.id)}
+                className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                  isActive
+                    ? "bg-[#051D35] text-white font-medium shadow-xs"
+                    : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                }`}
               >
-                <Plus size={13} className="text-[#BE9662]" />
-                <span>Activitate</span>
+                <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
+                <span>{sect.label}</span>
               </button>
-            )}
-          </div>
+            );
+          })}
+        </div>
+
+        {/* Right: Actions (matching Cereri action button style) */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* 1. Șterge */}
+          {!isPublicShared && onDelete && (
+            <button 
+              type="button"
+              onClick={onDelete}
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer shadow-2xs group"
+              title="Mută în Șterse"
+            >
+              <Trash2 size={14} className="text-gray-500 group-hover:text-red-600 transition-colors" />
+            </button>
+          )}
+
+          {/* 2. Printează */}
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+            title="Tipărește oferta"
+          >
+            <Printer size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+          </button>
+
+          {/* 3. Distribuie */}
+          <button
+            type="button"
+            onClick={handleNativeShare}
+            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+            title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+          >
+            <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+          </button>
+
+          {/* 4. Link extern */}
+          {lead?.url ? (
+            <a
+              href={lead.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+              title="Deschide anunțul sursă extern"
+            >
+              <ExternalLink size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+            </a>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed shrink-0"
+              title="Fără link sursă extern"
+            >
+              <ExternalLink size={14} className="text-gray-300" />
+            </button>
+          )}
+
+          {/* 5. Activitate (PRIMARY) */}
+          {!isPublicShared && onAddActivity && (
+            <button
+              type="button"
+              onClick={onAddActivity}
+              className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
+              title="Adaugă activitate pentru această proprietate"
+            >
+              <Plus size={13} className="text-[#BE9662]" />
+              <span>Activitate</span>
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Main Layout (Scrollable container below the fixed headers) */}
+      {/* Main Two-Column Layout (Scrollable container below the fixed headers) */}
       <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth">
-        
-        {/* PUBLIC SHARED BOXED GALLERY (1240px or less fluid, initial 5 photos: 50% width image, then two columns with 2 images each 50% height, last image with Toate imaginile overlay) */}
-        {isPublicShared && (
-          <div id="poze" className="w-full max-w-[1240px] mx-auto px-4 sm:px-6 py-4 sm:py-6 select-none scroll-mt-24 sm:scroll-mt-28">
-            <div className="w-full bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
-              {imagesList.length === 0 ? (
-                <div className="w-full h-[350px] flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
-                  <Camera size={40} className="text-gray-300" />
-                  <span className="text-xs font-medium text-gray-500">Nicio fotografie disponibilă</span>
-                </div>
-              ) : (
-                <>
-                  {/* Mobile Layout: 2 images, second with Toate imaginile overlay */}
-                  <div className="flex md:hidden w-full h-[320px] gap-[10px] bg-white select-none p-3" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
-                    <div className="relative w-3/5 h-full cursor-pointer group bg-gray-100 overflow-hidden rounded-lg">
-                      <ProtectedImage 
-                        src={imagesList[0]} 
-                        alt={`${generatedTitle} - 1`}
-                        className="w-full h-full"
-                        imageClassName="group-hover:scale-102"
-                        onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                      />
-                    </div>
-                    <div className="relative w-2/5 h-full cursor-pointer group bg-gray-100 overflow-hidden rounded-lg">
-                      <ProtectedImage 
-                        src={imagesList[1] || imagesList[0]} 
-                        alt={`${generatedTitle} - 2`}
-                        className="w-full h-full"
-                        imageClassName="group-hover:scale-103"
-                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                      />
-                      <div 
-                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                        className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer rounded-lg"
-                      >
-                        <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
-                          Toate imaginile ({imagesList.length})
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Desktop Layout: 5 photos - 1 image (50% width), then two columns (25% each) with 2 images each (50% height each), last image has Toate imaginile overlay */}
-                  <div className="hidden md:flex w-full h-[450px] sm:h-[480px] gap-[10px] bg-white select-none p-3" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
-                    {/* Left: 50% width, 1 image */}
-                    <div className="relative w-1/2 h-full cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
-                      <ProtectedImage 
-                        src={imagesList[0]} 
-                        alt={`${generatedTitle} - 1`}
-                        className="w-full h-full"
-                        imageClassName="group-hover:scale-102 transition-transform duration-300"
-                        onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                      />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedPhotoIndex(0);
-                          setIsGalleryOpen(true);
-                        }}
-                        className="absolute bottom-3 left-3 z-30 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
-                      >
-                        <Camera size={13} className="text-[#BE9662]" />
-                        <span>Galerie foto ({imagesList.length})</span>
-                      </button>
-                    </div>
-
-                    {/* Column 1 of 2 (Middle): 25% width, 2 images stacked 50% height each */}
-                    <div className="w-1/4 h-full flex flex-col gap-[10px]">
-                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
-                        <ProtectedImage 
-                          src={imagesList[1] || imagesList[0]} 
-                          alt={`${generatedTitle} - 2`}
-                          className="w-full h-full"
-                          imageClassName="group-hover:scale-103 transition-transform duration-300"
-                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                        />
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                      </div>
-
-                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
-                        <ProtectedImage 
-                          src={imagesList[2] || imagesList[1] || imagesList[0]} 
-                          alt={`${generatedTitle} - 3`}
-                          className="w-full h-full"
-                          imageClassName="group-hover:scale-103 transition-transform duration-300"
-                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 2 ? 2 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                        />
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                      </div>
-                    </div>
-
-                    {/* Column 2 of 2 (Last column): 25% width, 2 images stacked 50% height each, last image holds "Toate imaginile" overlay */}
-                    <div className="w-1/4 h-full flex flex-col gap-[10px]">
-                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
-                        <ProtectedImage 
-                          src={imagesList[3] || imagesList[0]} 
-                          alt={`${generatedTitle} - 4`}
-                          className="w-full h-full"
-                          imageClassName="group-hover:scale-103 transition-transform duration-300"
-                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 3 ? 3 : 0); setIsGalleryOpen(true); }}
-                        />
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                      </div>
-
-                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
-                        <ProtectedImage 
-                          src={imagesList[4] || imagesList[1] || imagesList[0]} 
-                          alt={`${generatedTitle} - 5`}
-                          className="w-full h-full"
-                          imageClassName="group-hover:scale-103 transition-transform duration-300"
-                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                        />
-                        <div 
-                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                          className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer rounded-lg"
-                        >
-                          <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
-                            Toate imaginile ({imagesList.length})
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        )}
-
-        <div className={isPublicShared ? "w-full min-h-full flex justify-center bg-gray-50/20" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
+        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-full items-start">
           
-          {/* Main Content Cards Column: Centered boxed container for public shared, 8 cols with right border for internal CRM */}
-          <div className={isPublicShared ? "max-w-[1240px] w-full mx-auto px-4 sm:px-6 py-6 space-y-6" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200"}>
-
-            {/* PUBLIC SHARED HEADER: Titlu generat imediat sub poze + Preț + ID intern in casuta patrata in dreapta */}
-            {isPublicShared && (
-              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans flex items-stretch">
-                <div className="flex-1 p-5 sm:p-6 min-w-0">
-                  <h1 className="text-[14px] font-normal text-gray-700 tracking-tight leading-snug">
-                    {generatedTitle}
-                  </h1>
-                  <div className="mt-2 text-[18px] font-bold text-gray-900 font-sans tracking-tight">
-                    {isRent ? (
-                      <span>
-                        {cleanPriceNumber} eur / luna
-                      </span>
-                    ) : (
-                      <span>
-                        {cleanPriceNumber} eur{pricePerSqm ? `   ${pricePerSqm}` : ""}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Internal ID in a square box to the right side, separated by border-l border-gray-200 */}
-                <div className="border-l border-gray-200 aspect-square min-w-[72px] sm:min-w-[84px] flex flex-col items-center justify-center p-3 text-center bg-gray-50/60 shrink-0 select-none">
-                  <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block font-sans">
-                    ID
-                  </span>
-                  <span className="font-mono font-bold text-[#051D35] text-sm sm:text-base tracking-tight mt-0.5">
-                    {internalCode}
-                  </span>
-                </div>
-              </div>
-            )}
+          {/* Left Column: All Content Cards (8 cols on lg) with clean right border */}
+          <div className="lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-[20px] border-b lg:border-b-0 lg:border-r border-gray-200">
 
             {/* #CARD 1: "PREȚ & CONDIȚII" */}
             <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                    <BadgePercent size={16} />
-                  </div>
-                  <div>
-                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                      PREȚ &amp; CONDIȚII
-                    </h2>
-                    <span className="text-[11px] text-gray-500 font-sans">
-                      Durata contract, preț și comision
-                    </span>
+                <div className="space-y-1">
+                  <h2 className="text-sm font-semibold text-gray-900 leading-snug font-sans">
+                    {displayTitle}
+                  </h2>
+                  <div className="text-base font-bold text-[#051D35] font-mono">
+                    {formattedPrice}
                   </div>
                 </div>
 
-                <SectionEditButton
-                  isEditing={editingSection === "tranzactie"}
-                  isDirty={isSectionDirty("tranzactie")}
-                  onStartEdit={() => handleStartEditSection("tranzactie")}
-                  onCancel={() => handleCancelEditSection("tranzactie")}
-                  onSave={() => handleSaveSection("tranzactie")}
-                  disabled={isPublicShared}
-                />
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] font-mono text-[#BE9662] font-semibold">
+                    (Cod intern: {internalCode})
+                  </span>
+                  <SectionEditButton
+                    isEditing={editingSection === "tranzactie"}
+                    isDirty={isSectionDirty("tranzactie")}
+                    onStartEdit={() => handleStartEditSection("tranzactie")}
+                    onCancel={() => handleCancelEditSection("tranzactie")}
+                    onSave={() => handleSaveSection("tranzactie")}
+                    disabled={isPublicShared}
+                  />
+                </div>
               </div>
 
-              <div className="font-sans grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100">
-                {/* Coloana 1: Condiții */}
-                <div className="divide-y divide-gray-100">
-                  {isRent ? (
-                    <>
-                      {renderRow("tranzactie", "Durata contract", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
-                      {renderRow("tranzactie", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
-                      {renderRow("tranzactie", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
-                    </>
-                  ) : (
-                    <>
-                      {renderRow("tranzactie", "Situație juridică", "Fara probleme")}
-                      {renderRow("tranzactie", "Disponibilitate", "Imediată")}
-                      {renderRow("tranzactie", "Finanțare", "Credit bancar / fonduri proprii", true)}
-                    </>
-                  )}
-                </div>
-
-                {/* Coloana 2: Preț */}
-                <div className="divide-y divide-gray-100">
-                  {renderRow("tranzactie", "Preț", formattedPrice)}
-                  {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
-                  {renderRow("tranzactie", "Comision", defaultCommission, true)}
-                </div>
+              <div className="font-sans divide-y divide-gray-100">
+                {renderRow("tranzactie", "Preț", formattedPrice)}
+                {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
+                {renderRow("tranzactie", "Comision", defaultCommission, true)}
               </div>
             </div>
 
@@ -2079,9 +1469,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
                       INTRODUCERE
                     </h2>
-                    <span className="text-[11px] text-gray-500 font-sans">
-                      Descriere generală a imobilului
-                    </span>
                   </div>
                 </div>
 
@@ -2142,121 +1529,120 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
 
-              <div className="font-sans">
-                {/* -Subcategorii "Configuratie" și "Finisaje" pe două coloane */}
-                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-                  {/* Coloana 1: Configurație */}
-                  <div className="flex flex-col">
-                    <SubCategoryHeader 
-                      title="Configurație" 
-                      actions={
-                        <SectionEditButton
-                          isEditing={editingSection === "configuratie"}
-                          isDirty={isSectionDirty("configuratie")}
-                          onStartEdit={() => handleStartEditSection("configuratie")}
-                          onCancel={() => handleCancelEditSection("configuratie")}
-                          onSave={() => handleSaveSection("configuratie")}
-                          disabled={isPublicShared}
-                        />
-                      }
-                    />
-                    <div className="divide-y divide-gray-100">
-                      {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
-                      {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
-                      {renderRow("configuratie", "Etaj", etaj)}
-                      {renderRow("configuratie", "An construcție", anConstructie)}
-                      {renderRow("configuratie", "Număr camere", String(camere))}
-                      {renderRow("configuratie", "Număr băi", String(bai))}
-                      {renderRow("configuratie", "Balcoane", String(balcoane))}
-                      {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
-                    </div>
-                  </div>
-
-                  {/* Coloana 2: Finisaje */}
-                  <div className="flex flex-col">
-                    <SubCategoryHeader 
-                      title="Finisaje" 
-                      actions={
-                        <SectionEditButton
-                          isEditing={editingSection === "finisaje"}
-                          isDirty={isSectionDirty("finisaje")}
-                          onStartEdit={() => handleStartEditSection("finisaje")}
-                          onCancel={() => handleCancelEditSection("finisaje")}
-                          onSave={() => handleSaveSection("finisaje")}
-                          disabled={isPublicShared}
-                        />
-                      }
-                    />
-                    <div className="divide-y divide-gray-100">
-                      {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
-                      {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
-                      {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
-                      {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
-                      {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
-                      {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
-                      {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
-                    </div>
+              <div className="font-sans divide-y divide-gray-100">
+                {/* -Subcategorie "Configuratie" */}
+                <div>
+                  <SubCategoryHeader 
+                    title="Configurație" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "configuratie"}
+                        isDirty={isSectionDirty("configuratie")}
+                        onStartEdit={() => handleStartEditSection("configuratie")}
+                        onCancel={() => handleCancelEditSection("configuratie")}
+                        onSave={() => handleSaveSection("configuratie")}
+                        disabled={isPublicShared}
+                      />
+                    }
+                  />
+                  <div className="divide-y divide-gray-100">
+                    {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
+                    {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
+                    {renderRow("configuratie", "Etaj", etaj)}
+                    {renderRow("configuratie", "An construcție", anConstructie)}
+                    {renderRow("configuratie", "Număr camere", String(camere))}
+                    {renderRow("configuratie", "Număr băi", String(bai))}
+                    {renderRow("configuratie", "Balcon", String(balcoane))}
+                    {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
                   </div>
                 </div>
 
-                {/* -Subcategorie "Mobilare & Dotări" cu antet pe două coloane (Mobilare și Dotări) */}
-                <div className="border-t border-gray-100">
-                  <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-                    {/* Coloana 1: Mobilare (Header + Rânduri) */}
-                    <div className="flex flex-col">
-                      <SubCategoryHeader 
-                        title="Mobilare" 
-                        actions={
-                          <SectionEditButton
-                            isEditing={editingSection === "mobilare_dotari"}
-                            isDirty={isSectionDirty("mobilare_dotari")}
-                            onStartEdit={() => handleStartEditSection("mobilare_dotari")}
-                            onCancel={() => handleCancelEditSection("mobilare_dotari")}
-                            onSave={() => handleSaveSection("mobilare_dotari")}
-                            disabled={isPublicShared}
-                          />
-                        }
+                {/* -Subcategorie "Finisaje" */}
+                <div>
+                  <SubCategoryHeader 
+                    title="Finisaje" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "finisaje"}
+                        isDirty={isSectionDirty("finisaje")}
+                        onStartEdit={() => handleStartEditSection("finisaje")}
+                        onCancel={() => handleCancelEditSection("finisaje")}
+                        onSave={() => handleSaveSection("finisaje")}
+                        disabled={isPublicShared}
                       />
-                      <div className="divide-y divide-gray-100">
-                        {roomsList.map((room, idx) => (
-                          renderRow(
-                            "mobilare", 
-                            room, 
-                            room === "Living" ? "canapea, măsuță cafea, comodă" :
-                            room.startsWith("Camera") ? "pat, noptiere, dulap" :
-                            room === "Bucătărie" ? "mobilă de bucatarie premium" :
-                            room.startsWith("Baie") ? "obiecte sanitare premium" :
-                            room === "Hol" ? "cuier, pantofar" : "-",
-                            idx === roomsList.length - 1
-                          )
-                        ))}
-                      </div>
-                    </div>
+                    }
+                  />
+                  <div className="divide-y divide-gray-100">
+                    {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
+                    {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
+                    {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
+                    {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
+                    {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
+                    {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
+                    {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
+                    {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
+                  </div>
+                </div>
 
-                    {/* Coloana 2: Dotări (Header + Rânduri) */}
-                    <div className="flex flex-col">
-                      <SubCategoryHeader 
-                        title="Dotări" 
+                {/* -Subcategorie "Mobilare" */}
+                <div>
+                  <SubCategoryHeader 
+                    title="Mobilare" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "mobilare"}
+                        isDirty={isSectionDirty("mobilare")}
+                        onStartEdit={() => handleStartEditSection("mobilare")}
+                        onCancel={() => handleCancelEditSection("mobilare")}
+                        onSave={() => handleSaveSection("mobilare")}
+                        disabled={isPublicShared}
                       />
-                      <div className="divide-y divide-gray-100">
-                        {roomsList.map((room, idx) => (
-                          renderRow(
-                            "dotari", 
-                            room, 
-                            room === "Living" ? "aer condiționat, smart TV" :
-                            room.startsWith("Camera") ? "-" :
-                            room === "Bucătărie" ? "frigider, plită, cuptor, hotă" :
-                            room.startsWith("Baie") ? "-" :
-                            room === "Hol" ? "interfon" : "-",
-                            idx === roomsList.length - 1
-                          )
-                        ))}
-                      </div>
-                    </div>
+                    }
+                  />
+                  <div className="divide-y divide-gray-100">
+                    {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
+                    {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
+                    {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
+                    {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
+                    {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
+                    {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
+                    {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
+                    {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
+                    {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
+                    {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
+                    {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
+                  </div>
+                </div>
+
+                {/* -Subcategorie "Dotari" */}
+                <div>
+                  <SubCategoryHeader 
+                    title="Dotări" 
+                    actions={
+                      <SectionEditButton
+                        isEditing={editingSection === "dotari"}
+                        isDirty={isSectionDirty("dotari")}
+                        onStartEdit={() => handleStartEditSection("dotari")}
+                        onCancel={() => handleCancelEditSection("dotari")}
+                        onSave={() => handleSaveSection("dotari")}
+                        disabled={isPublicShared}
+                      />
+                    }
+                  />
+                  <div className="divide-y divide-gray-100">
+                    {renderRow("dotari", "Living", "aer condiționat, smart TV")}
+                    {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
+                    {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
+                    {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
+                    {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
+                    {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
+                    {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
+                    {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
+                    {renderRow("dotari", "Hol", "interfon")}
+                    {renderRow("dotari", "Altele", "-", true)}
                   </div>
                 </div>
               </div>
@@ -2382,17 +1768,55 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
+            {/* #CARD "CONDIȚII" */}
+            <div id="acte" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
+              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                    <ShieldCheck size={16} />
+                  </div>
+                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
+                    CONDIȚII
+                  </h2>
+                </div>
+
+                <SectionEditButton
+                  isEditing={editingSection === "acte"}
+                  isDirty={isSectionDirty("acte")}
+                  onStartEdit={() => handleStartEditSection("acte")}
+                  onCancel={() => handleCancelEditSection("acte")}
+                  onSave={() => handleSaveSection("acte")}
+                  disabled={isPublicShared}
+                />
+              </div>
+
+              <div className="font-sans divide-y divide-gray-100">
+                {isRent ? (
+                  <>
+                    {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
+                    {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
+                    {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
+                  </>
+                ) : (
+                  <>
+                    {renderRow("acte", "Situație juridică", "Fara probleme")}
+                    {renderRow("acte", "Disponibilitate", "Imediată")}
+                    {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
+                  </>
+                )}
+              </div>
+            </div>
 
             {/* Generous bottom spacing ensuring the last cards can scroll to the top under the jump links bar */}
             <div className="h-[60vh] min-h-[480px] pointer-events-none" aria-hidden="true" />
 
           </div>
 
-          {/* Right Column: Sticky Sidebar with Owner Card, Property Carousel & Public Share Link - STRICTLY HIDDEN on public shared page */}
-          {!isPublicShared && (
-            <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-6 lg:sticky lg:top-0">
-              
-              {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM */}
+          {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share */}
+          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-[20px] lg:sticky lg:top-0">
+            
+            {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
+            {!isPublicShared && (
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
                 <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                   <div className="flex items-center gap-2.5">
@@ -2415,42 +1839,40 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
 
                 <div className="p-5 space-y-3 text-xs font-sans">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
-                        Nume
-                      </span>
-                      <span className="font-bold text-gray-900 text-sm font-sans truncate block">
-                        {lead.ownerName || "Nespecificat"}
-                      </span>
-                    </div>
+                  <div>
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
+                      Nume Proprietar
+                    </span>
+                    <span className="font-bold text-gray-900 text-sm font-sans">
+                      {lead.ownerName || "Nespecificat"}
+                    </span>
+                  </div>
 
-                    <div>
-                      <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
-                        Telefon
-                      </span>
-                      {lead.ownerPhone ? (
-                        <div className="flex items-center gap-2">
-                          <a 
-                            href={`tel:${lead.ownerPhone}`}
-                            className="font-mono font-bold text-[#051D35] hover:underline flex items-center gap-1 font-sans"
-                          >
-                            <Phone size={13} className="text-[#BE9662]" />
-                            {lead.ownerPhone}
-                          </a>
-                          <button
-                            type="button"
-                            onClick={handleCopyOwnerPhone}
-                            className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors cursor-pointer"
-                            title="Copiază telefon"
-                          >
-                            {copiedOwnerPhone ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
-                          </button>
-                        </div>
-                      ) : (
-                        <span className="text-gray-400 italic font-sans">Nu este specificat</span>
-                      )}
-                    </div>
+                  <div>
+                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
+                      Telefon Direct
+                    </span>
+                    {lead.ownerPhone ? (
+                      <div className="flex items-center gap-2">
+                        <a 
+                          href={`tel:${lead.ownerPhone}`}
+                          className="font-mono font-bold text-[#051D35] hover:underline flex items-center gap-1 font-sans"
+                        >
+                          <Phone size={13} className="text-[#BE9662]" />
+                          {lead.ownerPhone}
+                        </a>
+                        <button
+                          type="button"
+                          onClick={handleCopyOwnerPhone}
+                          className="p-1 text-gray-400 hover:text-gray-700 rounded transition-colors cursor-pointer"
+                          title="Copiază telefon proprietar"
+                        >
+                          {copiedOwnerPhone ? <Check size={13} className="text-emerald-600" /> : <Copy size={13} />}
+                        </button>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 italic font-sans">Nu este specificat</span>
+                    )}
                   </div>
 
                   {lead.ownerPhone && (
@@ -2479,6 +1901,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   </p>
                 </div>
               </div>
+            )}
 
             {/* PROPERTY PHOTOS CARD: Standardized Card Header & Inline Drag-and-Drop / Browse */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
@@ -2561,33 +1984,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 <div className="relative aspect-[4/3] bg-gray-100 rounded-lg group select-none overflow-hidden border border-gray-200">
                   {imagesList.length > 0 ? (
                     <>
-                      <ProtectedImage 
+                      <img 
                         src={imagesList[carouselIndex] || imagesList[0]} 
                         alt={`${displayTitle} - foto ${carouselIndex + 1}`}
                         onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
-                        className="w-full h-full cursor-pointer"
-                        imageClassName="object-cover group-hover:scale-102"
+                        className="w-full h-full object-cover cursor-pointer group-hover:scale-102 transition-transform duration-300" 
+                        referrerPolicy="no-referrer"
                       />
-
-                      {/* Delete Current Photo Button in Edit Mode */}
-                      {isEditingPhotos && imagesList.length > 0 && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setImagesList(prev => prev.filter((_, i) => i !== carouselIndex));
-                            setIsPhotosDirty(true);
-                            if (carouselIndex >= imagesList.length - 1) {
-                              setCarouselIndex(Math.max(0, imagesList.length - 2));
-                            }
-                          }}
-                          className="absolute top-3 left-3 h-6 px-2.5 rounded-md bg-red-600 hover:bg-red-700 text-white text-[11px] font-medium flex items-center gap-1 shadow-md transition-colors cursor-pointer z-10"
-                          title="Șterge fotografia curentă din galerie"
-                        >
-                          <Trash2 size={11} />
-                          <span>Șterge foto</span>
-                        </button>
-                      )}
 
                       {/* Counter Badge */}
                       <div className="absolute top-3 right-3 flex items-center gap-1.5 z-10">
@@ -2743,10 +2146,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                                     setCarouselIndex(Math.max(0, imagesList.length - 2));
                                   }
                                 }}
-                                className="absolute top-1 right-1 w-5 h-5 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center opacity-90 hover:opacity-100 hover:scale-110 transition-all cursor-pointer shadow-md z-10"
-                                title="Elimină fotografia din galerie"
+                                className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xs"
+                                title="Șterge fotografia"
                               >
-                                <X size={12} />
+                                <X size={10} />
                               </button>
                             )}
                           </div>
@@ -2819,69 +2222,48 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
             </div>
+
           </div>
-        )}
 
         </div>
       </main>
 
       {/* Lightbox Photo Gallery Modal */}
-      {isGalleryOpen && imagesList.length > 0 && (
+      {isGalleryOpen && allImages.length > 0 && (
         <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col">
           <div className="h-14 px-6 flex items-center justify-between text-white border-b border-white/10 shrink-0">
             <div className="flex items-center gap-3">
               <span className="text-xs font-mono font-bold bg-white/10 px-2.5 py-1 rounded">
-                {selectedPhotoIndex + 1} / {imagesList.length}
+                {selectedPhotoIndex + 1} / {allImages.length}
               </span>
               <span className="text-xs text-gray-300 hidden sm:inline truncate max-w-md">
                 {displayTitle}
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
-              {!isPublicShared && imagesList.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => handleDeleteCurrentPhoto(selectedPhotoIndex)}
-                  className="px-2.5 py-1 text-xs text-red-400 hover:text-white bg-red-500/10 hover:bg-red-600 rounded flex items-center gap-1.5 transition-colors cursor-pointer"
-                  title="Șterge definitiv această fotografie din galerie"
-                >
-                  <Trash2 size={13} />
-                  <span>Șterge foto</span>
-                </button>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setIsGalleryOpen(false)}
-                className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
-                title="Închide galeria (Esc)"
-              >
-                <X size={22} />
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setIsGalleryOpen(false)}
+              className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+              title="Închide galeria (Esc)"
+            >
+              <X size={22} />
+            </button>
           </div>
 
-          <div 
-            className="flex-1 relative flex items-center justify-center p-4 select-none"
-            onContextMenu={(e) => e.preventDefault()}
-            onDragStart={(e) => e.preventDefault()}
-          >
-            <div className="relative w-[90vw] h-[82vh] overflow-hidden rounded shadow-2xl flex items-center justify-center">
-              <ProtectedImage 
-                src={imagesList[selectedPhotoIndex] || imagesList[0]} 
-                alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
-                className="w-full h-full"
-                fit="contain"
-                showAgencyShield={true}
-              />
-            </div>
+          <div className="flex-1 relative flex items-center justify-center p-4">
+            <img 
+              src={imagesList[selectedPhotoIndex] || imagesList[0]} 
+              alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
+              className="max-h-[82vh] max-w-[90vw] object-contain rounded shadow-2xl transition-all"
+              referrerPolicy="no-referrer"
+            />
 
             {imagesList.length > 1 && (
               <button
                 type="button"
                 onClick={() => setSelectedPhotoIndex(prev => (prev === 0 ? imagesList.length - 1 : prev - 1))}
-                className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm z-30"
+                className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
                 title="Fotografia anterioară"
               >
                 <ChevronLeft size={24} />
@@ -2892,7 +2274,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedPhotoIndex(prev => (prev === imagesList.length - 1 ? 0 : prev + 1))}
-                className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm z-30"
+                className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
                 title="Următoarea fotografie"
               >
                 <ChevronRight size={24} />
@@ -2900,7 +2282,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             )}
           </div>
 
-          <div className="h-20 bg-black/60 border-t border-white/10 px-4 flex items-center justify-center gap-2 overflow-x-auto no-scrollbar shrink-0 select-none">
+          <div className="h-20 bg-black/60 border-t border-white/10 px-4 flex items-center justify-center gap-2 overflow-x-auto no-scrollbar shrink-0">
             {imagesList.map((img, idx) => (
               <button
                 key={idx}
@@ -2912,7 +2294,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     : "border-transparent opacity-50 hover:opacity-100"
                 }`}
               >
-                <ProtectedImage src={img} alt={`thumb-${idx}`} className="w-full h-full" imageClassName="object-cover" />
+                <img src={img} alt={`thumb-${idx}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
               </button>
             ))}
           </div>

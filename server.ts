@@ -516,101 +516,189 @@ Returnează un JSON strict cu următoarele chei:
     }
   });
 
+  // Helper function to fetch property data from Firestore
+  async function fetchPropertyById(id: string): Promise<any> {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (!fs.existsSync(configPath)) {
+      return null;
+    }
+    const fbConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const dbId = fbConfig.firestoreDatabaseId || "(default)";
+    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads/${encodeURIComponent(id)}?key=${fbConfig.apiKey}`;
+    
+    let docData: any = null;
+    let docId = id;
+
+    try {
+      const response = await axios.get(firestoreUrl, { timeout: 8000 });
+      if (response.data) {
+        docData = response.data;
+      }
+    } catch (directErr: any) {
+      if (directErr.response && directErr.response.status === 404) {
+        try {
+          const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery?key=${fbConfig.apiKey}`;
+          const queryBody = {
+            structuredQuery: {
+              from: [{ collectionId: "leads" }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: "propertyId" },
+                  op: "EQUAL",
+                  value: { stringValue: id }
+                }
+              },
+              limit: 1
+            }
+          };
+          const queryRes = await axios.post(queryUrl, queryBody, { timeout: 8000 });
+          if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
+            docData = queryRes.data[0].document;
+            const nameParts = (docData.name || "").split("/");
+            docId = nameParts[nameParts.length - 1] || id;
+          }
+        } catch (queryErr: any) {
+          console.warn("[Server] propertyId fallback query failed:", queryErr.message);
+        }
+      } else {
+        throw directErr;
+      }
+    }
+
+    if (!docData) return null;
+
+    const parseValue = (fieldObj: any): any => {
+      if (!fieldObj || typeof fieldObj !== 'object') return fieldObj;
+      if ('stringValue' in fieldObj) return fieldObj.stringValue;
+      if ('integerValue' in fieldObj) return Number(fieldObj.integerValue);
+      if ('doubleValue' in fieldObj) return Number(fieldObj.doubleValue);
+      if ('booleanValue' in fieldObj) return fieldObj.booleanValue;
+      if ('timestampValue' in fieldObj) return fieldObj.timestampValue;
+      if ('nullValue' in fieldObj) return null;
+      if ('mapValue' in fieldObj) {
+        const resObj: any = {};
+        const fields = fieldObj.mapValue.fields || {};
+        for (const k of Object.keys(fields)) {
+          resObj[k] = parseValue(fields[k]);
+        }
+        return resObj;
+      }
+      if ('arrayValue' in fieldObj) {
+        const values = fieldObj.arrayValue.values || [];
+        return values.map((v: any) => parseValue(v));
+      }
+      return fieldObj;
+    };
+
+    const result: any = { id: docId };
+    const fields = docData.fields || {};
+    for (const k of Object.keys(fields)) {
+      result[k] = parseValue(fields[k]);
+    }
+    return result;
+  }
+
   // Public property endpoint for shared property links
   app.get("/api/public-property/:id", async (req, res) => {
     try {
       const { id } = req.params;
       if (!id) return res.status(400).json({ error: "Property ID required" });
 
-      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      if (!fs.existsSync(configPath)) {
-        return res.status(500).json({ error: "Firebase config not found" });
-      }
-      const fbConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      const dbId = fbConfig.firestoreDatabaseId || "(default)";
-      const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads/${encodeURIComponent(id)}?key=${fbConfig.apiKey}`;
-      
-      let docData: any = null;
-      let docId = id;
-
-      try {
-        const response = await axios.get(firestoreUrl, { timeout: 8000 });
-        if (response.data) {
-          docData = response.data;
-        }
-      } catch (directErr: any) {
-        if (directErr.response && directErr.response.status === 404) {
-          // If not found by document ID, try structuredQuery by propertyId field
-          try {
-            const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery?key=${fbConfig.apiKey}`;
-            const queryBody = {
-              structuredQuery: {
-                from: [{ collectionId: "leads" }],
-                where: {
-                  fieldFilter: {
-                    field: { fieldPath: "propertyId" },
-                    op: "EQUAL",
-                    value: { stringValue: id }
-                  }
-                },
-                limit: 1
-              }
-            };
-            const queryRes = await axios.post(queryUrl, queryBody, { timeout: 8000 });
-            if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
-              docData = queryRes.data[0].document;
-              const nameParts = (docData.name || "").split("/");
-              docId = nameParts[nameParts.length - 1] || id;
-            }
-          } catch (queryErr: any) {
-            console.warn("[Server] propertyId fallback query failed:", queryErr.message);
-          }
-        } else {
-          throw directErr;
-        }
-      }
-
-      if (!docData) {
+      const property = await fetchPropertyById(id);
+      if (!property) {
         return res.status(404).json({ error: "Property not found" });
       }
-
-      // Convert Firestore document fields to clean JS object
-      const parseValue = (fieldObj: any): any => {
-        if (!fieldObj || typeof fieldObj !== 'object') return fieldObj;
-        if ('stringValue' in fieldObj) return fieldObj.stringValue;
-        if ('integerValue' in fieldObj) return Number(fieldObj.integerValue);
-        if ('doubleValue' in fieldObj) return Number(fieldObj.doubleValue);
-        if ('booleanValue' in fieldObj) return fieldObj.booleanValue;
-        if ('timestampValue' in fieldObj) return fieldObj.timestampValue;
-        if ('nullValue' in fieldObj) return null;
-        if ('mapValue' in fieldObj) {
-          const resObj: any = {};
-          const fields = fieldObj.mapValue.fields || {};
-          for (const k of Object.keys(fields)) {
-            resObj[k] = parseValue(fields[k]);
-          }
-          return resObj;
-        }
-        if ('arrayValue' in fieldObj) {
-          const values = fieldObj.arrayValue.values || [];
-          return values.map((v: any) => parseValue(v));
-        }
-        return fieldObj;
-      };
-
-      const result: any = { id: docId };
-      const fields = docData.fields || {};
-      for (const k of Object.keys(fields)) {
-        result[k] = parseValue(fields[k]);
-      }
-
-      res.json(result);
+      res.json(property);
     } catch (e: any) {
       if (e.response && e.response.status === 404) {
         return res.status(404).json({ error: "Property not found" });
       }
       console.error("[Server] /api/public-property/:id error:", e.message || e);
       res.status(500).json({ error: "Failed to fetch public property" });
+    }
+  });
+
+  // OpenGraph SSR route for rich link previews on WhatsApp and social media
+  app.get("/share/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return res.sendFile(path.join(process.cwd(), 'index.html'));
+      }
+
+      const property = await fetchPropertyById(id);
+
+      const title = property?.extractedData?.crmData?.descriere?.titlu || property?.title || "Proprietate Imobiliară • brokr.";
+      let description = property?.extractedData?.crmData?.descriere?.continut || property?.description || "Proprietate imobiliară prezentată de brokr.";
+      description = description.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+      if (description.length > 200) {
+        description = description.substring(0, 197) + "...";
+      }
+
+      let imageUrl = property?.coverImage || "";
+      if (!imageUrl && property?.extractedData?.crmData?.imagini) {
+        const crmImagini = property.extractedData.crmData.imagini;
+        const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
+        for (const cat of categories) {
+          const list = crmImagini[cat];
+          if (Array.isArray(list) && list.length > 0) {
+            const first = list[0];
+            imageUrl = typeof first === "string" ? first : (first?.original || "");
+            if (imageUrl) break;
+          }
+        }
+      }
+      if (!imageUrl) {
+        imageUrl = `${req.protocol}://${req.get('host')}/public/og-default.jpg`;
+      }
+
+      const shareUrl = `${req.protocol}://${req.get('host')}/share/${id}`;
+
+      const indexPath = path.join(process.cwd(), 'index.html');
+      if (!fs.existsSync(indexPath)) {
+        return res.status(404).send("Not found");
+      }
+
+      let html = fs.readFileSync(indexPath, 'utf8');
+
+      const esc = (s: string) => String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+      const ogTags = `
+    <title>${esc(title)}</title>
+    <meta name="description" content="${esc(description)}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${esc(shareUrl)}" />
+    <meta property="og:title" content="${esc(title)}" />
+    <meta property="og:description" content="${esc(description)}" />
+    <meta property="og:image" content="${esc(imageUrl)}" />
+    <meta property="og:image:secure_url" content="${esc(imageUrl)}" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="brokr." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${esc(title)}" />
+    <meta name="twitter:description" content="${esc(description)}" />
+    <meta name="twitter:image" content="${esc(imageUrl)}" />
+      `.trim();
+
+      html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${esc(title)}</title>`);
+      html = html.replace(/<meta\s+name=["']description["'][^>]*>/gi, `<meta name="description" content="${esc(description)}" />`);
+      html = html.replace(/<meta\s+property=["']og:title["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+property=["']og:description["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+property=["']og:image["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+property=["']og:url["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:card["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:title["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:description["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:image["'][^>]*>/gi, '');
+
+      html = html.replace('</head>', `\n${ogTags}\n</head>`);
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch (err: any) {
+      console.warn("[Server] /share/:id OpenGraph error:", err.message);
+      res.sendFile(path.join(process.cwd(), 'index.html'));
     }
   });
 
