@@ -403,10 +403,73 @@ async function startServer() {
 
   // API endpoint for optional on-demand AI generation of title and description
   app.post("/api/generate-ai-text", async (req, res) => {
+    const generateLocalTemplateText = (body: any) => {
+      const { category, transactionType, zone, price, specs, propertyId } = body;
+      const cat = category || "Apartament";
+      const z = zone || "București";
+      const p = price || "N/A";
+      const idStr = propertyId ? propertyId.trim() : "";
+      const camere = specs?.detalii?.camere || "2";
+
+      const title = `${cat} ${camere} camere | ${z} | Mutare imediată`;
+      const transLabel = transactionType === "Închiriere" ? "ÎNCHIRIERE" : "VÂNZARE";
+
+      const description = `📌 ID ${idStr}
+🏡 ${title}
+
+Proprietate spațioasă și luminoasă, situată în zona ${z}, oferind acces facil către toate punctele de interes din oraș.
+Spațiul este ideal atât pentru locuință, cât și pentru investiție.
+
+━━━━━━━━━━━━━━━━━━
+
+⭐ AVANTAJE PRINCIPALE
+
+-${specs?.detalii?.compartimentare || "decomandat"}
+-amplasare excelentă în zonă liniștită
+-lumină naturală generoasă pe parcursul întregii zile
+-acces rapid la mijloacele de transport în comun
+
+━━━━━━━━━━━━━━━━━━
+
+🛋️ DOTĂRI
+
+-centrală proprie
+-finisaje moderne și calitate superioară
+-spații bine organizate pentru depozitare
+
+━━━━━━━━━━━━━━━━━━
+
+📍 LOCAȚIE
+
+Acces rapid către:
+-mijloace de transport în comun
+-magazine, supermarketuri și centre comerciale
+-zone verzi și parcuri în apropiere
+
+━━━━━━━━━━━━━━━━━━
+
+💰 ${transLabel}
+
+${p}${transactionType === "Închiriere" ? " / lună\n1 lună garanție\nComision 50% + TVA" : ""}
+Disponibil imediat
+
+━━━━━━━━━━━━━━━━━━
+
+🤝 SUPORT ${transLabel}
+
+-consultanță dedicată din partea agenției brokr
+-asistență completă în întocmirea contractului și înregistrarea ANAF
+-posibilitate de vizionare rapidă și flexibilă
+
+📞 Pentru vizionare sau detalii suplimentare, contactează-ne telefonic.`;
+
+      return { title, description };
+    };
+
     try {
       const { category, transactionType, zone, price, specs, originalTitle, originalDescription, propertyId } = req.body;
       if (!process.env.GEMINI_API_KEY) {
-        return res.status(400).json({ error: "Cheia GEMINI_API_KEY nu este configurată pe server." });
+        return res.json(generateLocalTemplateText(req.body));
       }
 
       const prompt = `
@@ -508,11 +571,9 @@ Returnează un JSON strict cu următoarele chei:
       const parsed = JSON.parse(text);
       res.json(parsed);
     } catch (e: any) {
-      console.error("[Server] /api/generate-ai-text error:", e);
-      const isCredits = e?.message?.includes("402") || e?.message?.includes("RESOURCE_EXHAUSTED") || e?.message?.includes("prepayment credits");
-      res.status(isCredits ? 402 : 500).json({ 
-        error: isCredits ? "Creditele preplătite Gemini sunt epuizate. Poți genera titlul și descrierea folosind butoanele Template clasice fără AI." : (e.message || "Eroare la generarea textului cu AI")
-      });
+      console.warn("[Server] /api/generate-ai-text failed (using local template fallback):", e?.message || e);
+      const fallback = generateLocalTemplateText(req.body);
+      res.json(fallback);
     }
   });
 
@@ -699,6 +760,114 @@ Returnează un JSON strict cu următoarele chei:
     } catch (err: any) {
       console.warn("[Server] /share/:id OpenGraph error:", err.message);
       res.sendFile(path.join(process.cwd(), 'index.html'));
+    }
+  });
+
+  // Helper to extract price, phone number, and owner name from storia.ro or olx.ro HTML snippets
+  function extractListingDetails(html: string, url: string = "") {
+    const $ = cheerio.load(html || "");
+    
+    let source: "storia" | "olx" | null = null;
+    if (url.includes("storia.ro") || $('[data-cy*="storia"]').length > 0 || $('[data-sentry-component]').length > 0) {
+      source = "storia";
+    } else if (url.includes("olx.ro") || $('[data-testid*="ad"]').length > 0 || $('[data-nx-name]').length > 0) {
+      source = "olx";
+    }
+
+    if (!source) {
+      if ($('strong[data-cy="adPageHeaderPrice"], [data-sentry-element="Price"], div[data-sentry-component="MainPriceWrapper"]').length > 0) {
+        source = "storia";
+      } else if ($('div[data-testid="ad-price-container"], h3[data-nx-name="H3"]').length > 0) {
+        source = "olx";
+      }
+    }
+
+    let rawPrice: string | null = null;
+    let rawPhone: string | null = null;
+    let rawOwner: string | null = null;
+
+    const normalizeText = (text: string | null | undefined): string | null => {
+      if (!text) return null;
+      let cleaned = text.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      return cleaned || null;
+    };
+
+    const cleanPrice = (text: string | null | undefined): string | null => {
+      if (!text) return null;
+      let cleaned = text.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      cleaned = cleaned.replace(/\s*\/\s*(?:lun[aă]|luni|month)\b/gi, "").trim();
+      return cleaned || null;
+    };
+
+    if (source === "storia") {
+      const priceEl = $('strong[data-cy="adPageHeaderPrice"]').first()
+        .add('[data-sentry-element="Price"]').first()
+        .add('div[data-sentry-component="MainPriceWrapper"] strong').first();
+      if (priceEl.length) rawPrice = priceEl.text();
+
+      const phoneEl = $('a[data-cy="phone-number.number-button"]').first()
+        .add('div[data-sentry-component="PhoneNumber"] a[href^="tel:"]').first();
+      if (phoneEl.length) {
+        rawPhone = phoneEl.attr("href")?.replace("tel:", "") || phoneEl.text();
+      } else {
+        const telHref = $('a[href^="tel:"]').first().attr("href");
+        if (telHref) rawPhone = telHref.replace("tel:", "");
+      }
+
+      const ownerEl = $('p.truncate.font-bold').first()
+        .add('p[class*="truncate"][class*="font-bold"]').first();
+      if (ownerEl.length) rawOwner = ownerEl.text();
+    } else if (source === "olx") {
+      const priceEl = $('div[data-testid="ad-price-container"] h3').first()
+        .add('[data-testid="ad-price-container"]').first()
+        .add('h3[data-nx-name="H3"]').first();
+      if (priceEl.length) rawPrice = priceEl.text();
+
+      const phoneEl = $('a[data-testid="contact-phone"]').first()
+        .add('button[data-testid="ad-contact-phone"] a[href^="tel:"]').first()
+        .add('button[data-cy="ad-contact-phone"] a').first();
+      if (phoneEl.length) {
+        rawPhone = phoneEl.attr("href")?.replace("tel:", "") || phoneEl.text();
+      } else {
+        const telHref = $('a[href^="tel:"]').first().attr("href");
+        if (telHref) rawPhone = telHref.replace("tel:", "");
+      }
+
+      const ownerEl = $('h4[data-testid="user-profile-user-name"]').first()
+        .add('h4[data-nx-name="H4"]').first();
+      if (ownerEl.length) rawOwner = ownerEl.text();
+    }
+
+    if (!rawPrice) {
+      const fallbackPrice = $('strong[data-cy="adPageHeaderPrice"], div[data-testid="ad-price-container"] h3, [data-sentry-element="Price"]').first();
+      if (fallbackPrice.length) rawPrice = fallbackPrice.text();
+    }
+    if (!rawPhone) {
+      const fallbackPhone = $('a[data-cy="phone-number.number-button"], a[data-testid="contact-phone"], a[href^="tel:"]').first();
+      if (fallbackPhone.length) {
+        rawPhone = fallbackPhone.attr("href")?.replace("tel:", "") || fallbackPhone.text();
+      }
+    }
+    if (!rawOwner) {
+      const fallbackOwner = $('p.truncate.font-bold, h4[data-testid="user-profile-user-name"]').first();
+      if (fallbackOwner.length) rawOwner = fallbackOwner.text();
+    }
+
+    return {
+      source: source || null,
+      price: cleanPrice(rawPrice),
+      phone_number: normalizeText(rawPhone),
+      owner_name: normalizeText(rawOwner)
+    };
+  }
+
+  app.post("/api/parse-listing-html", (req, res) => {
+    try {
+      const { html, url } = req.body;
+      const result = extractListingDetails(html || "", url || "");
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ source: null, price: null, phone_number: null, owner_name: null });
     }
   });
 
@@ -1723,13 +1892,18 @@ Returnează un JSON strict cu următoarele chei:
         }
       };
 
+      const listingDetails = extractListingDetails(html, url);
+      const finalPrice = (formattedPrice && formattedPrice !== "N/A") ? formattedPrice : (listingDetails.price || "N/A");
+      const finalPhone = (sellerPhone && sellerPhone !== "Nespecificat") ? sellerPhone : (listingDetails.phone_number || "Nespecificat");
+      const finalOwner = (sellerName && sellerName !== "Nespecificat") ? sellerName : (listingDetails.owner_name || "Nespecificat");
+
       res.json({
         title: cleanTitle,
-        price: formattedPrice,
+        price: finalPrice,
         zone: zona,
         oras: oras,
-        ownerName: sellerName,
-        ownerPhone: sellerPhone,
+        ownerName: finalOwner,
+        ownerPhone: finalPhone,
         transactionType: transactionType,
         categoria: categoria,
         description: rawDescription,
