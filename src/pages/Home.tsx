@@ -822,8 +822,8 @@ export const Home: React.FC = () => {
               
               img.onload = () => {
                 clearTimeout(timeout);
-                // Minimum size threshold 350px to filter out thumbnails and ads
-                if (img.width >= 350 || img.height >= 350) {
+                // Accept if dimensions are unknown (0) or >= 150px to ensure all gallery photos are imported
+                if (img.width === 0 || img.height === 0 || img.width >= 150 || img.height >= 150) {
                   filteredUrls.push(url);
                 }
                 resolve();
@@ -845,10 +845,7 @@ export const Home: React.FC = () => {
         return filteredUrls;
       };
 
-      let images = await filterImagesBySize(rawImages || []);
-      if (!images || images.length === 0) {
-        images = rawImages || [];
-      }
+      const images = await filterImagesBySize(rawImages || []);
 
       setExtractionStatus("Salvare date...");
       // All crawler images are put in crmData.imagini.alteSpatii so user can categorize them
@@ -883,10 +880,7 @@ export const Home: React.FC = () => {
         if (!finalCrmData.imagini) {
           finalCrmData.imagini = { living: [], bucatarie: [], camera: [], baie: [], alteSpatii: [] };
         }
-        const hasExistingCategorized = Object.values(finalCrmData.imagini).some((arr: any) => Array.isArray(arr) && arr.length > 0);
-        if (!hasExistingCategorized) {
-          finalCrmData.imagini.alteSpatii = images.map((img: string) => ({ original: img }));
-        }
+        finalCrmData.imagini.alteSpatii = images.map((img: string) => ({ original: img }));
       }
 
       const extraction = {
@@ -910,8 +904,7 @@ export const Home: React.FC = () => {
         ownerPhone: ownerPhone || finalCrmData.detaliiGenerale?.contacteAditionale || lead.ownerPhone || "Nespecificat",
         transactionType: transType as "Închiriere" | "Vânzare",
         zone: zone || (finalCrmData.detaliiGenerale?.localizare?.zona?.[0] || lead.zone || "București"),
-        coverImage: deepCoverImage,
-        images: images && images.length > 0 ? images : (rawImages || lead.images || [])
+        coverImage: deepCoverImage
       };
 
       await leadsService.updateLeadData(lead.id!, updatedFields);

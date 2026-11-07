@@ -11,8 +11,37 @@ import { aiCallRouter, setupWebSocket } from "./server/ai-call/router";
 import { setupBackgroundNotifications, registerNotificationRoutes } from "./server/background-notifications";
 import { serverExtractBasicData, serverExtractData } from "./server/geminiService";
 import { GoogleGenAI, Type } from "@google/genai";
-import { Jimp } from "jimp";
-import { inpaintTelea } from "./src/utils/teleaInpainting";
+import { defaultFormats, defaultPlugins } from "jimp";
+import { createJimp } from "@jimp/core";
+import webp from "@jimp/wasm-webp";
+
+// Intercept global fetch so we can load @jsquash/webp WASM files locally instead of triggering sandbox fetch errors
+const originalFetch = global.fetch;
+global.fetch = async function(input: any, init: any) {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input && input.url ? input.url : "");
+  if (url && (url.endsWith(".wasm") || url.includes(".wasm"))) {
+    const fileName = path.basename(url.split("?")[0]);
+    let wasmPath = "";
+    if (fileName.includes("dec")) {
+      wasmPath = path.resolve("./node_modules/@jsquash/webp/codec/dec", fileName);
+    } else if (fileName.includes("enc")) {
+      wasmPath = path.resolve("./node_modules/@jsquash/webp/codec/enc", fileName);
+    }
+    
+    if (wasmPath && fs.existsSync(wasmPath)) {
+      const buffer = fs.readFileSync(wasmPath);
+      return new Response(buffer, {
+        headers: { "Content-Type": "application/wasm" }
+      });
+    }
+  }
+  return originalFetch(input, init);
+} as any;
+
+const Jimp = createJimp({
+  formats: [...defaultFormats, webp],
+  plugins: defaultPlugins
+});
 
 const ai = new GoogleGenAI({ 
   apiKey: process.env.GEMINI_API_KEY || "",
@@ -44,106 +73,207 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
   if (!mimeType.startsWith("image/") || mimeType.includes("svg")) {
     return buffer;
   }
+  
+  // Circuit breaker: if quota/credits exhausted recently, serve original image directly
+  if (Date.now() < watermarkDisabledUntil) {
+    return buffer;
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    return buffer;
+  }
 
   try {
+    console.log(`[Watermark Remover] Reading image: ${imageUrl.substring(0, 100)}...`);
     const image = await Jimp.read(buffer);
     const { width, height } = image;
     
-    // Skip tiny images/icons
-    if (width < 250 || height < 200) {
+    // Skip tiny images
+    if (width < 300 || height < 300) {
       return buffer;
     }
-
-    const lowerUrl = imageUrl.toLowerCase();
-    const isStoriaOlx = lowerUrl.includes("apollo.olxcdn.com") || lowerUrl.includes("storia.ro") || lowerUrl.includes("olx.ro");
-    const isImobiliare = lowerUrl.includes("imobiliare.ro");
-
-    // Detect watermark footprint mathematically without any AI API calls
-    const targetBoxes: { xmin: number; xmax: number; ymin: number; ymax: number; label: string }[] = [];
-
-    if (isStoriaOlx) {
-      // 1. Storia/OLX watermark is standard in the BOTTOM-LEFT corner (Apollo p: "10,-10")
-      targetBoxes.push({
-        xmin: 0,
-        xmax: Math.floor(width * 0.22),
-        ymin: Math.floor(height * 0.88),
-        ymax: height - 1,
-        label: "Storia/OLX bottom-left logo"
-      });
-      // 2. Also cover bottom-right in case of agency stamp overlay
-      targetBoxes.push({
-        xmin: Math.floor(width * 0.74),
-        xmax: width - 1,
-        ymin: Math.floor(height * 0.88),
-        ymax: height - 1,
-        label: "Storia/OLX bottom-right stamp"
-      });
-    } else if (isImobiliare) {
-      // Imobiliare.ro watermark: bottom-right and bottom-left
-      targetBoxes.push({
-        xmin: Math.floor(width * 0.74),
-        xmax: width - 1,
-        ymin: Math.floor(height * 0.88),
-        ymax: height - 1,
-        label: "Imobiliare.ro watermark bottom-right"
-      });
-      targetBoxes.push({
-        xmin: 0,
-        xmax: Math.floor(width * 0.20),
-        ymin: Math.floor(height * 0.88),
-        ymax: height - 1,
-        label: "Imobiliare.ro watermark bottom-left"
-      });
-    } else {
-      // General real estate platforms: cover both bottom corners
-      targetBoxes.push({
-        xmin: 0,
-        xmax: Math.floor(width * 0.20),
-        ymin: Math.floor(height * 0.88),
-        ymax: height - 1,
-        label: "Portal bottom-left watermark"
-      });
-      targetBoxes.push({
-        xmin: Math.floor(width * 0.74),
-        xmax: width - 1,
-        ymin: Math.floor(height * 0.88),
-        ymax: height - 1,
-        label: "Portal bottom-right watermark"
-      });
+    
+    console.log(`[Watermark Remover] Image dimensions: ${width}x${height}. Detecting watermarks with Gemini...`);
+    
+    const base64 = buffer.toString("base64");
+    const prompt = "Detect all prominent watermarks, text overlays (like owner or agent phone/email/names, e.g. 'George Leotescu', 'Storia', agency logos), stamp overlays, banner labels, or company logos overlayed on this photo. For each item found, provide its exact ymin, xmin, ymax, xmax coordinates normalized from 0 to 1000.";
+    
+    const genResponse = await ai.models.generateContent({
+      model: "gemini-3.1-flash-lite",
+      contents: [
+        {
+          inlineData: {
+            data: base64,
+            mimeType: mimeType
+          }
+        },
+        prompt
+      ],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            watermarks: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  ymin: { type: Type.INTEGER, description: "Normalized ymin from 0 to 1000" },
+                  xmin: { type: Type.INTEGER, description: "Normalized xmin from 0 to 1000" },
+                  ymax: { type: Type.INTEGER, description: "Normalized ymax from 0 to 1000" },
+                  xmax: { type: Type.INTEGER, description: "Normalized xmax from 0 to 1000" },
+                  label: { type: Type.STRING, description: "Text or type of overlay found" }
+                },
+                required: ["ymin", "xmin", "ymax", "xmax"]
+              }
+            }
+          },
+          required: ["watermarks"]
+        }
+      }
+    });
+    
+    const resText = genResponse.text;
+    if (!resText) {
+      console.log(`[Watermark Remover] No response from Gemini watermark detector`);
+      return buffer;
     }
+    
+    const parsed = JSON.parse(resText);
+    const watermarks = parsed?.watermarks || [];
+    console.log(`[Watermark Remover] Gemini detected ${watermarks.length} watermarks:`, JSON.stringify(watermarks));
+    
+    if (watermarks.length === 0) {
+      console.log(`[Watermark Remover] Image is already clean.`);
+      return buffer;
+    }
+    
+    for (const box of watermarks) {
+      let { ymin, xmin, ymax, xmax } = box;
+      if (ymin > ymax) [ymin, ymax] = [ymax, ymin];
+      if (xmin > xmax) [xmin, xmax] = [xmax, xmin];
+      
+      ymin = Math.max(0, Math.min(1000, ymin));
+      xmin = Math.max(0, Math.min(1000, xmin));
+      ymax = Math.max(0, Math.min(1000, ymax));
+      xmax = Math.max(0, Math.min(1000, xmax));
+      
+      const startY = Math.floor((ymin / 1000) * height);
+      const startX = Math.floor((xmin / 1000) * width);
+      const boxHeight = Math.ceil(((ymax - ymin) / 1000) * height);
+      const boxWidth = Math.ceil(((xmax - xmin) / 1000) * width);
+      
+      if (boxWidth > 5 && boxHeight > 5 && startX + boxWidth <= width && startY + boxHeight <= height) {
+        console.log(`[Watermark Remover] Reconstructing region using inpainting: x=${startX}, y=${startY}, w=${boxWidth}, h=${boxHeight}`);
+        
+        // Setup border pixel cache for extremely fast lookups
+        const borderLeft: number[] = [];
+        const borderRight: number[] = [];
+        const borderTop: number[] = [];
+        const borderBottom: number[] = [];
 
-    // Build mask for Telea inpainting
-    const mask = new Uint8Array(width * height);
-    let hasMaskPixels = false;
+        // Pre-fetch left border safely (at startX - 2 or clamped)
+        const leftX = Math.max(0, startX - 2);
+        for (let y = 0; y < boxHeight; y++) {
+          borderLeft.push(image.getPixelColor(leftX, startY + y));
+        }
 
-    for (const box of targetBoxes) {
-      const bXmin = Math.max(0, Math.min(width - 1, box.xmin));
-      const bXmax = Math.max(0, Math.min(width - 1, box.xmax));
-      const bYmin = Math.max(0, Math.min(height - 1, box.ymin));
-      const bYmax = Math.max(0, Math.min(height - 1, box.ymax));
+        // Pre-fetch right border safely (at startX + boxWidth + 1 or clamped)
+        const rightX = Math.min(width - 1, startX + boxWidth + 1);
+        for (let y = 0; y < boxHeight; y++) {
+          borderRight.push(image.getPixelColor(rightX, startY + y));
+        }
 
-      for (let y = bYmin; y <= bYmax; y++) {
-        const row = y * width;
-        for (let x = bXmin; x <= bXmax; x++) {
-          mask[row + x] = 1;
-          hasMaskPixels = true;
+        // Pre-fetch top border safely (at startY - 2 or clamped)
+        const topY = Math.max(0, startY - 2);
+        for (let x = 0; x < boxWidth; x++) {
+          borderTop.push(image.getPixelColor(startX + x, topY));
+        }
+
+        // Pre-fetch bottom border safely (at startY + boxHeight + 1 or clamped)
+        const bottomY = Math.min(height - 1, startY + boxHeight + 1);
+        for (let x = 0; x < boxWidth; x++) {
+          borderBottom.push(image.getPixelColor(startX + x, bottomY));
+        }
+
+        const getRGBA = (color: number) => {
+          return {
+            r: (color >> 24) & 0xFF,
+            g: (color >> 16) & 0xFF,
+            b: (color >> 8) & 0xFF,
+            a: color & 0xFF
+          };
+        };
+
+        // Fill the region using Inverse Distance Weighting (IDW)
+        for (let y = 0; y < boxHeight; y++) {
+          const globalY = startY + y;
+          for (let x = 0; x < boxWidth; x++) {
+            const globalX = startX + x;
+
+            const dxLeft = x + 1;
+            const dxRight = boxWidth - x;
+            const dyTop = y + 1;
+            const dyBottom = boxHeight - y;
+
+            const wLeft = 1 / (dxLeft * dxLeft);
+            const wRight = 1 / (dxRight * dxRight);
+            const wTop = 1 / (dyTop * dyTop);
+            const wBottom = 1 / (dyBottom * dyBottom);
+
+            const sumW = wLeft + wRight + wTop + wBottom;
+
+            if (sumW > 0) {
+              const cLeft = getRGBA(borderLeft[y]);
+              const cRight = getRGBA(borderRight[y]);
+              const cTop = getRGBA(borderTop[x]);
+              const cBottom = getRGBA(borderBottom[x]);
+
+              let r = (cLeft.r * wLeft + cRight.r * wRight + cTop.r * wTop + cBottom.r * wBottom) / sumW;
+              let g = (cLeft.g * wLeft + cRight.g * wRight + cTop.g * wTop + cBottom.g * wBottom) / sumW;
+              let b = (cLeft.b * wLeft + cRight.b * wRight + cTop.b * wTop + cBottom.b * wBottom) / sumW;
+              let a = (cLeft.a * wLeft + cRight.a * wRight + cTop.a * wTop + cBottom.a * wBottom) / sumW;
+
+              // Add a very subtle amount of camera sensor noise (±1.5 range) to preserve image texture naturally
+              const noiseRange = 1.5;
+              const noise = (Math.random() - 0.5) * noiseRange;
+              r = Math.max(0, Math.min(255, r + noise));
+              g = Math.max(0, Math.min(255, g + noise));
+              b = Math.max(0, Math.min(255, b + noise));
+
+              // Convert back to 32-bit unsigned RGBA color integer
+              const newColor = (((Math.round(r) & 0xFF) << 24) |
+                                ((Math.round(g) & 0xFF) << 16) |
+                                ((Math.round(b) & 0xFF) << 8) |
+                                (Math.round(a) & 0xFF)) >>> 0;
+
+              image.setPixelColor(newColor, globalX, globalY);
+            }
+          }
         }
       }
     }
-
-    if (hasMaskPixels) {
-      console.log(`[Telea Inpainter] Running classical inpainting on ${imageUrl.substring(0, 80)}...`);
-      // Run Alexandru Telea Fast Marching inpainting algorithm directly on image bitmap buffer
-      inpaintTelea(image.bitmap.data, mask, width, height, { radius: 8 });
-      const outMime = mimeType === "image/png" ? "image/png" : "image/jpeg";
-      const cleanedBuffer = await image.getBuffer(outMime as any);
-      console.log(`[Telea Inpainter] Inpainted successfully! Dimensions: ${width}x${height}`);
-      return cleanedBuffer;
-    }
-
-    return buffer;
+    
+    const cleanedBuffer = await image.getBuffer(mimeType as any);
+    console.log(`[Watermark Remover] Cleaned! Original size: ${buffer.length}, Cleaned size: ${cleanedBuffer.length}`);
+    return cleanedBuffer;
   } catch (err: any) {
-    console.warn(`[Telea Inpainter] Non-fatal inpainting error (serving original):`, err?.message || err);
+    const rawError = typeof err?.message === "string" ? err.message : JSON.stringify(err || "");
+    const isQuotaOrCredit = 
+      rawError.includes("402") || 
+      rawError.includes("RESOURCE_EXHAUSTED") || 
+      rawError.includes("prepayment credits") || 
+      rawError.includes("429") || 
+      rawError.includes("Quota exceeded");
+
+    if (isQuotaOrCredit) {
+      // Pause watermark detection calls for 20 minutes to avoid repeated failed requests
+      watermarkDisabledUntil = Date.now() + 20 * 60 * 1000;
+      console.warn(`[Watermark Remover] Prepayment/quota limit reached. Temporarily serving original images directly.`);
+    } else {
+      console.warn(`[Watermark Remover] Could not clean watermark for image (serving original): ${rawError.substring(0, 120)}`);
+    }
     return buffer;
   }
 }
@@ -504,55 +634,43 @@ Returnează un JSON strict cu următoarele chei:
     for (let i = 0; i < 4; i++) {
       try {
         console.log(`Fetching URL (attempt ${i+1}): ${url}`);
-        let response: any = null;
-        try {
-          response = await axios.get(url, {
-            headers: {
-              "User-Agent": userAgents[i % userAgents.length],
-              "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-              "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
-              "Accept-Encoding": "gzip, deflate, br",
-              "Cache-Control": "max-age=0",
-              "Connection": "keep-alive",
-              "Upgrade-Insecure-Requests": "1",
-              "Sec-Ch-Ua": '"Chromium";v="110", "Not A(Brand";v="24", "Google Chrome";v="110"',
-              "Sec-Ch-Ua-Mobile": "?0",
-              "Sec-Ch-Ua-Platform": '"Windows"',
-              "Sec-Fetch-Dest": "document",
-              "Sec-Fetch-Mode": "navigate",
-              "Sec-Fetch-Site": "none",
-              "Sec-Fetch-User": "?1"
-            },
-            timeout: 20000,
-            validateStatus: (status) => status < 600
-          });
-        } catch (dirErr: any) {
-          console.warn(`Direct fetch failed for ${url}:`, dirErr.message);
+        const response = await axios.get(url, {
+          headers: {
+            "User-Agent": userAgents[i % userAgents.length],
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control": "max-age=0",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Ch-Ua": '"Chromium";v="110", "Not A(Brand";v="24", "Google Chrome";v="110"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1"
+          },
+          timeout: 20000,
+          validateStatus: (status) => status < 600 // Allow 5xx so we can handle them manually
+        });
+
+        if (response.status === 403 || response.status === 429 || response.status === 503) {
+           console.log(`Target site returned ${response.status} on attempt ${i+1}, retrying...`);
+           lastError = new Error(`Site returned ${response.status}`);
+           await new Promise(r => setTimeout(r, 2000 * (i + 1))); // Exponential backoff
+           continue; 
         }
 
-        let html = "";
-        if (!response || response.status >= 400 || (typeof response.data === "string" && response.data.includes("Access Denied"))) {
-          console.warn(`[Crawl Fallback] Target site blocked access (Status: ${response?.status || "Error"}). Generating robust structured property data from URL slug.`);
-          const targetUrlLower = url.toLowerCase();
-          let cat = "Apartament";
-          if (targetUrlLower.includes("casa") || targetUrlLower.includes("vila")) cat = "Casa/Vila";
-          else if (targetUrlLower.includes("teren")) cat = "Teren";
-          else if (targetUrlLower.includes("birou")) cat = "Spatiu Birou";
-          else if (targetUrlLower.includes("comercial")) cat = "Spatiu Comercial";
-
-          let trans = "Vânzare";
-          if (targetUrlLower.includes("inchiriere") || targetUrlLower.includes("chirie") || targetUrlLower.includes("rent")) trans = "Închiriere";
-
-          html = `<html><head><title>${cat} 2 camere ${trans} - Imobil selectat</title></head><body>
-            <h1>Proprietate Imobiliară ${cat}</h1>
-            <p>Locuință spațioasă, compartimentată decomandat, situată într-o zonă accesibilă.</p>
-          </body></html>`;
-        } else {
-          html = response.data;
+        if (response.status >= 400) {
+           throw new Error(`HTTP Error ${response.status}`);
         }
 
-        const $ = cheerio.load(html);
-        const title = $("title").text() || "Proprietate imobiliară";
+        const html = response.data;
+      const $ = cheerio.load(html);
+
+      // Extract some basic metadata
+      const title = $("title").text() || "No title found";
       
       // Extract image URLs strictly for the target property (filtering out logos, layouts, and recommendations)
       const imageExtensions = /\.(jpeg|jpg|gif|png|webp|avif)/i;
@@ -576,26 +694,43 @@ Returnează un JSON strict cu următoarele chei:
         return badPatterns.some(p => lower.includes(p));
       };
 
-      // Helper to promote known thumbnail image URLs to full/maximum resolution safely
+      // Helper to promote known thumbnail image URLs to full/maximum resolution
       const promoteToHighRes = (rawUrl: string): string => {
-        if (!rawUrl || typeof rawUrl !== "string") return "";
         let cleaned = rawUrl.trim().replace(/\\/g, "");
         if (cleaned.startsWith("//")) cleaned = "https:" + cleaned;
 
-        // Clean redundant port :443/
-        if (cleaned.includes(":443/")) {
-          cleaned = cleaned.replace(":443/", "/");
-        }
-
-        // Safe Imobiliare.ro & Roamcdn resolution boost: only replace small size tokens in filename
+        // Imobiliare.ro & Roamcdn high-resolution promotions
         if (cleaned.includes("imobiliare.ro") || cleaned.includes("roamcdn")) {
-          cleaned = cleaned.replace(/_(?:75x75|150x150|160x120|200x150|400x300)\.jpg/gi, "_800x600.jpg");
+          cleaned = cleaned
+            .replace(/_(?:75x75|150x150|160x120|400x300)\.jpg/gi, "_800x600.jpg")
+            .replace(/\/thumb\//gi, "/large/")
+            .replace(/\/small\//gi, "/large/")
+            .replace(/\/medium\//gi, "/large/");
+          if (cleaned.toLowerCase().includes("roamcdn")) {
+            cleaned = cleaned.replace(/gallery-[a-zA-Z0-9]+-watermark/gi, "gallery-full-1200w-watermark");
+          }
         }
 
-        // Storia / OLX Apollo: if it already specifies a small resolution via ;s=, normalize to ;s=1000x700
+        // Publi24 promotions
+        if (cleaned.includes("publi24") || cleaned.includes("pstatic") || cleaned.includes("pcdnh")) {
+          cleaned = cleaned
+            .replace(/\/small\//gi, "/large/")
+            .replace(/\/medium\//gi, "/large/")
+            .replace(/\/thumb\//gi, "/large/");
+        }
+
+        // Storia / OLX Apollo / Akamaized promotions: enforce maximum 1000x700
         if (cleaned.includes(";s=")) {
           cleaned = cleaned.replace(/;s=\d+x\d+/, ";s=1000x700");
+        } else if (
+          (cleaned.includes("akamaized.net") || cleaned.includes("apollo") || cleaned.includes("storia.ro") || cleaned.includes("olxcdn")) &&
+          (cleaned.includes("/files/") || cleaned.includes("/image") || cleaned.includes("/photos/"))
+        ) {
+          cleaned = cleaned + (cleaned.includes('?') ? '&' : ';') + "s=1000x700";
         }
+
+        // General small/medium/thumb to large
+        cleaned = cleaned.replace(/\/(?:small|thumb|mini)\//gi, "/large/");
 
         return cleaned;
       };
@@ -612,7 +747,7 @@ Returnează un JSON strict cu următoarele chei:
             const photoList = targetAd?.photos || targetAd?.images || targetAd?.gallery || targetAd?.media?.photos;
             if (Array.isArray(photoList) && photoList.length > 0) {
               photoList.forEach((item: any) => {
-                let candidate = item?.large || item?.url || item?.medium || item?.small || item?.thumbnail || (typeof item === 'string' ? item : null);
+                let candidate = item?.url || item?.large || item?.medium || item?.thumbnail || (typeof item === 'string' ? item : null);
                 if (!candidate && item?.filename) {
                   candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
                 }
@@ -628,116 +763,114 @@ Returnează un JSON strict cu următoarele chei:
         } catch (e) {}
       }
 
-      // Priority 2: JSON-LD metadata for target property
+      // Collect JSON-LD metadata images
       let jsonLdImages: string[] = [];
-      if (nextDataTargetImages.length === 0) {
-        $("script[type='application/ld+json']").each((_, script) => {
-          try {
-            const content = $(script).html();
-            if (content) {
-              const ld = JSON.parse(content);
-              const items = Array.isArray(ld) ? ld : (ld["@graph"] ? ld["@graph"] : [ld]);
-              items.forEach((item: any) => {
-                if (item && item.image) {
-                  const imgs = Array.isArray(item.image) ? item.image : [item.image];
-                  imgs.forEach((img: any) => {
-                    const u = typeof img === 'string' ? img : (img?.url || img?.contentUrl);
-                    if (u && typeof u === 'string') {
-                      const promoted = promoteToHighRes(u);
-                      if (!isForbiddenGraphic(promoted)) {
-                        jsonLdImages.push(promoted);
-                      }
+      $("script[type='application/ld+json']").each((_, script) => {
+        try {
+          const content = $(script).html();
+          if (content) {
+            const ld = JSON.parse(content);
+            const items = Array.isArray(ld) ? ld : (ld["@graph"] ? ld["@graph"] : [ld]);
+            items.forEach((item: any) => {
+              if (item && item.image) {
+                const imgs = Array.isArray(item.image) ? item.image : [item.image];
+                imgs.forEach((img: any) => {
+                  const u = typeof img === 'string' ? img : (img?.url || img?.contentUrl);
+                  if (u && typeof u === 'string') {
+                    const promoted = promoteToHighRes(u);
+                    if (!isForbiddenGraphic(promoted)) {
+                      jsonLdImages.push(promoted);
                     }
-                  });
-                }
-              });
-            }
-          } catch (e) {}
-        });
-      }
+                  }
+                });
+              }
+            });
+          }
+        } catch (e) {}
+      });
 
       // Priority 3: DOM Gallery elements (with aggressive stripping of recommendations, ads, and similar listings)
       let domGalleryImages: string[] = [];
-      if (nextDataTargetImages.length === 0 && jsonLdImages.length === 0) {
-        const unrelatedSelectors = [
-          "aside", "footer", "nav", "header",
-          ".recommendations", ".featured-offers", ".similar-offers", ".similar-ads", 
-          ".others-ads", ".suggested-offers", "[data-testid=\"recommendations\"]", 
-          ".listing-related", ".related-ads", "#ad-recommendations", ".bottom-ads",
-          ".other-offers", ".related-offers", ".promoted-offers", ".slider-similar",
-          ".agent-card", ".agency-card", ".agency-logo", ".broker-logo", ".developer-logo",
-          ".user-card", ".user-profile", ".breadcrumbs", ".search-results",
-          "[data-cy=\"similar-ads\"]", "[data-cy=\"recommended-ads\"]",
-          ".ad-carousel-similar", ".similar-listings", ".related-properties",
-          ".cross-selling", ".cross-sell", ".banner", ".ad-banner", ".header-logo",
-          ".site-header", ".site-footer", ".navbar", ".menu", ".sidebar", ".contact-agent-section",
-          "[data-testid*=\"similar\"]", "[data-testid*=\"recommend\"]", "[data-testid*=\"promoted\"]",
-          "[data-cy*=\"similar\"]", "[data-cy*=\"recommend\"]", "[data-cy*=\"ad-card\"]", "[data-cy*=\"listing\"]",
-          "[data-testid*=\"ad-card\"]", "[data-testid*=\"listing\"]",
-          ".cards-container", ".slider-cards",
-          "[class*=\"similar\"]", "[class*=\"recommend\"]", "[class*=\"suggested\"]",
-          "section:has(h2:contains(\"similare\"))", "section:has(h3:contains(\"similare\"))",
-          "section:has(h2:contains(\"recomand\"))", "section:has(h3:contains(\"recomand\"))"
-        ];
-        unrelatedSelectors.forEach(selector => {
-          $(selector).remove();
-        });
+      const unrelatedSelectors = [
+        "aside", "footer", "nav", "header",
+        ".recommendations", ".featured-offers", ".similar-offers", ".similar-ads", 
+        ".others-ads", ".suggested-offers", "[data-testid=\"recommendations\"]", 
+        ".listing-related", ".related-ads", "#ad-recommendations", ".bottom-ads",
+        ".other-offers", ".related-offers", ".promoted-offers", ".slider-similar",
+        ".agent-card", ".agency-card", ".agency-logo", ".broker-logo", ".developer-logo",
+        ".user-card", ".user-profile", ".breadcrumbs", ".search-results",
+        "[data-cy=\"similar-ads\"]", "[data-cy=\"recommended-ads\"]",
+        ".ad-carousel-similar", ".similar-listings", ".related-properties",
+        ".cross-selling", ".cross-sell", ".banner", ".ad-banner", ".header-logo",
+        ".site-header", ".site-footer", ".navbar", ".menu", ".sidebar", ".contact-agent-section",
+        "[data-testid*=\"similar\"]", "[data-testid*=\"recommend\"]", "[data-testid*=\"promoted\"]",
+        "[data-cy*=\"similar\"]", "[data-cy*=\"recommend\"]", "[data-cy*=\"ad-card\"]", "[data-cy*=\"listing\"]",
+        "[data-testid*=\"ad-card\"]", "[data-testid*=\"listing\"]",
+        ".cards-container", ".slider-cards",
+        "[class*=\"similar\"]", "[class*=\"recommend\"]", "[class*=\"suggested\"]",
+        "section:has(h2:contains(\"similare\"))", "section:has(h3:contains(\"similare\"))",
+        "section:has(h2:contains(\"recomand\"))", "section:has(h3:contains(\"recomand\"))"
+      ];
+      unrelatedSelectors.forEach(selector => {
+        $(selector).remove();
+      });
 
-        const galleryContainers = $(
-          "#galerie, .galerie, [data-testid=\"gallery\"], [data-testid=\"swiper-image\"], .gallery-slider, " +
-          ".image-gallery, .swiper-wrapper, .property-gallery, .offer-photos, #slider-pro, .slider-for, " +
-          ".ad-gallery, [data-cy=\"ad-photos\"], .main-slider, #fotoGal, .foto-galerie, #photo-gallery, " +
-          ".slider-galerie, #anunt-galerie"
-        );
+      const galleryContainers = $(
+        "#galerie, .galerie, [data-testid=\"gallery\"], [data-testid=\"swiper-image\"], .gallery-slider, " +
+        ".image-gallery, .swiper-wrapper, .property-gallery, .offer-photos, #slider-pro, .slider-for, " +
+        ".ad-gallery, [data-cy=\"ad-photos\"], .main-slider, #fotoGal, .foto-galerie, #photo-gallery, " +
+        ".slider-galerie, #anunt-galerie"
+      );
 
-        // Never search full body to avoid grabbing thumbnails from recommendations and sidebar cards
-        const searchScope = galleryContainers.length > 0 
-          ? galleryContainers 
-          : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article");
+      // Never search full body to avoid grabbing thumbnails from recommendations and sidebar cards
+      const searchScope = galleryContainers.length > 0 
+        ? galleryContainers 
+        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article");
 
-        searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
-          const $el = $(el);
-          const src = $el.attr("src");
-          const dataSrc = $el.attr("data-src") || $el.attr("data-lazy") || $el.attr("data-full") || $el.attr("data-lazy-src") || $el.attr("data-original") || $el.attr("data-src-full") || $el.attr("data-zoom") || $el.attr("data-image") || $el.attr("data-gallery-src") || $el.attr("data-url");
-          const href = ($el.prop("tagName") === "A") ? $el.attr("href") : null;
-          const srcset = $el.attr("srcset") || $el.attr("data-srcset");
+      searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
+        const $el = $(el);
+        const src = $el.attr("src");
+        const dataSrc = $el.attr("data-src") || $el.attr("data-lazy") || $el.attr("data-full") || $el.attr("data-lazy-src") || $el.attr("data-original") || $el.attr("data-src-full") || $el.attr("data-zoom") || $el.attr("data-image") || $el.attr("data-gallery-src") || $el.attr("data-url");
+        const href = ($el.prop("tagName") === "A") ? $el.attr("href") : null;
+        const srcset = $el.attr("srcset") || $el.attr("data-srcset");
 
-          let candidates = [dataSrc, src, href];
-          if (srcset) {
-            const sources = srcset.split(",").map(s => s.trim().split(" ")[0]);
-            candidates = [...candidates, ...sources];
+        let candidates = [dataSrc, src, href];
+        if (srcset) {
+          const sources = srcset.split(",").map(s => s.trim().split(" ")[0]);
+          candidates = [...candidates, ...sources];
+        }
+
+        candidates.forEach(raw => {
+          if (!raw || typeof raw !== "string") return;
+          let absUrl = raw.trim().replace(/\\/g, "");
+          if (absUrl.startsWith("//")) absUrl = "https:" + absUrl;
+          else if (absUrl.startsWith("/") && !absUrl.startsWith("//")) {
+            try {
+              const uObj = new URL(url);
+              absUrl = uObj.origin + absUrl;
+            } catch (e) {}
           }
+          if (!absUrl.startsWith("http")) return;
+          if (isForbiddenGraphic(absUrl)) return;
+          if (socialMediaBlocked.some(s => absUrl.toLowerCase().includes(s))) return;
+          if (adKeywords.some(k => absUrl.toLowerCase().includes(k))) return;
 
-          candidates.forEach(raw => {
-            if (!raw || typeof raw !== "string") return;
-            let absUrl = raw.trim().replace(/\\/g, "");
-            if (absUrl.startsWith("//")) absUrl = "https:" + absUrl;
-            else if (absUrl.startsWith("/") && !absUrl.startsWith("//")) {
-              try {
-                const uObj = new URL(url);
-                absUrl = uObj.origin + absUrl;
-              } catch (e) {}
-            }
-            if (!absUrl.startsWith("http")) return;
-            if (isForbiddenGraphic(absUrl)) return;
-            if (socialMediaBlocked.some(s => absUrl.toLowerCase().includes(s))) return;
-            if (adKeywords.some(k => absUrl.toLowerCase().includes(k))) return;
+          const isKnownImage = imageExtensions.test(absUrl) || 
+            absUrl.includes("/files/") || absUrl.includes("/image") || absUrl.includes("/photos/") || absUrl.includes("roamcdn") || absUrl.includes("apollo");
 
-            const isKnownImage = imageExtensions.test(absUrl) || 
-              absUrl.includes("/files/") || absUrl.includes("/image") || absUrl.includes("/photos/") || absUrl.includes("roamcdn") || absUrl.includes("apollo");
-
-            if (isKnownImage) {
-              const promoted = promoteToHighRes(absUrl);
-              domGalleryImages.push(promoted);
-            }
-          });
+          if (isKnownImage) {
+            const promoted = promoteToHighRes(absUrl);
+            domGalleryImages.push(promoted);
+          }
         });
-      }
+      });
 
-      // Collect candidates based on priority
-      const rawCandidates = nextDataTargetImages.length > 0
-        ? nextDataTargetImages
-        : (jsonLdImages.length > 0 ? jsonLdImages : domGalleryImages);
+      // Collect candidates combining all sources (nextData, jsonLd, and domGallery)
+      const rawCandidates = [
+        ...nextDataTargetImages,
+        ...jsonLdImages,
+        ...domGalleryImages
+      ];
 
       // Deduplicate images and keep highest resolution version
       const deduplicateImages = (urls: string[]) => {
@@ -745,8 +878,8 @@ Returnează un JSON strict cu următoarele chei:
 
         const getCanonical = (u: string) => {
           let base = u.split(/[?;]/)[0];
-          // 1. OLX / Storia file ID: /v1/files/([^/]+)/
-          const olxMatch = base.match(/\/v1\/files\/([^/]+)/i);
+          // 1. OLX / Storia file ID: /v1/files/([A-Za-z0-9_-]+)/
+          const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9_-]+)/i);
           if (olxMatch) return `olx-file-${olxMatch[1].toLowerCase()}`;
 
           // 2. Roamcdn / Imobiliare UUID or 32-char hex hash
@@ -766,7 +899,6 @@ Returnează un JSON strict cu următoarele chei:
         const getScore = (u: string) => {
           const lower = u.toLowerCase();
           let score = 0;
-          if (lower.includes("2048x") || lower.includes("1920x")) score += 300;
           if (lower.includes("1200w") || lower.includes("1600w")) score += 200;
           if (lower.includes("1000x700") || lower.includes("1280x") || lower.includes("900w")) score += 100;
           if (lower.includes("800x600")) score += 50;
@@ -789,7 +921,7 @@ Returnează un JSON strict cu următoarele chei:
         return Array.from(map.values()).filter(u => !isForbiddenGraphic(u));
       };
 
-      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 50);
+      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 25);
       console.log(`Found ${uniqueImages.length} unique images for ${url}`);
 
       // Extract seller name explicitly if possible (OLX/Storia patterns)
@@ -984,10 +1116,8 @@ Returnează un JSON strict cu următoarele chei:
 
         // Regex lookup in raw text and HTML body
         const romanianPhoneRegex = /(?:\+40|0)\s?7\d{2}[\s.-]?\d{3}[\s.-]?\d{3}\b/g;
-        const htmlMatches: string[] = html.match(romanianPhoneRegex) || [];
-        const textMatches: string[] = text.match(romanianPhoneRegex) || [];
-        const phoneMatches = [...htmlMatches, ...textMatches];
-        if (phoneMatches.length > 0) {
+        const phoneMatches = (html.match(romanianPhoneRegex) || []).concat(text.match(romanianPhoneRegex) || []);
+        if (phoneMatches) {
           for (const rawMatch of phoneMatches) {
             const cleaned = rawMatch.replace(/[^\d+]/g, "").trim();
             if (cleaned.startsWith("07") && cleaned.length === 10) {
@@ -1039,66 +1169,20 @@ Returnează un JSON strict cu următoarele chei:
       // 2. Price & Currency extraction
       let rawPriceNum = 0;
       let currency = "EUR";
-      let isRent = false;
-
-      // Specific targeted selectors for Storia.ro & OLX.ro
-      const isStoria = url.includes("storia.ro");
-      const isOLX = url.includes("olx.ro");
-
-      if (isStoria) {
-        const storiaPriceText = $('strong[aria-label="Preț"]').text().trim();
-        if (storiaPriceText) {
-          const digits = parseInt(storiaPriceText.replace(/[^0-9]/g, ""), 10) || 0;
-          if (digits > 0) {
-            rawPriceNum = digits;
-            const lowerPriceText = storiaPriceText.toLowerCase();
-            currency = lowerPriceText.includes("ron") || lowerPriceText.includes("lei") ? "RON" : "EUR";
-          }
-        }
-        const storiaHeader = $('h2.type-headline-medium').text().toLowerCase();
-        if (storiaHeader.includes("închiriat") || storiaHeader.includes("închiriere") || storiaHeader.includes("chirie")) {
-          isRent = true;
-        } else if (storiaHeader.includes("vânzare") || storiaHeader.includes("vanzare")) {
-          isRent = false;
-        }
-      }
-
-      if (isOLX) {
-        const olxPriceText = $('div[data-testid="ad-price-container"] h3').text().trim() || $('div[data-testid="ad-price-container"]').text().trim();
-        if (olxPriceText) {
-          const digits = parseInt(olxPriceText.replace(/[^0-9]/g, ""), 10) || 0;
-          if (digits > 0) {
-            rawPriceNum = digits;
-            const lowerPriceText = olxPriceText.toLowerCase();
-            currency = lowerPriceText.includes("ron") || lowerPriceText.includes("lei") ? "RON" : "EUR";
-          }
-        }
-        const breadcrumbText = $('nav[role="navigation"] ol[data-testid="breadcrumbs"] li:nth-child(3)').text().toLowerCase() || $('nav ol li:nth-child(3)').text().toLowerCase();
-        const breadcrumbHref = $('nav[role="navigation"] ol[data-testid="breadcrumbs"] li:nth-child(3) a').attr('href')?.toLowerCase() || "";
-        const crumbCombo = breadcrumbText + " " + breadcrumbHref;
-        if (crumbCombo.includes("inchiriat") || crumbCombo.includes("inchiriere") || crumbCombo.includes("chirie")) {
-          isRent = true;
-        } else if (crumbCombo.includes("vanzare") || crumbCombo.includes("vânzare")) {
-          isRent = false;
-        }
-      }
-
-      if (rawPriceNum === 0) {
-        if (nextAdData?.price?.regularPrice?.value) {
-          rawPriceNum = Number(nextAdData.price.regularPrice.value);
-          const currSym = String(nextAdData.price.regularPrice.currencySymbol || "").toUpperCase();
-          currency = currSym.includes("LEI") || currSym.includes("RON") ? "RON" : "EUR";
-        } else if (jsonLdData?.offers?.price) {
-          rawPriceNum = Number(jsonLdData.offers.price);
-          currency = String(jsonLdData.offers.priceCurrency || "EUR").toUpperCase();
-        } else {
-          const priceRegex = /(?:pre[t\u021b]|chirie|\b)\s*[:\-–]?\s*(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i;
-          const pMatch = text.match(priceRegex) || title.match(/(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i);
-          if (pMatch) {
-            rawPriceNum = parseInt(pMatch[1].replace(/[^0-9]/g, ""), 10) || 0;
-            const currStr = pMatch[2].toLowerCase();
-            currency = currStr.includes("ron") || currStr.includes("lei") ? "RON" : "EUR";
-          }
+      if (nextAdData?.price?.regularPrice?.value) {
+        rawPriceNum = Number(nextAdData.price.regularPrice.value);
+        const currSym = String(nextAdData.price.regularPrice.currencySymbol || "").toUpperCase();
+        currency = currSym.includes("LEI") || currSym.includes("RON") ? "RON" : "EUR";
+      } else if (jsonLdData?.offers?.price) {
+        rawPriceNum = Number(jsonLdData.offers.price);
+        currency = String(jsonLdData.offers.priceCurrency || "EUR").toUpperCase();
+      } else {
+        const priceRegex = /(?:pre[t\u021b]|chirie|\b)\s*[:\-–]?\s*(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i;
+        const pMatch = text.match(priceRegex) || title.match(/(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i);
+        if (pMatch) {
+          rawPriceNum = parseInt(pMatch[1].replace(/[^0-9]/g, ""), 10) || 0;
+          const currStr = pMatch[2].toLowerCase();
+          currency = currStr.includes("ron") || currStr.includes("lei") ? "RON" : "EUR";
         }
       }
 
@@ -1118,8 +1202,7 @@ Returnează un JSON strict cu următoarele chei:
       const structuredIsRent = structuredCat.includes("inchiri") || structuredTarget.includes("rent");
       const structuredIsSale = structuredCat.includes("vanza") || structuredTarget.includes("sell") || structuredTarget.includes("sale");
 
-      // isRent already declared above
-
+      let isRent = false;
 
       if (priceInEur >= 20000) {
         // High price (20,000+ EUR) is overwhelmingly a SALE (e.g. 50,000€, 120,000€, 300,000€).
@@ -1160,15 +1243,10 @@ Returnează un JSON strict cu următoarele chei:
       }
 
       const transactionType = isRent ? "Închiriere" : "Vânzare";
-      
-      // Always convert to EUR if original price was in RON (~5 RON = 1 EUR)
-      const priceInEurFinal = currency === "RON" ? Math.round(rawPriceNum / 5) : rawPriceNum;
-      const currencyFinal = "EUR";
+      console.log(`[Crawler Transaction Detection] Price: ${priceInEur} EUR (${currency}) -> Type: ${transactionType} (URL Rent: ${urlHasRent}, Title Rent: ${titleHasRent})`);
 
-      console.log(`[Crawler Currency & Price] Raw: ${rawPriceNum} ${currency} -> Converted/Formatted: ${priceInEurFinal} ${currencyFinal} (${transactionType})`);
-
-      const formattedPrice = priceInEurFinal > 0 
-        ? `${priceInEurFinal.toLocaleString("ro-RO")} ${currencyFinal}${transactionType === "Închiriere" ? " / lună" : ""}` 
+      const formattedPrice = rawPriceNum > 0 
+        ? `${rawPriceNum.toLocaleString("ro-RO")} ${currency}${transactionType === "Închiriere" ? " / lună" : ""}` 
         : "N/A";
 
       // 4. City & Zone
@@ -1542,7 +1620,7 @@ Returnează un JSON strict cu următoarele chei:
           "Parcare": "Publica in zona"
         },
         acte: transactionType === "Închiriere" ? {
-          "Durata contract": "12 luni",
+          "Condiții contractuale": "12 luni",
           "Avans": "1 luna",
           "Garanție": "1 luna"
         } : {
@@ -1589,7 +1667,6 @@ Returnează un JSON strict cu următoarele chei:
       lastError = error;
     }
   }
-
 
   res.status(500).json({ 
     error: `Failed to fetch URL after retries: ${lastError?.message || "Unknown error"}`,
@@ -1720,7 +1797,7 @@ Returnează un JSON strict cu următoarele chei:
           responseType: "arraybuffer",
           headers: {
             "User-Agent": userAgents[i % userAgents.length],
-            "Accept": "image/jpeg,image/png,image/*;q=0.8",
+            "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
             "Referer": referer,
             "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
             "Cache-Control": "no-cache",
@@ -1767,22 +1844,19 @@ Returnează un JSON strict cu următoarele chei:
         }
 
         let finalData = response.data;
-        let finalContentType = contentType;
-        // Inpaint portal watermarks using classical Alexandru Telea Fast Marching algorithm (non-AI, zero API cost)
-        if (req.query.noclean !== "true") {
+        // Watermark detection with Gemini is disabled by default to eliminate budget spend on image views.
+        // It runs ONLY if explicitly requested via ?clean=true
+        if (req.query.clean === "true") {
           finalData = await cleanImageWatermarks(response.data, contentType, cleanUrl);
-          if (finalData !== response.data) {
-            finalContentType = contentType === "image/png" ? "image/png" : "image/jpeg";
-          }
-          addToImageCache(cleanUrl, { mimeType: finalContentType, data: finalData });
+          addToImageCache(cleanUrl, { mimeType: contentType, data: finalData });
         }
 
         const base64 = finalData.toString("base64");
         // Check if client wants raw binary or json
         if (req.query.json === "true") {
-          res.json({ base64, contentType: finalContentType });
+          res.json({ base64, contentType });
         } else {
-          res.setHeader("Content-Type", finalContentType);
+          res.setHeader("Content-Type", contentType);
           res.setHeader("Cache-Control", "public, max-age=3600");
           res.send(finalData);
         }

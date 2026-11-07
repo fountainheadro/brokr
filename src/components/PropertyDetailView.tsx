@@ -1722,7 +1722,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
       {showTopNavbar && (
         <nav className="h-[50px] shrink-0 bg-white border-b border-gray-200 select-none z-30">
-          <div className={`w-full h-[50px] flex items-center justify-between p-0 ${isPublicShared ? "max-w-4xl mx-auto px-4 sm:px-6" : ""}`}>
+          <div className={`w-full h-[50px] flex items-center justify-between p-0 ${isPublicShared ? "max-w-[1240px] mx-auto px-4 sm:px-6" : ""}`}>
             <div className="flex items-center h-full">
               {!isPublicShared && (
                 <a 
@@ -1765,7 +1765,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
       {/* Horizontal Fixed Menu with Jump Links (Left) and Actions (Right) - Perfectly aligned with logo and containers below */}
       <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-        <div className={`w-full h-full flex items-center justify-between gap-3 shrink-0 ${isPublicShared ? "max-w-4xl mx-auto px-4 sm:px-6" : "px-4 sm:px-6"}`}>
+        <div className={`w-full h-full flex items-center justify-between gap-3 shrink-0 ${isPublicShared ? "max-w-[1240px] mx-auto px-4 sm:px-6" : "px-4 sm:px-6"}`}>
           {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
           <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
             {navSections.map((sect) => {
@@ -1847,75 +1847,29 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       {/* Main Layout (Scrollable container below the fixed headers) */}
       <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth">
         
-        {/* PUBLIC SHARED FULL-WIDTH GALLERY (100% width, max 50vh, 10px white padding between images) */}
+        {/* PUBLIC SHARED BOXED GALLERY (1240px or less fluid, initial 5 photos: 50% width image, then two columns with 2 images each 50% height, last image with Toate imaginile overlay) */}
         {isPublicShared && (
-          <div id="poze" className="w-full h-[50vh] max-h-[50vh] bg-white border-b border-gray-200 overflow-hidden select-none scroll-mt-24 sm:scroll-mt-28">
-            {imagesList.length === 0 ? (
-              <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
-                <Camera size={40} className="text-gray-300" />
-                <span className="text-xs font-medium text-gray-500">Nicio fotografie disponibilă</span>
-              </div>
-            ) : (
-              <>
-                {/* Mobile Layout: show big image followed by the toate pozele one, max height 50vh, 10px gap */}
-                <div className="flex md:hidden w-full h-full gap-[10px] bg-white select-none" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
-                  <div className="relative w-3/5 h-full cursor-pointer group bg-gray-100 overflow-hidden">
-                    <ProtectedImage 
-                      src={imagesList[0]} 
-                      alt={`${generatedTitle} - 1`}
-                      className="w-full h-full"
-                      imageClassName="group-hover:scale-102"
-                      onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                    />
-                  </div>
-                  <div className="relative w-2/5 h-full cursor-pointer group bg-gray-100 overflow-hidden">
-                    <ProtectedImage 
-                      src={imagesList[1] || imagesList[0]} 
-                      alt={`${generatedTitle} - 2`}
-                      className="w-full h-full"
-                      imageClassName="group-hover:scale-103"
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                    />
-                    <div 
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
-                      className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer"
-                    >
-                      <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
-                        Toate pozele ({imagesList.length})
-                      </span>
-                    </div>
-                  </div>
+          <div id="poze" className="w-full max-w-[1240px] mx-auto px-4 sm:px-6 py-4 sm:py-6 select-none scroll-mt-24 sm:scroll-mt-28">
+            <div className="w-full bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs">
+              {imagesList.length === 0 ? (
+                <div className="w-full h-[350px] flex flex-col items-center justify-center text-gray-400 gap-2 p-6 text-center">
+                  <Camera size={40} className="text-gray-300" />
+                  <span className="text-xs font-medium text-gray-500">Nicio fotografie disponibilă</span>
                 </div>
-
-                {/* Desktop Layout: 1 (40%), 2&3 (10%), 4 (20%), 5&6 (10%), 7 (20% + more images button), with 10px white padding between */}
-                <div className="hidden md:flex w-full h-full gap-[10px] bg-white select-none" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
-                  {/* 1 - biggest with 40% width */}
-                  <div className="relative flex-[40] w-[40%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden">
-                    <ProtectedImage 
-                      src={imagesList[0]} 
-                      alt={`${generatedTitle} - 1`}
-                      className="w-full h-full"
-                      imageClassName="group-hover:scale-102"
-                      onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                    />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedPhotoIndex(0);
-                        setIsGalleryOpen(true);
-                      }}
-                      className="absolute bottom-3 left-3 z-30 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
-                    >
-                      <Camera size={13} className="text-[#BE9662]" />
-                      <span>Galerie foto ({imagesList.length})</span>
-                    </button>
-                  </div>
-
-                  {/* 2 and 3 - 10% width stacked vertically with 10px white padding between */}
-                  <div className="flex-[10] w-[10%] h-full flex flex-col gap-[10px]">
-                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
+              ) : (
+                <>
+                  {/* Mobile Layout: 2 images, second with Toate imaginile overlay */}
+                  <div className="flex md:hidden w-full h-[320px] gap-[10px] bg-white select-none p-3" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
+                    <div className="relative w-3/5 h-full cursor-pointer group bg-gray-100 overflow-hidden rounded-lg">
+                      <ProtectedImage 
+                        src={imagesList[0]} 
+                        alt={`${generatedTitle} - 1`}
+                        className="w-full h-full"
+                        imageClassName="group-hover:scale-102"
+                        onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                      />
+                    </div>
+                    <div className="relative w-2/5 h-full cursor-pointer group bg-gray-100 overflow-hidden rounded-lg">
                       <ProtectedImage 
                         src={imagesList[1] || imagesList[0]} 
                         alt={`${generatedTitle} - 2`}
@@ -1923,86 +1877,110 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         imageClassName="group-hover:scale-103"
                         onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
                       />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
+                      <div 
+                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
+                        className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer rounded-lg"
+                      >
+                        <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
+                          Toate imaginile ({imagesList.length})
+                        </span>
+                      </div>
                     </div>
+                  </div>
 
-                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
+                  {/* Desktop Layout: 5 photos - 1 image (50% width), then two columns (25% each) with 2 images each (50% height each), last image has Toate imaginile overlay */}
+                  <div className="hidden md:flex w-full h-[450px] sm:h-[480px] gap-[10px] bg-white select-none p-3" onContextMenu={(e) => e.preventDefault()} onDragStart={(e) => e.preventDefault()}>
+                    {/* Left: 50% width, 1 image */}
+                    <div className="relative w-1/2 h-full cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
                       <ProtectedImage 
-                        src={imagesList[2] || imagesList[1] || imagesList[0]} 
-                        alt={`${generatedTitle} - 3`}
+                        src={imagesList[0]} 
+                        alt={`${generatedTitle} - 1`}
                         className="w-full h-full"
-                        imageClassName="group-hover:scale-103"
-                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 2 ? 2 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
+                        imageClassName="group-hover:scale-102 transition-transform duration-300"
+                        onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
                       />
                       <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                    </div>
-                  </div>
-
-                  {/* 4 - 20% width */}
-                  <div className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden">
-                    <ProtectedImage 
-                      src={imagesList[3] || imagesList[0]} 
-                      alt={`${generatedTitle} - 4`}
-                      className="w-full h-full"
-                      imageClassName="group-hover:scale-102"
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 3 ? 3 : 0); setIsGalleryOpen(true); }}
-                    />
-                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                  </div>
-
-                  {/* 5 and 6 - 10% width stacked vertically with 10px white padding between */}
-                  <div className="flex-[10] w-[10%] h-full flex flex-col gap-[10px]">
-                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
-                      <ProtectedImage 
-                        src={imagesList[4] || imagesList[1] || imagesList[0]} 
-                        alt={`${generatedTitle} - 5`}
-                        className="w-full h-full"
-                        imageClassName="group-hover:scale-103"
-                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
-                      />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedPhotoIndex(0);
+                          setIsGalleryOpen(true);
+                        }}
+                        className="absolute bottom-3 left-3 z-30 h-8 px-3 rounded-lg bg-white/95 hover:bg-white text-gray-800 text-xs font-semibold shadow-md backdrop-blur-xs flex items-center gap-1.5 transition-colors cursor-pointer select-none border border-gray-200/80"
+                      >
+                        <Camera size={13} className="text-[#BE9662]" />
+                        <span>Galerie foto ({imagesList.length})</span>
+                      </button>
                     </div>
 
-                    <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden">
-                      <ProtectedImage 
-                        src={imagesList[5] || imagesList[2] || imagesList[0]} 
-                        alt={`${generatedTitle} - 6`}
-                        className="w-full h-full"
-                        imageClassName="group-hover:scale-103"
-                        onClick={() => { setSelectedPhotoIndex(imagesList.length > 5 ? 5 : (imagesList.length > 2 ? 2 : 0)); setIsGalleryOpen(true); }}
-                      />
-                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
-                    </div>
-                  </div>
+                    {/* Column 1 of 2 (Middle): 25% width, 2 images stacked 50% height each */}
+                    <div className="w-1/4 h-full flex flex-col gap-[10px]">
+                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
+                        <ProtectedImage 
+                          src={imagesList[1] || imagesList[0]} 
+                          alt={`${generatedTitle} - 2`}
+                          className="w-full h-full"
+                          imageClassName="group-hover:scale-103 transition-transform duration-300"
+                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 1 ? 1 : 0); setIsGalleryOpen(true); }}
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
+                      </div>
 
-                  {/* 7 - 20% width and also is the more images button */}
-                  <div className="relative flex-[20] w-[20%] h-full cursor-pointer group select-none bg-gray-100 overflow-hidden">
-                    <ProtectedImage 
-                      src={imagesList[6] || imagesList[3] || imagesList[imagesList.length - 1] || imagesList[0]} 
-                      alt={`${generatedTitle} - 7`}
-                      className="w-full h-full"
-                      imageClassName="group-hover:scale-103"
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 6 ? 6 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
-                    />
-                    <div 
-                      onClick={() => { setSelectedPhotoIndex(imagesList.length > 6 ? 6 : (imagesList.length - 1)); setIsGalleryOpen(true); }}
-                      className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer"
-                    >
-                      <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
-                        Toate pozele ({imagesList.length})
-                      </span>
+                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
+                        <ProtectedImage 
+                          src={imagesList[2] || imagesList[1] || imagesList[0]} 
+                          alt={`${generatedTitle} - 3`}
+                          className="w-full h-full"
+                          imageClassName="group-hover:scale-103 transition-transform duration-300"
+                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 2 ? 2 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
+                      </div>
+                    </div>
+
+                    {/* Column 2 of 2 (Last column): 25% width, 2 images stacked 50% height each, last image holds "Toate imaginile" overlay */}
+                    <div className="w-1/4 h-full flex flex-col gap-[10px]">
+                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
+                        <ProtectedImage 
+                          src={imagesList[3] || imagesList[0]} 
+                          alt={`${generatedTitle} - 4`}
+                          className="w-full h-full"
+                          imageClassName="group-hover:scale-103 transition-transform duration-300"
+                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 3 ? 3 : 0); setIsGalleryOpen(true); }}
+                        />
+                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none z-10" />
+                      </div>
+
+                      <div className="relative w-full flex-1 cursor-pointer group select-none bg-gray-100 overflow-hidden rounded-lg">
+                        <ProtectedImage 
+                          src={imagesList[4] || imagesList[1] || imagesList[0]} 
+                          alt={`${generatedTitle} - 5`}
+                          className="w-full h-full"
+                          imageClassName="group-hover:scale-103 transition-transform duration-300"
+                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
+                        />
+                        <div 
+                          onClick={() => { setSelectedPhotoIndex(imagesList.length > 4 ? 4 : (imagesList.length > 1 ? 1 : 0)); setIsGalleryOpen(true); }}
+                          className="absolute inset-0 z-30 bg-black/55 hover:bg-black/65 backdrop-blur-[1px] transition-colors flex items-center justify-center p-2 text-center pointer-events-auto cursor-pointer rounded-lg"
+                        >
+                          <span className="text-white text-xs sm:text-sm font-bold underline underline-offset-4 decoration-2 tracking-wide font-sans">
+                            Toate imaginile ({imagesList.length})
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </>
-            )}
+                </>
+              )}
+            </div>
           </div>
         )}
 
         <div className={isPublicShared ? "w-full min-h-full flex justify-center bg-gray-50/20" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
           
           {/* Main Content Cards Column: Centered boxed container for public shared, 8 cols with right border for internal CRM */}
-          <div className={isPublicShared ? "max-w-4xl w-full px-4 sm:px-6 py-6 space-y-6" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200"}>
+          <div className={isPublicShared ? "max-w-[1240px] w-full mx-auto px-4 sm:px-6 py-6 space-y-6" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-6 border-b lg:border-b-0 lg:border-r border-gray-200"}>
 
             {/* PUBLIC SHARED HEADER: Titlu generat imediat sub poze + Preț + ID intern in casuta patrata in dreapta */}
             {isPublicShared && (

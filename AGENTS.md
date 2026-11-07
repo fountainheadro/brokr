@@ -1,4 +1,3 @@
-
 # Reguli Proiect - Extracție Date Imobiliare
 
 Acest document conține reglementările oficiale și exhaustive pentru logica de detecție, regulile de clasificare a imaginilor și regulile de completare a câmpurilor formularului CRM din acest proiect.
