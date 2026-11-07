@@ -345,7 +345,7 @@ export const Home: React.FC = () => {
   const [sortOption, setSortOption] = useState<SortOption>('newest');
   const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>('Toate');
   const [leadRoleFilter, setLeadRoleFilter] = useState<LeadRoleFilter>('Toate');
-  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Imobile');
+  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Proprietati');
   const [navDirection, setNavDirection] = useState<number>(1);
   const location = useLocation();
 
@@ -354,7 +354,7 @@ export const Home: React.FC = () => {
       setNavDirection(-1);
       setSelectedLead(null);
     }
-    const normalized = subItem === 'Proprietăți' ? 'Imobile' : (subItem === 'Clienți' ? 'Contacte' : subItem);
+    const normalized = subItem === 'Imobile' || subItem === 'Proprietăți' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
       setActiveTab('Noi');
@@ -362,7 +362,7 @@ export const Home: React.FC = () => {
     } else if (normalized === 'Cereri') {
       setActiveTab('Noua');
       setTransactionFilter('Toate');
-    } else if (normalized === 'Imobile') {
+    } else if (normalized === 'Proprietati') {
       setActiveTab('Noua');
       setTransactionFilter('Toate');
     }
@@ -431,10 +431,10 @@ export const Home: React.FC = () => {
       };
     }
     return {
-      title: 'Imobile',
+      title: 'Proprietati',
       count: counts.proprietati,
-      description: 'Portofoliul complet de imobile (Nouă, Prospectare, Colaborare, Vizionare, Ofertare, Antecontract, Contract)',
-      searchPlaceholder: 'Caută imobile după titlu, zonă, ID (#P...), preț...',
+      description: 'Portofoliul complet de proprietati (Nouă, Prospectare, Colaborare, Vizionare, Ofertare, Antecontract, Contract)',
+      searchPlaceholder: 'Caută proprietati după titlu, zonă, ID (#P...), preț...',
       icon: <Building2 size={16} className="text-[#BE9662]" />
     };
   }, [activeSidebarItem, counts]);
@@ -1890,14 +1890,14 @@ export const Home: React.FC = () => {
                       </button>
                     )}
 
-                    {(activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
+                    {(activeSidebarItem === 'Proprietati' || activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
                       <button
                         type="button"
                         onClick={() => setIsModalOpen(true)}
                         className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
                       >
                         <Plus size={14} className="text-[#BE9662]" />
-                        <span>Adaugă Imobil</span>
+                        <span>Adaugă Proprietate</span>
                       </button>
                     )}
 
@@ -2443,7 +2443,7 @@ export const Home: React.FC = () => {
             } else if (targetLead.status === 'Noi' || targetLead.status === 'Pierdute' || targetLead.status === 'Nevalidata' || targetLead.status === 'Calificata') {
               handleSelectSidebarItem('Lead-uri');
             } else {
-              handleSelectSidebarItem('Imobile');
+              handleSelectSidebarItem('Proprietati');
             }
             setNavDirection(1);
             setSelectedLead(targetLead);
@@ -2455,7 +2455,7 @@ export const Home: React.FC = () => {
           } else if (notification.type === 'lead') {
             handleSelectSidebarItem('Lead-uri');
           } else {
-            handleSelectSidebarItem('Imobile');
+            handleSelectSidebarItem('Proprietati');
           }
         }}
       />

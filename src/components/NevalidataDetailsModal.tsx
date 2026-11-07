@@ -638,10 +638,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 onClick={handleConvertToImobil}
                 disabled={saving}
                 className="h-8 px-3.5 bg-[#051D35] hover:bg-[#0a2b4a] text-white font-medium rounded-md transition-colors shadow-xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                title="Concretizează leadul într-un Imobil nou pe piață"
+                title="Concretizează leadul într-o Proprietate nouă pe piață"
               >
                 <Plus size={14} className="text-[#BE9662]" />
-                <span>Adaugă Imobil</span>
+                <span>Adaugă Proprietate</span>
               </button>
             </div>
           </div>
