@@ -56,7 +56,6 @@ export interface PropertyDetailViewProps {
   showTopNavbar?: boolean;
   onDelete?: () => void;
   onAddActivity?: () => void;
-  onUpdateLead?: (updatedData: any) => void;
 }
 
 interface NavSection {
@@ -330,8 +329,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onOpenEditForm,
   showTopNavbar = false,
   onDelete,
-  onAddActivity,
-  onUpdateLead
+  onAddActivity
 }) => {
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
   const [isCopied, setIsCopied] = useState<boolean>(false);
@@ -1217,7 +1215,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       }
 
       await leadsService.updateLeadData(lead.id, updates);
-      onUpdateLead?.(updates);
       toast.success("Modificările au fost salvate cu succes!");
     } catch (e) {
       console.error("Failed to save inline changes:", e);

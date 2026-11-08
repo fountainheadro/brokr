@@ -1512,74 +1512,15 @@ export const Home: React.FC = () => {
   const handleConvertToImobil = async (leadId: string, updatedData: Partial<Lead>) => {
     try {
       const newPropId = await entityIdService.getNextId('property');
-      const leadObj = leads.find(l => l.id === leadId);
-      const mergedLead = { ...leadObj, ...updatedData };
-      const crmData = mergedLead.extractedData?.crmData;
-      const category = mergedLead.categoria || crmData?.detaliiGenerale?.categoria || "Apartament";
-      const transactionType = mergedLead.transactionType || crmData?.detaliiGenerale?.tranzactie || "Vânzare";
-      const zoneVal = crmData?.detaliiGenerale?.localizare?.zona || mergedLead.zone || "București";
-      const zone = Array.isArray(zoneVal) ? zoneVal[0] : (zoneVal || "București");
-      const price = mergedLead.price || crmData?.pret?.detalii?.pret || "";
-      const specs = crmData?.caracteristici || {};
-      const originalTitle = mergedLead.title || crmData?.descriere?.titlu || "";
-      const originalDescription = mergedLead.extractedData?.markdownMarketing || crmData?.descriere?.continut || "";
-
-      let formattedTitle = originalTitle;
-      let formattedDescription = originalDescription;
-
-      try {
-        const aiRes = await fetch("/api/generate-ai-text", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            category,
-            transactionType,
-            zone,
-            price,
-            specs,
-            originalTitle,
-            originalDescription,
-            propertyId: newPropId
-          })
-        });
-        if (aiRes.ok) {
-          const aiJson = await aiRes.json();
-          if (aiJson.title) formattedTitle = aiJson.title;
-          if (aiJson.description) formattedDescription = aiJson.description;
-        }
-      } catch (err) {
-        console.warn("AI formatting on convert to imobil failed:", err);
-      }
-
-      const updatedCrmData = crmData ? {
-        ...crmData,
-        descriere: {
-          disponibilitate: crmData.descriere?.disponibilitate || "",
-          video: crmData.descriere?.video || "",
-          turVirtual: crmData.descriere?.turVirtual || "",
-          ...(crmData.descriere || {}),
-          titlu: formattedTitle,
-          continut: formattedDescription
-        }
-      } : null;
-
       const finalPayload: Partial<Lead> = {
         ...updatedData,
         propertyId: newPropId,
-        title: formattedTitle,
         status: "Noua" as LeadStatus,
-        lastMovedAt: new Date(),
-        extractedData: mergedLead.extractedData ? {
-          ...mergedLead.extractedData,
-          crmData: updatedCrmData,
-          markdownMarketing: formattedDescription,
-          summary: formattedDescription.substring(0, 300)
-        } : updatedData.extractedData
+        lastMovedAt: new Date()
       };
-
       await leadsService.updateLeadData(leadId, finalPayload);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
-      toast.success(`Leadul a fost concretizat în Imobilul #${newPropId} cu titlul și descrierea formatate!`);
+      toast.success(`Leadul a fost concretizat în Imobilul #${newPropId}!`);
     } catch (e) {
       console.error("Failed to convert lead to imobil:", e);
       toast.error("Eroare la crearea imobilului!");
@@ -1658,80 +1599,10 @@ export const Home: React.FC = () => {
 
   const handleActivateCalificatLead = async (leadId: string) => {
     try {
-      const leadObj = leads.find(l => l.id === leadId);
-      let newPropId = leadObj?.propertyId;
-      if (!newPropId) {
-        newPropId = await entityIdService.getNextId('property');
-      }
-
-      const crmData = leadObj?.extractedData?.crmData;
-      const category = leadObj?.categoria || crmData?.detaliiGenerale?.categoria || "Apartament";
-      const transactionType = leadObj?.transactionType || crmData?.detaliiGenerale?.tranzactie || "Vânzare";
-      const zoneVal = crmData?.detaliiGenerale?.localizare?.zona || leadObj?.zone || "București";
-      const zone = Array.isArray(zoneVal) ? zoneVal[0] : (zoneVal || "București");
-      const price = leadObj?.price || crmData?.pret?.detalii?.pret || "";
-      const specs = crmData?.caracteristici || {};
-      const originalTitle = leadObj?.title || crmData?.descriere?.titlu || "";
-      const originalDescription = leadObj?.extractedData?.markdownMarketing || crmData?.descriere?.continut || "";
-
-      let formattedTitle = originalTitle;
-      let formattedDescription = originalDescription;
-
-      try {
-        const aiRes = await fetch("/api/generate-ai-text", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            category,
-            transactionType,
-            zone,
-            price,
-            specs,
-            originalTitle,
-            originalDescription,
-            propertyId: newPropId
-          })
-        });
-        if (aiRes.ok) {
-          const aiJson = await aiRes.json();
-          if (aiJson.title) formattedTitle = aiJson.title;
-          if (aiJson.description) formattedDescription = aiJson.description;
-        }
-      } catch (err) {
-        console.warn("AI formatting on activate qualified lead failed:", err);
-      }
-
-      const updatedCrmData = crmData ? {
-        ...crmData,
-        descriere: {
-          disponibilitate: crmData.descriere?.disponibilitate || "",
-          video: crmData.descriere?.video || "",
-          turVirtual: crmData.descriere?.turVirtual || "",
-          ...(crmData.descriere || {}),
-          titlu: formattedTitle,
-          continut: formattedDescription
-        }
-      } : null;
-
-      const finalPayload: Partial<Lead> = {
-        propertyId: newPropId,
-        title: formattedTitle,
-        status: "Noua" as LeadStatus,
-        lastMovedAt: new Date(),
-        extractedData: leadObj?.extractedData ? {
-          ...leadObj.extractedData,
-          crmData: updatedCrmData,
-          markdownMarketing: formattedDescription,
-          summary: formattedDescription.substring(0, 300)
-        } : undefined
-      };
-
-      await leadsService.updateLeadData(leadId, finalPayload);
-      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
-      toast.success(`Leadul calificat a fost activat ca Imobil #${newPropId}!`);
+      await leadsService.updateLeadStatus(leadId, 'Noua');
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'Noua' } : l));
     } catch (e) {
       console.error("Failed to activate lead:", e);
-      toast.error("Eroare la activarea leadului!");
       throw e;
     }
   };
