@@ -112,7 +112,8 @@ export const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-5 space-y-3.5 text-xs">
+          <form onSubmit={handleSubmit} className="p-5">
+            <fieldset disabled={loading} className="border-0 p-0 m-0 min-w-0 space-y-3.5">
             <div>
               <label className="block text-gray-700 font-semibold mb-1">
                 Titlu document *

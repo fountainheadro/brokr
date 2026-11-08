@@ -9,7 +9,8 @@ import {
   serverTimestamp, 
   getDoc,
   deleteDoc,
-  getDocs
+  getDocs,
+  where
 } from 'firebase/firestore';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { ExtractionResult } from './geminiService';
@@ -251,6 +252,20 @@ export const leadsService = {
           status: mapStatus(data.status || '')
         } as Lead;
       }
+
+      // Fallback: query by propertyId if direct document ID fetch misses
+      const q = query(collection(db, LEADS_COLLECTION), where("propertyId", "==", leadId));
+      const querySnap = await getDocs(q);
+      if (!querySnap.empty) {
+        const docSnap = querySnap.docs[0];
+        const data = docSnap.data();
+        return {
+          id: docSnap.id,
+          ...data,
+          status: mapStatus(data.status || '')
+        } as Lead;
+      }
+
       return null;
     } catch (error) {
       console.warn(`[leadsService] getLead failed for ${leadId}:`, error);

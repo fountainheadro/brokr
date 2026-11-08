@@ -616,10 +616,15 @@ Returnează un JSON strict cu următoarele chei:
             }
           };
           const queryRes = await axios.post(queryUrl, queryBody, { timeout: 8000 });
-          if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
-            docData = queryRes.data[0].document;
-            const nameParts = (docData.name || "").split("/");
-            docId = nameParts[nameParts.length - 1] || id;
+          if (Array.isArray(queryRes.data)) {
+            for (const item of queryRes.data) {
+              if (item?.document) {
+                docData = item.document;
+                const nameParts = (docData.name || "").split("/");
+                docId = nameParts[nameParts.length - 1] || id;
+                break;
+              }
+            }
           }
         } catch (queryErr: any) {
           console.warn("[Server] propertyId fallback query failed:", queryErr.message);

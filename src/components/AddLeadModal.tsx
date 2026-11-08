@@ -252,7 +252,8 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-5 space-y-3.5 overflow-y-auto text-xs flex-1">
+          <form onSubmit={handleSubmit} className="p-5 overflow-y-auto text-xs flex-1">
+            <fieldset disabled={loading} className="border-0 p-0 m-0 min-w-0 space-y-3.5 flex-1 flex flex-col">
             {/* Row 1: Tip & Categorie (Categorie hidden if Proprietar) */}
             <div className={`grid ${leadRole === 'Proprietar' ? 'grid-cols-1' : 'grid-cols-2'} gap-3`}>
               <div>
@@ -523,6 +524,7 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
                 )}
               </button>
             </div>
+            </fieldset>
           </form>
         </motion.div>
       </div>
