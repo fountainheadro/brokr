@@ -798,7 +798,16 @@ Returnează un JSON strict cu următoarele chei:
     const cleanPrice = (text: string | null | undefined): string | null => {
       if (!text) return null;
       let cleaned = text.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
-      cleaned = cleaned.replace(/\s*\/\s*(?:lun[aă]|luni|month)\b/gi, "").trim();
+      const lower = cleaned.toLowerCase();
+      const hasLuna = /\/(?:lun[aă]|luni|month)\b/i.test(cleaned);
+
+      if (lower.includes("ron") || lower.includes("lei")) {
+        const digits = parseFloat(cleaned.replace(/[^0-9.,]/g, "").replace(",", "."));
+        if (!isNaN(digits) && digits > 0) {
+          const eurVal = Math.round(digits / 5.0);
+          cleaned = `${eurVal} €${hasLuna ? " / lună" : ""}`;
+        }
+      }
       return cleaned || null;
     };
 

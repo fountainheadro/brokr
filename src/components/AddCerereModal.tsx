@@ -1,9 +1,9 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { X, ClipboardList, Loader2, Euro, Phone, User, MapPin } from "lucide-react";
+import { X, ClipboardList, Loader2, Euro, Phone, User, Plus } from "lucide-react";
 import { leadsService } from "../services/leadsService";
 import { notificationsService } from "../services/notificationsService";
-import { ZONA_OPTIONS } from "../constants";
+import { ZONA_OPTIONS, CATEGORIA_OPTIONS } from "../constants";
 import toast from "react-hot-toast";
 
 interface AddCerereModalProps {
@@ -18,10 +18,10 @@ export const CETATENIE_OPTIONS = [
 ];
 
 export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose, onSuccess }) => {
+  const [leadRole, setLeadRole] = useState<'Chirias' | 'Cumparator'>('Chirias');
+  const [categoria, setCategoria] = useState("Apartament");
   const [clientName, setClientName] = useState("");
   const [clientPhone, setClientPhone] = useState("");
-  const [transactionType, setTransactionType] = useState<"Vânzare" | "Închiriere">("Închiriere");
-  const [categoria, setCategoria] = useState("Apartament");
   const [zoneList, setZoneList] = useState<string[]>([]);
   const [currentZoneInput, setCurrentZoneInput] = useState("");
   const [showZoneDropdown, setShowZoneDropdown] = useState(false);
@@ -33,6 +33,8 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
+
+  const transactionType = leadRole === 'Chirias' ? 'Închiriere' : 'Vânzare';
 
   const filteredZones = ZONA_OPTIONS.filter(z => 
     z.toLowerCase().includes(currentZoneInput.toLowerCase()) && 
@@ -68,7 +70,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
 
       let notesContent = requirements.trim();
       if (transactionType === "Închiriere") {
-        notesContent += (notesContent ? " | " : "") + `Cetățenie: ${cetatenie} | Animal: ${animal}`;
+        notesContent += (notesContent ? " | " : "") + `Cetățenie: ${cetatenie} | Animale de companie: ${animal}`;
       }
 
       await leadsService.addLead({
@@ -81,7 +83,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
         transactionType,
         categoria,
         status: "Noua",
-        leadType: transactionType === "Închiriere" ? "Chirias" : "Cumparator",
+        leadType: leadRole,
         notes: notesContent.trim() ? `Cerințe cerere: ${notesContent.trim()}` : ""
       });
 
@@ -150,6 +152,39 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="p-5 space-y-3.5 overflow-y-auto text-xs flex-1">
+            {/* Row 1: Tip & Categorie */}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Tip
+                </label>
+                <select
+                  value={leadRole}
+                  onChange={(e) => setLeadRole(e.target.value as any)}
+                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer font-medium"
+                >
+                  <option value="Chirias">Chiriaș</option>
+                  <option value="Cumparator">Cumpărător</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Categorie
+                </label>
+                <select
+                  value={categoria}
+                  onChange={(e) => setCategoria(e.target.value)}
+                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                >
+                  {CATEGORIA_OPTIONS.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Row 2: Nume Client & Telefon */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
@@ -186,91 +221,43 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                  Tip Tranzacție
-                </label>
-                <select
-                  value={transactionType}
-                  onChange={(e) => setTransactionType(e.target.value as any)}
-                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
-                >
-                  <option value="Închiriere">Închiriere (Chiriaș)</option>
-                  <option value="Vânzare">Vânzare (Cumpărător)</option>
-                </select>
-              </div>
+            {/* Row 3: Cetatenie & Animale de companie (Only for Închiriere) */}
+            {transactionType === "Închiriere" && (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                    Cetățenie
+                  </label>
+                  <select
+                    value={cetatenie}
+                    onChange={(e) => setCetatenie(e.target.value)}
+                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                  >
+                    {CETATENIE_OPTIONS.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                  Categorie
-                </label>
-                <select
-                  value={categoria}
-                  onChange={(e) => setCategoria(e.target.value)}
-                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
-                >
-                  <option value="Apartament">Apartament</option>
-                  <option value="Garsonieră">Garsonieră / Studio</option>
-                  <option value="Casă / Vilă">Casă / Vilă</option>
-                  <option value="Spațiu Comercial">Spațiu Comercial</option>
-                  <option value="Birou">Birou</option>
-                  <option value="Teren">Teren</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Zona preferata - Auto-suggest multi selector */}
-            <div className="relative">
-              <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                Zonă preferată (Selectează din listă)
-              </label>
-              <div className="min-h-[32px] h-auto border border-gray-200 rounded-md p-1 bg-white focus-within:border-[#BE9662] focus-within:ring-1 focus-within:ring-[#BE9662] flex flex-wrap gap-1 items-center">
-                {zoneList.map((z) => (
-                  <span key={z} className="inline-flex items-center gap-1 bg-gray-100 text-gray-800 px-2 py-0.5 rounded text-[11px] font-medium border border-gray-200">
-                    {z}
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveZone(z)}
-                      className="text-gray-500 hover:text-red-600 cursor-pointer"
-                    >
-                      <X size={12} />
-                    </button>
-                  </span>
-                ))}
-                <div className="relative flex-1 min-w-[140px] flex items-center">
-                  <MapPin size={13} className="absolute left-2 text-gray-400 pointer-events-none" />
-                  <input
-                    type="text"
-                    value={currentZoneInput}
-                    onChange={(e) => {
-                      setCurrentZoneInput(e.target.value);
-                      setShowZoneDropdown(true);
-                    }}
-                    onFocus={() => setShowZoneDropdown(true)}
-                    placeholder="Caută zonă..."
-                    className="w-full h-6 pl-7 pr-2 text-xs border-0 focus:outline-none focus:ring-0 bg-transparent"
-                  />
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                    Animale de companie
+                  </label>
+                  <select
+                    value={animal}
+                    onChange={(e) => setAnimal(e.target.value as any)}
+                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                  >
+                    <option value="Fara">Fără</option>
+                    <option value="Caine">Câine</option>
+                    <option value="Pisica">Pisică</option>
+                    <option value="Altceva">Altceva</option>
+                  </select>
                 </div>
               </div>
+            )}
 
-              {/* Autocomplete Dropdown */}
-              {showZoneDropdown && currentZoneInput.trim().length > 0 && filteredZones.length > 0 && (
-                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-50 max-h-40 overflow-y-auto divide-y divide-gray-50">
-                  {filteredZones.map((z) => (
-                    <div
-                      key={z}
-                      onClick={() => handleSelectZone(z)}
-                      className="px-3 py-1.5 text-xs text-gray-800 hover:bg-gray-100 cursor-pointer"
-                    >
-                      {z}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Buget Minim & Buget Maxim */}
+            {/* Row 4: Buget Minim & Buget Maxim */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
@@ -305,42 +292,56 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               </div>
             </div>
 
-            {/* Cetatenie & Animal (Only for Închiriere) - Switched order, no outer container */}
-            {transactionType === "Închiriere" && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                    Cetățenie
-                  </label>
-                  <select
-                    value={cetatenie}
-                    onChange={(e) => setCetatenie(e.target.value)}
-                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
-                  >
-                    {CETATENIE_OPTIONS.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                    Animal de companie
-                  </label>
-                  <select
-                    value={animal}
-                    onChange={(e) => setAnimal(e.target.value as any)}
-                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
-                  >
-                    <option value="Fara">Fără</option>
-                    <option value="Caine">Câine</option>
-                    <option value="Pisica">Pisică</option>
-                    <option value="Altceva">Altceva</option>
-                  </select>
+            {/* Row 5: Zonă preferată */}
+            <div className="relative">
+              <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                Zonă preferată (Selectează din listă)
+              </label>
+              <div className="min-h-[32px] h-auto border border-gray-200 rounded-md p-1 bg-white focus-within:border-[#BE9662] focus-within:ring-1 focus-within:ring-[#BE9662] flex flex-wrap gap-1 items-center">
+                {zoneList.map((z) => (
+                  <span key={z} className="inline-flex items-center gap-1 bg-gray-100 text-gray-800 px-2 py-0.5 rounded text-[11px] font-medium border border-gray-200">
+                    {z}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveZone(z)}
+                      className="text-gray-500 hover:text-red-600 cursor-pointer"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                <div className="relative flex-1 min-w-[140px] flex items-center">
+                  <input
+                    type="text"
+                    value={currentZoneInput}
+                    onChange={(e) => {
+                      setCurrentZoneInput(e.target.value);
+                      setShowZoneDropdown(true);
+                    }}
+                    onFocus={() => setShowZoneDropdown(true)}
+                    placeholder="Caută zonă..."
+                    className="w-full h-6 px-2 text-xs border-0 focus:outline-none focus:ring-0 bg-transparent"
+                  />
                 </div>
               </div>
-            )}
 
+              {/* Autocomplete Dropdown */}
+              {showZoneDropdown && currentZoneInput.trim().length > 0 && filteredZones.length > 0 && (
+                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-50 max-h-40 overflow-y-auto divide-y divide-gray-50">
+                  {filteredZones.map((z) => (
+                    <div
+                      key={z}
+                      onClick={() => handleSelectZone(z)}
+                      className="px-3 py-1.5 text-xs text-gray-800 hover:bg-gray-100 cursor-pointer"
+                    >
+                      {z}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Row 6: Cerințe Specifice & Note */}
             <div>
               <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                 Cerințe Specifice & Note
@@ -365,12 +366,21 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               <button
                 type="submit"
                 disabled={loading}
-                className="px-4 py-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                className="h-8 px-4 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
               >
-                {loading && <Loader2 size={13} className="animate-spin" />}
-                <span>
-                  {transactionType === "Închiriere" ? "Adaugă Chiriaș" : "Adaugă Cumpărător"}
-                </span>
+                {loading ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin text-[#BE9662]" />
+                    <span>Se procesează...</span>
+                  </>
+                ) : (
+                  <>
+                    <Plus size={14} className="text-[#BE9662]" />
+                    <span>
+                      {leadRole === 'Chirias' ? 'Adaugă Chiriaș' : 'Adaugă Cumpărător'}
+                    </span>
+                  </>
+                )}
               </button>
             </div>
           </form>
