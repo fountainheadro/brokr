@@ -1006,7 +1006,7 @@ Returnează un JSON strict cu următoarele chei:
         return cleaned;
       };
 
-      // Priority 1: Check __NEXT_DATA__ for the target property's dedicated photo gallery
+      // Priority 1: Check __NEXT_DATA__ recursively for all property photo candidates
       let nextDataTargetImages: string[] = [];
       const nextDataScripts = $("script#__NEXT_DATA__, script:contains('__NEXT_DATA__')");
       if (nextDataScripts.length > 0) {
@@ -1014,22 +1014,27 @@ Returnează un JSON strict cu următoarele chei:
           const content = nextDataScripts.first().html() || "";
           if (content) {
             const data = JSON.parse(content);
-            const targetAd = data?.props?.pageProps?.ad || data?.props?.pageProps?.advert || data?.props?.pageProps?.offer;
-            const photoList = targetAd?.photos || targetAd?.images || targetAd?.gallery || targetAd?.media?.photos;
-            if (Array.isArray(photoList) && photoList.length > 0) {
-              photoList.forEach((item: any) => {
-                let candidate = item?.url || item?.large || item?.medium || item?.thumbnail || (typeof item === 'string' ? item : null);
-                if (!candidate && item?.filename) {
-                  candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
-                }
-                if (candidate && typeof candidate === 'string') {
-                  const promoted = promoteToHighRes(candidate);
-                  if (!isForbiddenGraphic(promoted)) {
-                    nextDataTargetImages.push(promoted);
+            const extractImagesRecursive = (obj: any) => {
+              if (!obj || typeof obj !== 'object') return;
+              if (Array.isArray(obj)) {
+                obj.forEach(item => extractImagesRecursive(item));
+                return;
+              }
+              for (const key of Object.keys(obj)) {
+                const val = obj[key];
+                if (typeof val === 'string' && (val.includes('http') || val.includes('.jpg') || val.includes('.png') || val.includes('.webp') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia'))) {
+                  if (imageExtensions.test(val) || val.includes('/files/') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia')) {
+                    const promoted = promoteToHighRes(val);
+                    if (!isForbiddenGraphic(promoted)) {
+                      nextDataTargetImages.push(promoted);
+                    }
                   }
+                } else if (val && typeof val === 'object') {
+                  extractImagesRecursive(val);
                 }
-              });
-            }
+              }
+            };
+            extractImagesRecursive(data?.props?.pageProps || data);
           }
         } catch (e) {}
       }
@@ -1093,10 +1098,9 @@ Returnează un JSON strict cu următoarele chei:
         ".slider-galerie, #anunt-galerie"
       );
 
-      // Never search full body to avoid grabbing thumbnails from recommendations and sidebar cards
       const searchScope = galleryContainers.length > 0 
         ? galleryContainers 
-        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article");
+        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article, body");
 
       searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
         const $el = $(el);
