@@ -679,11 +679,17 @@ Returnează un JSON strict cu următoarele chei:
   });
 
   // OpenGraph SSR route for rich link previews on WhatsApp and social media
-  app.get("/share/:id", async (req, res) => {
+  app.get("/share/:id", async (req, res, next) => {
+    const userAgent = (req.get('user-agent') || '').toLowerCase();
+    const isBot = /whatsapp|facebookexternalhit|twitterbot|linkedinbot|telegrambot|applebot|crawler|spider|bot|slackbot|discordbot/i.test(userAgent);
+    if (!isBot) {
+      return next();
+    }
+
     try {
       const { id } = req.params;
       if (!id) {
-        return res.sendFile(path.join(process.cwd(), 'index.html'));
+        return next();
       }
 
       const property = await fetchPropertyById(id);
