@@ -1,9 +1,8 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { X, ClipboardList, Loader2, Euro, Phone, User, Plus } from "lucide-react";
+import { X, ClipboardList, Loader2, Euro, Phone, User, MapPin, Plus } from "lucide-react";
 import { leadsService } from "../services/leadsService";
 import { notificationsService } from "../services/notificationsService";
-import { ZONA_OPTIONS, CATEGORIA_OPTIONS } from "../constants";
 import toast from "react-hot-toast";
 
 interface AddCerereModalProps {
@@ -18,13 +17,12 @@ export const CETATENIE_OPTIONS = [
 ];
 
 export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const [leadRole, setLeadRole] = useState<'Chirias' | 'Cumparator'>('Chirias');
-  const [categoria, setCategoria] = useState("Apartament");
   const [clientName, setClientName] = useState("");
   const [clientPhone, setClientPhone] = useState("");
+  const [transactionType, setTransactionType] = useState<"Vânzare" | "Închiriere">("Închiriere");
+  const [categoria, setCategoria] = useState("Apartament");
   const [zoneList, setZoneList] = useState<string[]>([]);
   const [currentZoneInput, setCurrentZoneInput] = useState("");
-  const [showZoneDropdown, setShowZoneDropdown] = useState(false);
   const [minBudget, setMinBudget] = useState("");
   const [maxBudget, setMaxBudget] = useState("");
   const [animal, setAnimal] = useState<"Fara" | "Caine" | "Pisica" | "Altceva">("Fara");
@@ -34,19 +32,14 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
 
   if (!isOpen) return null;
 
-  const transactionType = leadRole === 'Chirias' ? 'Închiriere' : 'Vânzare';
-
-  const filteredZones = ZONA_OPTIONS.filter(z => 
-    z.toLowerCase().includes(currentZoneInput.toLowerCase()) && 
-    !zoneList.includes(z)
-  ).slice(0, 8);
-
-  const handleSelectZone = (selectedZone: string) => {
-    if (!zoneList.includes(selectedZone)) {
-      setZoneList([...zoneList, selectedZone]);
+  const handleAddZone = (e: React.KeyboardEvent | React.MouseEvent) => {
+    if ('key' in e && e.key !== 'Enter') return;
+    e.preventDefault();
+    const trimmed = currentZoneInput.trim();
+    if (trimmed && !zoneList.includes(trimmed)) {
+      setZoneList([...zoneList, trimmed]);
+      setCurrentZoneInput("");
     }
-    setCurrentZoneInput("");
-    setShowZoneDropdown(false);
   };
 
   const handleRemoveZone = (zoneToRemove: string) => {
@@ -70,7 +63,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
 
       let notesContent = requirements.trim();
       if (transactionType === "Închiriere") {
-        notesContent += (notesContent ? " | " : "") + `Cetățenie: ${cetatenie} | Animale de companie: ${animal}`;
+        notesContent += (notesContent ? " | " : "") + `Animal: ${animal} | Cetățenie: ${cetatenie}`;
       }
 
       await leadsService.addLead({
@@ -83,7 +76,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
         transactionType,
         categoria,
         status: "Noua",
-        leadType: leadRole,
+        leadType: transactionType === "Închiriere" ? "Chirias" : "Cumparator",
         notes: notesContent.trim() ? `Cerințe cerere: ${notesContent.trim()}` : ""
       });
 
@@ -152,39 +145,6 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="p-5 space-y-3.5 overflow-y-auto text-xs flex-1">
-            {/* Row 1: Tip & Categorie */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                  Tip
-                </label>
-                <select
-                  value={leadRole}
-                  onChange={(e) => setLeadRole(e.target.value as any)}
-                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer font-medium"
-                >
-                  <option value="Chirias">Chiriaș</option>
-                  <option value="Cumparator">Cumpărător</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                  Categorie
-                </label>
-                <select
-                  value={categoria}
-                  onChange={(e) => setCategoria(e.target.value)}
-                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
-                >
-                  {CATEGORIA_OPTIONS.map((cat) => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Row 2: Nume Client & Telefon */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
@@ -198,7 +158,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                     value={clientName}
                     onChange={(e) => setClientName(e.target.value)}
                     placeholder="ex. Radu Popescu"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
@@ -215,49 +175,87 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                     value={clientPhone}
                     onChange={(e) => setClientPhone(e.target.value)}
                     placeholder="07xxxxxxxx"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Row 3: Cetatenie & Animale de companie (Only for Închiriere) */}
-            {transactionType === "Închiriere" && (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                    Cetățenie
-                  </label>
-                  <select
-                    value={cetatenie}
-                    onChange={(e) => setCetatenie(e.target.value)}
-                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
-                  >
-                    {CETATENIE_OPTIONS.map((c) => (
-                      <option key={c} value={c}>{c}</option>
-                    ))}
-                  </select>
-                </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Tip Tranzacție
+                </label>
+                <select
+                  value={transactionType}
+                  onChange={(e) => setTransactionType(e.target.value as any)}
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                >
+                  <option value="Închiriere">Închiriere (Chiriaș)</option>
+                  <option value="Vânzare">Vânzare (Cumpărător)</option>
+                </select>
+              </div>
 
-                <div>
-                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                    Animale de companie
-                  </label>
-                  <select
-                    value={animal}
-                    onChange={(e) => setAnimal(e.target.value as any)}
-                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Categorie
+                </label>
+                <select
+                  value={categoria}
+                  onChange={(e) => setCategoria(e.target.value)}
+                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                >
+                  <option value="Apartament">Apartament</option>
+                  <option value="Garsonieră">Garsonieră / Studio</option>
+                  <option value="Casă / Vilă">Casă / Vilă</option>
+                  <option value="Spațiu Comercial">Spațiu Comercial</option>
+                  <option value="Birou">Birou</option>
+                  <option value="Teren">Teren</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Zona preferata - Whole Row Multi Selector */}
+            <div>
+              <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                Zonă preferată (Adaugă una sau mai multe)
+              </label>
+              <div className="border border-gray-200 rounded-lg p-1.5 bg-white focus-within:border-[#BE9662] focus-within:ring-1 focus-within:ring-[#BE9662] flex flex-wrap gap-1.5 items-center">
+                {zoneList.map((z) => (
+                  <span key={z} className="inline-flex items-center gap-1 bg-[#BE9662]/15 text-[#051D35] px-2 py-0.5 rounded text-[11px] font-medium border border-[#BE9662]/30">
+                    {z}
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveZone(z)}
+                      className="text-[#051D35]/70 hover:text-red-600 cursor-pointer"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
+                <div className="relative flex-1 min-w-[120px] flex items-center">
+                  <MapPin size={14} className="absolute left-2 text-gray-400 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={currentZoneInput}
+                    onChange={(e) => setCurrentZoneInput(e.target.value)}
+                    onKeyDown={handleAddZone}
+                    placeholder="Scrie zona și apasă Enter..."
+                    className="w-full pl-7 pr-8 py-1 text-xs border-0 focus:outline-none focus:ring-0 bg-transparent"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleAddZone}
+                    className="absolute right-1 p-1 text-gray-400 hover:text-[#BE9662] cursor-pointer"
+                    title="Adaugă zonă"
                   >
-                    <option value="Fara">Fără</option>
-                    <option value="Caine">Câine</option>
-                    <option value="Pisica">Pisică</option>
-                    <option value="Altceva">Altceva</option>
-                  </select>
+                    <Plus size={14} />
+                  </button>
                 </div>
               </div>
-            )}
+            </div>
 
-            {/* Row 4: Buget Minim & Buget Maxim */}
+            {/* Buget Minim & Buget Maxim */}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
@@ -270,7 +268,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                     value={minBudget}
                     onChange={(e) => setMinBudget(e.target.value)}
                     placeholder="ex. 400"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
@@ -286,62 +284,48 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                     value={maxBudget}
                     onChange={(e) => setMaxBudget(e.target.value)}
                     placeholder="ex. 700"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
             </div>
 
-            {/* Row 5: Zonă preferată */}
-            <div className="relative">
-              <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                Zonă preferată (Selectează din listă)
-              </label>
-              <div className="min-h-[32px] h-auto border border-gray-200 rounded-md p-1 bg-white focus-within:border-[#BE9662] focus-within:ring-1 focus-within:ring-[#BE9662] flex flex-wrap gap-1 items-center">
-                {zoneList.map((z) => (
-                  <span key={z} className="inline-flex items-center gap-1 bg-gray-100 text-gray-800 px-2 py-0.5 rounded text-[11px] font-medium border border-gray-200">
-                    {z}
-                    <button
-                      type="button"
-                      onClick={() => handleRemoveZone(z)}
-                      className="text-gray-500 hover:text-red-600 cursor-pointer"
-                    >
-                      <X size={12} />
-                    </button>
-                  </span>
-                ))}
-                <div className="relative flex-1 min-w-[140px] flex items-center">
-                  <input
-                    type="text"
-                    value={currentZoneInput}
-                    onChange={(e) => {
-                      setCurrentZoneInput(e.target.value);
-                      setShowZoneDropdown(true);
-                    }}
-                    onFocus={() => setShowZoneDropdown(true)}
-                    placeholder="Caută zonă..."
-                    className="w-full h-6 px-2 text-xs border-0 focus:outline-none focus:ring-0 bg-transparent"
-                  />
+            {/* Animal & Cetatenie (Only for Închiriere) */}
+            {transactionType === "Închiriere" && (
+              <div className="grid grid-cols-2 gap-3 p-3 bg-amber-50/50 border border-amber-200/60 rounded-lg">
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                    Animal de companie
+                  </label>
+                  <select
+                    value={animal}
+                    onChange={(e) => setAnimal(e.target.value as any)}
+                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                  >
+                    <option value="Fara">Fără</option>
+                    <option value="Caine">Câine</option>
+                    <option value="Pisica">Pisică</option>
+                    <option value="Altceva">Altceva</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                    Cetățenie
+                  </label>
+                  <select
+                    value={cetatenie}
+                    onChange={(e) => setCetatenie(e.target.value)}
+                    className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                  >
+                    {CETATENIE_OPTIONS.map((c) => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
+            )}
 
-              {/* Autocomplete Dropdown */}
-              {showZoneDropdown && currentZoneInput.trim().length > 0 && filteredZones.length > 0 && (
-                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-md shadow-lg z-50 max-h-40 overflow-y-auto divide-y divide-gray-50">
-                  {filteredZones.map((z) => (
-                    <div
-                      key={z}
-                      onClick={() => handleSelectZone(z)}
-                      className="px-3 py-1.5 text-xs text-gray-800 hover:bg-gray-100 cursor-pointer"
-                    >
-                      {z}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Row 6: Cerințe Specifice & Note */}
             <div>
               <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                 Cerințe Specifice & Note
@@ -351,7 +335,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                 value={requirements}
                 onChange={(e) => setRequirements(e.target.value)}
                 placeholder="ex. Minim 60mp, decomandat, loc parcare, bloc după 2015..."
-                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] resize-none"
+                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] resize-none"
               />
             </div>
 
@@ -359,28 +343,19 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-md transition-colors cursor-pointer"
+                className="px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
               >
                 Anulează
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="h-8 px-4 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                className="px-4 py-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
               >
-                {loading ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin text-[#BE9662]" />
-                    <span>Se procesează...</span>
-                  </>
-                ) : (
-                  <>
-                    <Plus size={14} className="text-[#BE9662]" />
-                    <span>
-                      {leadRole === 'Chirias' ? 'Adaugă Chiriaș' : 'Adaugă Cumpărător'}
-                    </span>
-                  </>
-                )}
+                {loading && <Loader2 size={13} className="animate-spin" />}
+                <span>
+                  {transactionType === "Închiriere" ? "Adaugă Chiriaș" : "Adaugă Cumpărător"}
+                </span>
               </button>
             </div>
           </form>
