@@ -378,7 +378,7 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
 
                     <div>
                       <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                        Animale de companie
+                        Animal de companie
                       </label>
                       <select
                         value={animal}
