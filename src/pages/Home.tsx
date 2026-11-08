@@ -345,7 +345,7 @@ export const Home: React.FC = () => {
   const [sortOption, setSortOption] = useState<SortOption>('newest');
   const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>('Toate');
   const [leadRoleFilter, setLeadRoleFilter] = useState<LeadRoleFilter>('Toate');
-  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Imobile');
+  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Proprietati');
   const [navDirection, setNavDirection] = useState<number>(1);
   const location = useLocation();
 
@@ -354,7 +354,7 @@ export const Home: React.FC = () => {
       setNavDirection(-1);
       setSelectedLead(null);
     }
-    const normalized = subItem === 'Proprietăți' ? 'Imobile' : (subItem === 'Clienți' ? 'Contacte' : subItem);
+    const normalized = subItem === 'Imobile' || subItem === 'Proprietăți' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
       setActiveTab('Noi');
@@ -362,7 +362,7 @@ export const Home: React.FC = () => {
     } else if (normalized === 'Cereri') {
       setActiveTab('Noua');
       setTransactionFilter('Toate');
-    } else if (normalized === 'Imobile') {
+    } else if (normalized === 'Proprietati') {
       setActiveTab('Noua');
       setTransactionFilter('Toate');
     }
@@ -431,10 +431,10 @@ export const Home: React.FC = () => {
       };
     }
     return {
-      title: 'Imobile',
+      title: 'Proprietati',
       count: counts.proprietati,
-      description: 'Portofoliul complet de imobile (Nouă, Prospectare, Colaborare, Vizionare, Ofertare, Antecontract, Contract)',
-      searchPlaceholder: 'Caută imobile după titlu, zonă, ID (#P...), preț...',
+      description: 'Portofoliul complet de proprietati (Nouă, Prospectare, Colaborare, Vizionare, Ofertare, Antecontract, Contract)',
+      searchPlaceholder: 'Caută proprietati după titlu, zonă, ID (#P...), preț...',
       icon: <Building2 size={16} className="text-[#BE9662]" />
     };
   }, [activeSidebarItem, counts]);
@@ -1512,15 +1512,74 @@ export const Home: React.FC = () => {
   const handleConvertToImobil = async (leadId: string, updatedData: Partial<Lead>) => {
     try {
       const newPropId = await entityIdService.getNextId('property');
+      const leadObj = leads.find(l => l.id === leadId);
+      const mergedLead = { ...leadObj, ...updatedData };
+      const crmData = mergedLead.extractedData?.crmData;
+      const category = mergedLead.categoria || crmData?.detaliiGenerale?.categoria || "Apartament";
+      const transactionType = mergedLead.transactionType || crmData?.detaliiGenerale?.tranzactie || "Vânzare";
+      const zoneVal = crmData?.detaliiGenerale?.localizare?.zona || mergedLead.zone || "București";
+      const zone = Array.isArray(zoneVal) ? zoneVal[0] : (zoneVal || "București");
+      const price = mergedLead.price || crmData?.pret?.detalii?.pret || "";
+      const specs = crmData?.caracteristici || {};
+      const originalTitle = mergedLead.title || crmData?.descriere?.titlu || "";
+      const originalDescription = mergedLead.extractedData?.markdownMarketing || crmData?.descriere?.continut || "";
+
+      let formattedTitle = originalTitle;
+      let formattedDescription = originalDescription;
+
+      try {
+        const aiRes = await fetch("/api/generate-ai-text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category,
+            transactionType,
+            zone,
+            price,
+            specs,
+            originalTitle,
+            originalDescription,
+            propertyId: newPropId
+          })
+        });
+        if (aiRes.ok) {
+          const aiJson = await aiRes.json();
+          if (aiJson.title) formattedTitle = aiJson.title;
+          if (aiJson.description) formattedDescription = aiJson.description;
+        }
+      } catch (err) {
+        console.warn("AI formatting on convert to imobil failed:", err);
+      }
+
+      const updatedCrmData = crmData ? {
+        ...crmData,
+        descriere: {
+          disponibilitate: crmData.descriere?.disponibilitate || "",
+          video: crmData.descriere?.video || "",
+          turVirtual: crmData.descriere?.turVirtual || "",
+          ...(crmData.descriere || {}),
+          titlu: formattedTitle,
+          continut: formattedDescription
+        }
+      } : null;
+
       const finalPayload: Partial<Lead> = {
         ...updatedData,
         propertyId: newPropId,
+        title: formattedTitle,
         status: "Noua" as LeadStatus,
-        lastMovedAt: new Date()
+        lastMovedAt: new Date(),
+        extractedData: mergedLead.extractedData ? {
+          ...mergedLead.extractedData,
+          crmData: updatedCrmData,
+          markdownMarketing: formattedDescription,
+          summary: formattedDescription.substring(0, 300)
+        } : updatedData.extractedData
       };
+
       await leadsService.updateLeadData(leadId, finalPayload);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
-      toast.success(`Leadul a fost concretizat în Imobilul #${newPropId}!`);
+      toast.success(`Leadul a fost concretizat în Imobilul #${newPropId} cu titlul și descrierea formatate!`);
     } catch (e) {
       console.error("Failed to convert lead to imobil:", e);
       toast.error("Eroare la crearea imobilului!");
@@ -1599,10 +1658,80 @@ export const Home: React.FC = () => {
 
   const handleActivateCalificatLead = async (leadId: string) => {
     try {
-      await leadsService.updateLeadStatus(leadId, 'Noua');
-      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'Noua' } : l));
+      const leadObj = leads.find(l => l.id === leadId);
+      let newPropId = leadObj?.propertyId;
+      if (!newPropId) {
+        newPropId = await entityIdService.getNextId('property');
+      }
+
+      const crmData = leadObj?.extractedData?.crmData;
+      const category = leadObj?.categoria || crmData?.detaliiGenerale?.categoria || "Apartament";
+      const transactionType = leadObj?.transactionType || crmData?.detaliiGenerale?.tranzactie || "Vânzare";
+      const zoneVal = crmData?.detaliiGenerale?.localizare?.zona || leadObj?.zone || "București";
+      const zone = Array.isArray(zoneVal) ? zoneVal[0] : (zoneVal || "București");
+      const price = leadObj?.price || crmData?.pret?.detalii?.pret || "";
+      const specs = crmData?.caracteristici || {};
+      const originalTitle = leadObj?.title || crmData?.descriere?.titlu || "";
+      const originalDescription = leadObj?.extractedData?.markdownMarketing || crmData?.descriere?.continut || "";
+
+      let formattedTitle = originalTitle;
+      let formattedDescription = originalDescription;
+
+      try {
+        const aiRes = await fetch("/api/generate-ai-text", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            category,
+            transactionType,
+            zone,
+            price,
+            specs,
+            originalTitle,
+            originalDescription,
+            propertyId: newPropId
+          })
+        });
+        if (aiRes.ok) {
+          const aiJson = await aiRes.json();
+          if (aiJson.title) formattedTitle = aiJson.title;
+          if (aiJson.description) formattedDescription = aiJson.description;
+        }
+      } catch (err) {
+        console.warn("AI formatting on activate qualified lead failed:", err);
+      }
+
+      const updatedCrmData = crmData ? {
+        ...crmData,
+        descriere: {
+          disponibilitate: crmData.descriere?.disponibilitate || "",
+          video: crmData.descriere?.video || "",
+          turVirtual: crmData.descriere?.turVirtual || "",
+          ...(crmData.descriere || {}),
+          titlu: formattedTitle,
+          continut: formattedDescription
+        }
+      } : null;
+
+      const finalPayload: Partial<Lead> = {
+        propertyId: newPropId,
+        title: formattedTitle,
+        status: "Noua" as LeadStatus,
+        lastMovedAt: new Date(),
+        extractedData: leadObj?.extractedData ? {
+          ...leadObj.extractedData,
+          crmData: updatedCrmData,
+          markdownMarketing: formattedDescription,
+          summary: formattedDescription.substring(0, 300)
+        } : undefined
+      };
+
+      await leadsService.updateLeadData(leadId, finalPayload);
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
+      toast.success(`Leadul calificat a fost activat ca Imobil #${newPropId}!`);
     } catch (e) {
       console.error("Failed to activate lead:", e);
+      toast.error("Eroare la activarea leadului!");
       throw e;
     }
   };
@@ -1761,14 +1890,14 @@ export const Home: React.FC = () => {
                       </button>
                     )}
 
-                    {(activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
+                    {(activeSidebarItem === 'Proprietati' || activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
                       <button
                         type="button"
                         onClick={() => setIsModalOpen(true)}
                         className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
                       >
                         <Plus size={14} className="text-[#BE9662]" />
-                        <span>Adaugă Imobil</span>
+                        <span>Adaugă Proprietate</span>
                       </button>
                     )}
 
@@ -2314,7 +2443,7 @@ export const Home: React.FC = () => {
             } else if (targetLead.status === 'Noi' || targetLead.status === 'Pierdute' || targetLead.status === 'Nevalidata' || targetLead.status === 'Calificata') {
               handleSelectSidebarItem('Lead-uri');
             } else {
-              handleSelectSidebarItem('Imobile');
+              handleSelectSidebarItem('Proprietati');
             }
             setNavDirection(1);
             setSelectedLead(targetLead);
@@ -2326,7 +2455,7 @@ export const Home: React.FC = () => {
           } else if (notification.type === 'lead') {
             handleSelectSidebarItem('Lead-uri');
           } else {
-            handleSelectSidebarItem('Imobile');
+            handleSelectSidebarItem('Proprietati');
           }
         }}
       />
@@ -2508,6 +2637,25 @@ const BasicInfoSection = ({
         </div>
       </div>
       <InfoRow label="URL Sursă" value={url} isLink />
+
+      {/* Collapsible Accordion for Original Description Text from Original URL */}
+      <div className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-xs mt-4">
+        <details className="group">
+          <summary className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 cursor-pointer text-xs font-semibold text-gray-800 transition-colors select-none">
+            <span className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-[#BE9662]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
+              </svg>
+              <span>Descriere Originală din Anunțul Sursă</span>
+            </span>
+            <span className="text-[10px] text-gray-500 font-normal group-open:hidden">Afișează textul original</span>
+            <span className="text-[10px] text-gray-500 font-normal hidden group-open:inline">Ascunde</span>
+          </summary>
+          <div className="p-3.5 text-xs text-gray-700 bg-white border-t border-gray-200 max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+            {extractedData?.originalDescription || extractedData?.text || extractedData?.crmData?.descriere?.continut || extractedData?.markdownMarketing || "Niciun text de descriere original preluat din URL-ul sursă."}
+          </div>
+        </details>
+      </div>
     </div>
 
     {/* Column 2: Property Image */}

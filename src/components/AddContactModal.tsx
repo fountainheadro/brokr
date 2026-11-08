@@ -103,7 +103,8 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-5 space-y-4">
+          <form onSubmit={handleSubmit} className="p-5">
+            <fieldset disabled={loading} className="border-0 p-0 m-0 min-w-0 space-y-4">
             {/* First Name & Last Name */}
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -233,6 +234,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
                 <span>Salvează Contact</span>
               </button>
             </div>
+            </fieldset>
           </form>
         </motion.div>
       </div>

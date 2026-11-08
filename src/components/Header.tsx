@@ -361,7 +361,7 @@ export const Header: React.FC<HeaderProps> = ({
                 setIsSearchOpen(true);
               }
             }}
-            placeholder="Caută imobile, cereri, contacte, personal, documente sau vizionări..."
+            placeholder="Caută proprietati, cereri, contacte, personal, documente sau vizionări..."
             className="w-full h-full pl-11 pr-10 text-xs leading-[50px] text-gray-900 placeholder:text-gray-400 bg-transparent border-0 focus:outline-none focus:ring-0 font-sans cursor-text"
           />
           {localQuery && (
@@ -386,13 +386,13 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
               ) : (
                 <>
-                  {/* 1. Imobile (#P... / #L...) */}
+                  {/* 1. Proprietati (#P... / #L...) */}
                   {matchedProperties.length > 0 && (
                     <div>
                       <div className="px-4 py-1.5 bg-gray-50/90 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b border-gray-100 flex items-center justify-between">
                         <span className="flex items-center gap-1.5">
                           <Building2 size={12} className="text-gray-400" />
-                          Imobile ({matchedProperties.length})
+                          Proprietati ({matchedProperties.length})
                         </span>
                       </div>
                       <div className="divide-y divide-gray-50">

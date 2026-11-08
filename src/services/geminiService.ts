@@ -152,6 +152,8 @@ export interface ExtractionResult {
   markdownMarketing: string;
   summary: string;
   presentationSections?: Record<string, Record<string, string>> | null;
+  originalDescription?: string;
+  text?: string;
 }
 
 export interface BasicLeadData {

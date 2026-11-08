@@ -403,10 +403,73 @@ async function startServer() {
 
   // API endpoint for optional on-demand AI generation of title and description
   app.post("/api/generate-ai-text", async (req, res) => {
+    const generateLocalTemplateText = (body: any) => {
+      const { category, transactionType, zone, price, specs, propertyId } = body;
+      const cat = category || "Apartament";
+      const z = zone || "București";
+      const p = price || "N/A";
+      const idStr = propertyId ? propertyId.trim() : "";
+      const camere = specs?.detalii?.camere || "2";
+
+      const title = `${cat} ${camere} camere | ${z} | Mutare imediată`;
+      const transLabel = transactionType === "Închiriere" ? "ÎNCHIRIERE" : "VÂNZARE";
+
+      const description = `📌 ID ${idStr}
+🏡 ${title}
+
+Proprietate spațioasă și luminoasă, situată în zona ${z}, oferind acces facil către toate punctele de interes din oraș.
+Spațiul este ideal atât pentru locuință, cât și pentru investiție.
+
+━━━━━━━━━━━━━━━━━━
+
+⭐ AVANTAJE PRINCIPALE
+
+-${specs?.detalii?.compartimentare || "decomandat"}
+-amplasare excelentă în zonă liniștită
+-lumină naturală generoasă pe parcursul întregii zile
+-acces rapid la mijloacele de transport în comun
+
+━━━━━━━━━━━━━━━━━━
+
+🛋️ DOTĂRI
+
+-centrală proprie
+-finisaje moderne și calitate superioară
+-spații bine organizate pentru depozitare
+
+━━━━━━━━━━━━━━━━━━
+
+📍 LOCAȚIE
+
+Acces rapid către:
+-mijloace de transport în comun
+-magazine, supermarketuri și centre comerciale
+-zone verzi și parcuri în apropiere
+
+━━━━━━━━━━━━━━━━━━
+
+💰 ${transLabel}
+
+${p}${transactionType === "Închiriere" ? " / lună\n1 lună garanție\nComision 50% + TVA" : ""}
+Disponibil imediat
+
+━━━━━━━━━━━━━━━━━━
+
+🤝 SUPORT ${transLabel}
+
+-consultanță dedicată din partea agenției brokr
+-asistență completă în întocmirea contractului și înregistrarea ANAF
+-posibilitate de vizionare rapidă și flexibilă
+
+📞 Pentru vizionare sau detalii suplimentare, contactează-ne telefonic.`;
+
+      return { title, description };
+    };
+
     try {
       const { category, transactionType, zone, price, specs, originalTitle, originalDescription, propertyId } = req.body;
       if (!process.env.GEMINI_API_KEY) {
-        return res.status(400).json({ error: "Cheia GEMINI_API_KEY nu este configurată pe server." });
+        return res.json(generateLocalTemplateText(req.body));
       }
 
       const prompt = `
@@ -508,13 +571,92 @@ Returnează un JSON strict cu următoarele chei:
       const parsed = JSON.parse(text);
       res.json(parsed);
     } catch (e: any) {
-      console.error("[Server] /api/generate-ai-text error:", e);
-      const isCredits = e?.message?.includes("402") || e?.message?.includes("RESOURCE_EXHAUSTED") || e?.message?.includes("prepayment credits");
-      res.status(isCredits ? 402 : 500).json({ 
-        error: isCredits ? "Creditele preplătite Gemini sunt epuizate. Poți genera titlul și descrierea folosind butoanele Template clasice fără AI." : (e.message || "Eroare la generarea textului cu AI")
-      });
+      const errStr = e?.message || String(e || "");
+      if (!errStr.includes("402") && !errStr.includes("RESOURCE_EXHAUSTED") && !errStr.includes("prepayment credits")) {
+        console.warn("[Server] /api/generate-ai-text failed (using local template fallback):", errStr);
+      }
+      const fallback = generateLocalTemplateText(req.body);
+      res.json(fallback);
     }
   });
+
+  // Helper function to fetch property data from Firestore
+  async function fetchPropertyById(id: string): Promise<any> {
+    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    if (!fs.existsSync(configPath)) {
+      return null;
+    }
+    const fbConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const dbId = fbConfig.firestoreDatabaseId || "(default)";
+    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads/${encodeURIComponent(id)}?key=${fbConfig.apiKey}`;
+    
+    let docData: any = null;
+    let docId = id;
+
+    try {
+      const response = await axios.get(firestoreUrl, { timeout: 8000 });
+      if (response.data) {
+        docData = response.data;
+      }
+    } catch (directErr: any) {
+      const status = directErr.response?.status;
+      if (!status || status === 404 || status === 403 || status === 400) {
+        try {
+          const listUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads?key=${fbConfig.apiKey}`;
+          const listRes = await axios.get(listUrl, { timeout: 8000 });
+          const documents = listRes.data?.documents || [];
+          for (const docItem of documents) {
+            const nameParts = (docItem.name || "").split("/");
+            const currId = nameParts[nameParts.length - 1];
+            const fields = docItem.fields || {};
+            const propertyIdVal = fields.propertyId?.stringValue || "";
+            const extractedDataVal = fields.extractedData?.mapValue?.fields?.propertyId?.stringValue || "";
+            if (currId === id || propertyIdVal === id || extractedDataVal === id) {
+              docData = docItem;
+              docId = currId;
+              break;
+            }
+          }
+        } catch (listErr: any) {
+          console.warn("[Server] propertyId fallback list failed:", listErr.message);
+        }
+      } else {
+        throw directErr;
+      }
+    }
+
+    if (!docData) return null;
+
+    const parseValue = (fieldObj: any): any => {
+      if (!fieldObj || typeof fieldObj !== 'object') return fieldObj;
+      if ('stringValue' in fieldObj) return fieldObj.stringValue;
+      if ('integerValue' in fieldObj) return Number(fieldObj.integerValue);
+      if ('doubleValue' in fieldObj) return Number(fieldObj.doubleValue);
+      if ('booleanValue' in fieldObj) return fieldObj.booleanValue;
+      if ('timestampValue' in fieldObj) return fieldObj.timestampValue;
+      if ('nullValue' in fieldObj) return null;
+      if ('mapValue' in fieldObj) {
+        const resObj: any = {};
+        const fields = fieldObj.mapValue.fields || {};
+        for (const k of Object.keys(fields)) {
+          resObj[k] = parseValue(fields[k]);
+        }
+        return resObj;
+      }
+      if ('arrayValue' in fieldObj) {
+        const values = fieldObj.arrayValue.values || [];
+        return values.map((v: any) => parseValue(v));
+      }
+      return fieldObj;
+    };
+
+    const result: any = { id: docId };
+    const fields = docData.fields || {};
+    for (const k of Object.keys(fields)) {
+      result[k] = parseValue(fields[k]);
+    }
+    return result;
+  }
 
   // Public property endpoint for shared property links
   app.get("/api/public-property/:id", async (req, res) => {
@@ -522,95 +664,224 @@ Returnează un JSON strict cu următoarele chei:
       const { id } = req.params;
       if (!id) return res.status(400).json({ error: "Property ID required" });
 
-      const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-      if (!fs.existsSync(configPath)) {
-        return res.status(500).json({ error: "Firebase config not found" });
-      }
-      const fbConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      const dbId = fbConfig.firestoreDatabaseId || "(default)";
-      const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads/${encodeURIComponent(id)}?key=${fbConfig.apiKey}`;
-      
-      let docData: any = null;
-      let docId = id;
-
-      try {
-        const response = await axios.get(firestoreUrl, { timeout: 8000 });
-        if (response.data) {
-          docData = response.data;
-        }
-      } catch (directErr: any) {
-        if (directErr.response && directErr.response.status === 404) {
-          // If not found by document ID, try structuredQuery by propertyId field
-          try {
-            const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery?key=${fbConfig.apiKey}`;
-            const queryBody = {
-              structuredQuery: {
-                from: [{ collectionId: "leads" }],
-                where: {
-                  fieldFilter: {
-                    field: { fieldPath: "propertyId" },
-                    op: "EQUAL",
-                    value: { stringValue: id }
-                  }
-                },
-                limit: 1
-              }
-            };
-            const queryRes = await axios.post(queryUrl, queryBody, { timeout: 8000 });
-            if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
-              docData = queryRes.data[0].document;
-              const nameParts = (docData.name || "").split("/");
-              docId = nameParts[nameParts.length - 1] || id;
-            }
-          } catch (queryErr: any) {
-            console.warn("[Server] propertyId fallback query failed:", queryErr.message);
-          }
-        } else {
-          throw directErr;
-        }
-      }
-
-      if (!docData) {
+      const property = await fetchPropertyById(id);
+      if (!property) {
         return res.status(404).json({ error: "Property not found" });
       }
-
-      // Convert Firestore document fields to clean JS object
-      const parseValue = (fieldObj: any): any => {
-        if (!fieldObj || typeof fieldObj !== 'object') return fieldObj;
-        if ('stringValue' in fieldObj) return fieldObj.stringValue;
-        if ('integerValue' in fieldObj) return Number(fieldObj.integerValue);
-        if ('doubleValue' in fieldObj) return Number(fieldObj.doubleValue);
-        if ('booleanValue' in fieldObj) return fieldObj.booleanValue;
-        if ('timestampValue' in fieldObj) return fieldObj.timestampValue;
-        if ('nullValue' in fieldObj) return null;
-        if ('mapValue' in fieldObj) {
-          const resObj: any = {};
-          const fields = fieldObj.mapValue.fields || {};
-          for (const k of Object.keys(fields)) {
-            resObj[k] = parseValue(fields[k]);
-          }
-          return resObj;
-        }
-        if ('arrayValue' in fieldObj) {
-          const values = fieldObj.arrayValue.values || [];
-          return values.map((v: any) => parseValue(v));
-        }
-        return fieldObj;
-      };
-
-      const result: any = { id: docId };
-      const fields = docData.fields || {};
-      for (const k of Object.keys(fields)) {
-        result[k] = parseValue(fields[k]);
-      }
-
-      res.json(result);
+      res.json(property);
     } catch (e: any) {
       if (e.response && e.response.status === 404) {
         return res.status(404).json({ error: "Property not found" });
       }
       console.error("[Server] /api/public-property/:id error:", e.message || e);
       res.status(500).json({ error: "Failed to fetch public property" });
+    }
+  });
+
+  // OpenGraph SSR route for rich link previews on WhatsApp and social media
+  app.get("/share/:id", async (req, res, next) => {
+    const userAgent = (req.get('user-agent') || '').toLowerCase();
+    const isBot = /whatsapp|facebookexternalhit|twitterbot|linkedinbot|telegrambot|applebot|crawler|spider|bot|slackbot|discordbot/i.test(userAgent);
+    if (!isBot) {
+      return next();
+    }
+
+    try {
+      const { id } = req.params;
+      if (!id) {
+        return next();
+      }
+
+      const property = await fetchPropertyById(id);
+
+      const title = property?.extractedData?.crmData?.descriere?.titlu || property?.title || "Proprietate Imobiliară • brokr.";
+      let description = property?.extractedData?.crmData?.descriere?.continut || property?.description || "Proprietate imobiliară prezentată de brokr.";
+      description = description.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+      if (description.length > 200) {
+        description = description.substring(0, 197) + "...";
+      }
+
+      let imageUrl = property?.coverImage || "";
+      if (!imageUrl && property?.extractedData?.crmData?.imagini) {
+        const crmImagini = property.extractedData.crmData.imagini;
+        const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
+        for (const cat of categories) {
+          const list = crmImagini[cat];
+          if (Array.isArray(list) && list.length > 0) {
+            const first = list[0];
+            imageUrl = typeof first === "string" ? first : (first?.original || "");
+            if (imageUrl) break;
+          }
+        }
+      }
+      if (!imageUrl) {
+        imageUrl = `${req.protocol}://${req.get('host')}/public/og-default.jpg`;
+      }
+
+      const shareUrl = `${req.protocol}://${req.get('host')}/share/${id}`;
+
+      const indexPath = path.join(process.cwd(), 'index.html');
+      if (!fs.existsSync(indexPath)) {
+        return res.status(404).send("Not found");
+      }
+
+      let html = fs.readFileSync(indexPath, 'utf8');
+
+      const esc = (s: string) => String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+      const ogTags = `
+    <title>${esc(title)}</title>
+    <meta name="description" content="${esc(description)}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${esc(shareUrl)}" />
+    <meta property="og:title" content="${esc(title)}" />
+    <meta property="og:description" content="${esc(description)}" />
+    <meta property="og:image" content="${esc(imageUrl)}" />
+    <meta property="og:image:secure_url" content="${esc(imageUrl)}" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:site_name" content="brokr." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="${esc(title)}" />
+    <meta name="twitter:description" content="${esc(description)}" />
+    <meta name="twitter:image" content="${esc(imageUrl)}" />
+      `.trim();
+
+      html = html.replace(/<title>[\s\S]*?<\/title>/i, `<title>${esc(title)}</title>`);
+      html = html.replace(/<meta\s+name=["']description["'][^>]*>/gi, `<meta name="description" content="${esc(description)}" />`);
+      html = html.replace(/<meta\s+property=["']og:title["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+property=["']og:description["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+property=["']og:image["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+property=["']og:url["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:card["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:title["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:description["'][^>]*>/gi, '');
+      html = html.replace(/<meta\s+name=["']twitter:image["'][^>]*>/gi, '');
+
+      html = html.replace('</head>', `\n${ogTags}\n</head>`);
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
+    } catch (err: any) {
+      console.warn("[Server] /share/:id OpenGraph error:", err.message);
+      res.sendFile(path.join(process.cwd(), 'index.html'));
+    }
+  });
+
+  // Helper to extract price, phone number, and owner name from storia.ro or olx.ro HTML snippets
+  function extractListingDetails(html: string, url: string = "") {
+    const $ = cheerio.load(html || "");
+    
+    let source: "storia" | "olx" | null = null;
+    if (url.includes("storia.ro") || $('[data-cy*="storia"]').length > 0 || $('[data-sentry-component]').length > 0) {
+      source = "storia";
+    } else if (url.includes("olx.ro") || $('[data-testid*="ad"]').length > 0 || $('[data-nx-name]').length > 0) {
+      source = "olx";
+    }
+
+    if (!source) {
+      if ($('strong[data-cy="adPageHeaderPrice"], [data-sentry-element="Price"], div[data-sentry-component="MainPriceWrapper"]').length > 0) {
+        source = "storia";
+      } else if ($('div[data-testid="ad-price-container"], h3[data-nx-name="H3"]').length > 0) {
+        source = "olx";
+      }
+    }
+
+    let rawPrice: string | null = null;
+    let rawPhone: string | null = null;
+    let rawOwner: string | null = null;
+
+    const normalizeText = (text: string | null | undefined): string | null => {
+      if (!text) return null;
+      let cleaned = text.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      return cleaned || null;
+    };
+
+    const cleanPrice = (text: string | null | undefined): string | null => {
+      if (!text) return null;
+      let cleaned = text.replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      const lower = cleaned.toLowerCase();
+      const hasLuna = /\/(?:lun[aă]|luni|month)\b/i.test(cleaned);
+
+      if (lower.includes("ron") || lower.includes("lei")) {
+        const digits = parseFloat(cleaned.replace(/[^0-9.,]/g, "").replace(",", "."));
+        if (!isNaN(digits) && digits > 0) {
+          const eurVal = Math.round(digits / 5.0);
+          cleaned = `${eurVal} €${hasLuna ? " / lună" : ""}`;
+        }
+      }
+      return cleaned || null;
+    };
+
+    if (source === "storia") {
+      const priceEl = $('strong[data-cy="adPageHeaderPrice"]').first()
+        .add('[data-sentry-element="Price"]').first()
+        .add('div[data-sentry-component="MainPriceWrapper"] strong').first();
+      if (priceEl.length) rawPrice = priceEl.text();
+
+      const phoneEl = $('a[data-cy="phone-number.number-button"]').first()
+        .add('div[data-sentry-component="PhoneNumber"] a[href^="tel:"]').first();
+      if (phoneEl.length) {
+        rawPhone = phoneEl.attr("href")?.replace("tel:", "") || phoneEl.text();
+      } else {
+        const telHref = $('a[href^="tel:"]').first().attr("href");
+        if (telHref) rawPhone = telHref.replace("tel:", "");
+      }
+
+      const ownerEl = $('p.truncate.font-bold').first()
+        .add('p[class*="truncate"][class*="font-bold"]').first();
+      if (ownerEl.length) rawOwner = ownerEl.text();
+    } else if (source === "olx") {
+      const priceEl = $('div[data-testid="ad-price-container"] h3').first()
+        .add('[data-testid="ad-price-container"]').first()
+        .add('h3[data-nx-name="H3"]').first();
+      if (priceEl.length) rawPrice = priceEl.text();
+
+      const phoneEl = $('a[data-testid="contact-phone"]').first()
+        .add('button[data-testid="ad-contact-phone"] a[href^="tel:"]').first()
+        .add('button[data-cy="ad-contact-phone"] a').first();
+      if (phoneEl.length) {
+        rawPhone = phoneEl.attr("href")?.replace("tel:", "") || phoneEl.text();
+      } else {
+        const telHref = $('a[href^="tel:"]').first().attr("href");
+        if (telHref) rawPhone = telHref.replace("tel:", "");
+      }
+
+      const ownerEl = $('h4[data-testid="user-profile-user-name"]').first()
+        .add('h4[data-nx-name="H4"]').first();
+      if (ownerEl.length) rawOwner = ownerEl.text();
+    }
+
+    if (!rawPrice) {
+      const fallbackPrice = $('strong[data-cy="adPageHeaderPrice"], div[data-testid="ad-price-container"] h3, [data-sentry-element="Price"]').first();
+      if (fallbackPrice.length) rawPrice = fallbackPrice.text();
+    }
+    if (!rawPhone) {
+      const fallbackPhone = $('a[data-cy="phone-number.number-button"], a[data-testid="contact-phone"], a[href^="tel:"]').first();
+      if (fallbackPhone.length) {
+        rawPhone = fallbackPhone.attr("href")?.replace("tel:", "") || fallbackPhone.text();
+      }
+    }
+    if (!rawOwner) {
+      const fallbackOwner = $('p.truncate.font-bold, h4[data-testid="user-profile-user-name"]').first();
+      if (fallbackOwner.length) rawOwner = fallbackOwner.text();
+    }
+
+    return {
+      source: source || null,
+      price: cleanPrice(rawPrice),
+      phone_number: normalizeText(rawPhone),
+      owner_name: normalizeText(rawOwner)
+    };
+  }
+
+  app.post("/api/parse-listing-html", (req, res) => {
+    try {
+      const { html, url } = req.body;
+      const result = extractListingDetails(html || "", url || "");
+      res.json(result);
+    } catch (e: any) {
+      res.status(500).json({ source: null, price: null, phone_number: null, owner_name: null });
     }
   });
 
@@ -735,7 +1006,7 @@ Returnează un JSON strict cu următoarele chei:
         return cleaned;
       };
 
-      // Priority 1: Check __NEXT_DATA__ for the target property's dedicated photo gallery
+      // Priority 1: Check __NEXT_DATA__ recursively for all property photo candidates
       let nextDataTargetImages: string[] = [];
       const nextDataScripts = $("script#__NEXT_DATA__, script:contains('__NEXT_DATA__')");
       if (nextDataScripts.length > 0) {
@@ -743,22 +1014,27 @@ Returnează un JSON strict cu următoarele chei:
           const content = nextDataScripts.first().html() || "";
           if (content) {
             const data = JSON.parse(content);
-            const targetAd = data?.props?.pageProps?.ad || data?.props?.pageProps?.advert || data?.props?.pageProps?.offer;
-            const photoList = targetAd?.photos || targetAd?.images || targetAd?.gallery || targetAd?.media?.photos;
-            if (Array.isArray(photoList) && photoList.length > 0) {
-              photoList.forEach((item: any) => {
-                let candidate = item?.url || item?.large || item?.medium || item?.thumbnail || (typeof item === 'string' ? item : null);
-                if (!candidate && item?.filename) {
-                  candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
-                }
-                if (candidate && typeof candidate === 'string') {
-                  const promoted = promoteToHighRes(candidate);
-                  if (!isForbiddenGraphic(promoted)) {
-                    nextDataTargetImages.push(promoted);
+            const extractImagesRecursive = (obj: any) => {
+              if (!obj || typeof obj !== 'object') return;
+              if (Array.isArray(obj)) {
+                obj.forEach(item => extractImagesRecursive(item));
+                return;
+              }
+              for (const key of Object.keys(obj)) {
+                const val = obj[key];
+                if (typeof val === 'string' && (val.includes('http') || val.includes('.jpg') || val.includes('.png') || val.includes('.webp') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia'))) {
+                  if (imageExtensions.test(val) || val.includes('/files/') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia')) {
+                    const promoted = promoteToHighRes(val);
+                    if (!isForbiddenGraphic(promoted)) {
+                      nextDataTargetImages.push(promoted);
+                    }
                   }
+                } else if (val && typeof val === 'object') {
+                  extractImagesRecursive(val);
                 }
-              });
-            }
+              }
+            };
+            extractImagesRecursive(data?.props?.pageProps || data);
           }
         } catch (e) {}
       }
@@ -822,10 +1098,9 @@ Returnează un JSON strict cu următoarele chei:
         ".slider-galerie, #anunt-galerie"
       );
 
-      // Never search full body to avoid grabbing thumbnails from recommendations and sidebar cards
       const searchScope = galleryContainers.length > 0 
         ? galleryContainers 
-        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article");
+        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article, body");
 
       searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
         const $el = $(el);
@@ -1635,13 +1910,18 @@ Returnează un JSON strict cu următoarele chei:
         }
       };
 
+      const listingDetails = extractListingDetails(html, url);
+      const finalPrice = (formattedPrice && formattedPrice !== "N/A") ? formattedPrice : (listingDetails.price || "N/A");
+      const finalPhone = (sellerPhone && sellerPhone !== "Nespecificat") ? sellerPhone : (listingDetails.phone_number || "Nespecificat");
+      const finalOwner = (sellerName && sellerName !== "Nespecificat") ? sellerName : (listingDetails.owner_name || "Nespecificat");
+
       res.json({
         title: cleanTitle,
-        price: formattedPrice,
+        price: finalPrice,
         zone: zona,
         oras: oras,
-        ownerName: sellerName,
-        ownerPhone: sellerPhone,
+        ownerName: finalOwner,
+        ownerPhone: finalPhone,
         transactionType: transactionType,
         categoria: categoria,
         description: rawDescription,
