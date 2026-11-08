@@ -253,17 +253,17 @@ export const leadsService = {
         } as Lead;
       }
 
-      // Fallback: query by propertyId if direct document ID fetch misses
-      const q = query(collection(db, LEADS_COLLECTION), where("propertyId", "==", leadId));
-      const querySnap = await getDocs(q);
-      if (!querySnap.empty) {
-        const docSnap = querySnap.docs[0];
+      // Fallback: fetch all leads and match by document ID or propertyId
+      const querySnap = await getDocs(collection(db, LEADS_COLLECTION));
+      for (const docSnap of querySnap.docs) {
         const data = docSnap.data();
-        return {
-          id: docSnap.id,
-          ...data,
-          status: mapStatus(data.status || '')
-        } as Lead;
+        if (docSnap.id === leadId || data.propertyId === leadId || (data.extractedData && (data.extractedData as any).propertyId === leadId)) {
+          return {
+            id: docSnap.id,
+            ...data,
+            status: mapStatus(data.status || '')
+          } as Lead;
+        }
       }
 
       return null;

@@ -600,35 +600,25 @@ Returnează un JSON strict cu următoarele chei:
       }
     } catch (directErr: any) {
       const status = directErr.response?.status;
-      if (!status || status === 404 || status === 403) {
+      if (!status || status === 404 || status === 403 || status === 400) {
         try {
-          const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery?key=${fbConfig.apiKey}`;
-          const queryBody = {
-            structuredQuery: {
-              from: [{ collectionId: "leads" }],
-              where: {
-                fieldFilter: {
-                  field: { fieldPath: "propertyId" },
-                  op: "EQUAL",
-                  value: { stringValue: id }
-                }
-              },
-              limit: 1
-            }
-          };
-          const queryRes = await axios.post(queryUrl, queryBody, { timeout: 8000 });
-          if (Array.isArray(queryRes.data)) {
-            for (const item of queryRes.data) {
-              if (item?.document) {
-                docData = item.document;
-                const nameParts = (docData.name || "").split("/");
-                docId = nameParts[nameParts.length - 1] || id;
-                break;
-              }
+          const listUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads?key=${fbConfig.apiKey}`;
+          const listRes = await axios.get(listUrl, { timeout: 8000 });
+          const documents = listRes.data?.documents || [];
+          for (const docItem of documents) {
+            const nameParts = (docItem.name || "").split("/");
+            const currId = nameParts[nameParts.length - 1];
+            const fields = docItem.fields || {};
+            const propertyIdVal = fields.propertyId?.stringValue || "";
+            const extractedDataVal = fields.extractedData?.mapValue?.fields?.propertyId?.stringValue || "";
+            if (currId === id || propertyIdVal === id || extractedDataVal === id) {
+              docData = docItem;
+              docId = currId;
+              break;
             }
           }
-        } catch (queryErr: any) {
-          console.warn("[Server] propertyId fallback query failed:", queryErr.message);
+        } catch (listErr: any) {
+          console.warn("[Server] propertyId fallback list failed:", listErr.message);
         }
       } else {
         throw directErr;
