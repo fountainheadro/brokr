@@ -231,6 +231,7 @@ export const AddDocumentModal: React.FC<AddDocumentModalProps> = ({
                 )}
               </button>
             </div>
+            </fieldset>
           </form>
         </motion.div>
       </div>

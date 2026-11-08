@@ -599,7 +599,8 @@ Returnează un JSON strict cu următoarele chei:
         docData = response.data;
       }
     } catch (directErr: any) {
-      if (directErr.response && directErr.response.status === 404) {
+      const status = directErr.response?.status;
+      if (!status || status === 404 || status === 403) {
         try {
           const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery?key=${fbConfig.apiKey}`;
           const queryBody = {
