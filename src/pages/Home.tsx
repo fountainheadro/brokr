@@ -345,7 +345,7 @@ export const Home: React.FC = () => {
   const [sortOption, setSortOption] = useState<SortOption>('newest');
   const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>('Toate');
   const [leadRoleFilter, setLeadRoleFilter] = useState<LeadRoleFilter>('Toate');
-  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Proprietati');
+  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Imobile');
   const [navDirection, setNavDirection] = useState<number>(1);
   const location = useLocation();
 
@@ -354,7 +354,7 @@ export const Home: React.FC = () => {
       setNavDirection(-1);
       setSelectedLead(null);
     }
-    const normalized = subItem === 'Imobile' || subItem === 'Proprietăți' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
+    const normalized = subItem === 'Proprietăți' ? 'Imobile' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
       setActiveTab('Noi');
@@ -362,7 +362,7 @@ export const Home: React.FC = () => {
     } else if (normalized === 'Cereri') {
       setActiveTab('Noua');
       setTransactionFilter('Toate');
-    } else if (normalized === 'Proprietati') {
+    } else if (normalized === 'Imobile') {
       setActiveTab('Noua');
       setTransactionFilter('Toate');
     }
@@ -431,10 +431,10 @@ export const Home: React.FC = () => {
       };
     }
     return {
-      title: 'Proprietati',
+      title: 'Imobile',
       count: counts.proprietati,
-      description: 'Portofoliul complet de proprietati (Nouă, Prospectare, Colaborare, Vizionare, Ofertare, Antecontract, Contract)',
-      searchPlaceholder: 'Caută proprietati după titlu, zonă, ID (#P...), preț...',
+      description: 'Portofoliul complet de imobile (Nouă, Prospectare, Colaborare, Vizionare, Ofertare, Antecontract, Contract)',
+      searchPlaceholder: 'Caută imobile după titlu, zonă, ID (#P...), preț...',
       icon: <Building2 size={16} className="text-[#BE9662]" />
     };
   }, [activeSidebarItem, counts]);
@@ -1890,14 +1890,14 @@ export const Home: React.FC = () => {
                       </button>
                     )}
 
-                    {(activeSidebarItem === 'Proprietati' || activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
+                    {(activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
                       <button
                         type="button"
                         onClick={() => setIsModalOpen(true)}
                         className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
                       >
                         <Plus size={14} className="text-[#BE9662]" />
-                        <span>Adaugă Proprietate</span>
+                        <span>Adaugă Imobil</span>
                       </button>
                     )}
 
@@ -2443,7 +2443,7 @@ export const Home: React.FC = () => {
             } else if (targetLead.status === 'Noi' || targetLead.status === 'Pierdute' || targetLead.status === 'Nevalidata' || targetLead.status === 'Calificata') {
               handleSelectSidebarItem('Lead-uri');
             } else {
-              handleSelectSidebarItem('Proprietati');
+              handleSelectSidebarItem('Imobile');
             }
             setNavDirection(1);
             setSelectedLead(targetLead);
@@ -2455,7 +2455,7 @@ export const Home: React.FC = () => {
           } else if (notification.type === 'lead') {
             handleSelectSidebarItem('Lead-uri');
           } else {
-            handleSelectSidebarItem('Proprietati');
+            handleSelectSidebarItem('Imobile');
           }
         }}
       />
@@ -2637,25 +2637,6 @@ const BasicInfoSection = ({
         </div>
       </div>
       <InfoRow label="URL Sursă" value={url} isLink />
-
-      {/* Collapsible Accordion for Original Description Text from Original URL */}
-      <div className="border border-gray-200 rounded-lg overflow-hidden bg-white shadow-xs mt-4">
-        <details className="group">
-          <summary className="flex items-center justify-between p-3 bg-gray-50 hover:bg-gray-100 cursor-pointer text-xs font-semibold text-gray-800 transition-colors select-none">
-            <span className="flex items-center gap-2">
-              <svg className="w-4 h-4 text-[#BE9662]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
-              </svg>
-              <span>Descriere Originală din Anunțul Sursă</span>
-            </span>
-            <span className="text-[10px] text-gray-500 font-normal group-open:hidden">Afișează textul original</span>
-            <span className="text-[10px] text-gray-500 font-normal hidden group-open:inline">Ascunde</span>
-          </summary>
-          <div className="p-3.5 text-xs text-gray-700 bg-white border-t border-gray-200 max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-            {extractedData?.originalDescription || extractedData?.text || extractedData?.crmData?.descriere?.continut || extractedData?.markdownMarketing || "Niciun text de descriere original preluat din URL-ul sursă."}
-          </div>
-        </details>
-      </div>
     </div>
 
     {/* Column 2: Property Image */}

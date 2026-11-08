@@ -13,7 +13,7 @@ import { Contact } from "../services/contactsService";
 import { PersonalMember } from "../services/personalService";
 import { getCurrentVersion } from "../utils/versionService";
 
-export type NavSubItem = 'Lead-uri' | 'Cereri' | 'Proprietati' | 'Imobile' | 'Proprietăți' | 'Contacte' | 'Clienți' | 'Personal';
+export type NavSubItem = 'Lead-uri' | 'Cereri' | 'Imobile' | 'Proprietăți' | 'Contacte' | 'Clienți' | 'Personal';
 export type NavTransactionType = 'Închiriere' | 'Vânzare';
 
 interface SidebarProps {
@@ -62,7 +62,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (location.pathname !== '/') {
       navigate('/');
     }
-    const normalizedItem = subItem === 'Imobile' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
+    const normalizedItem = subItem === 'Proprietăți' ? 'Imobile' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     if (onSelectItem) {
       onSelectItem(normalizedItem);
     } else if (onSelectNav) {
@@ -85,7 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     };
   }, [leads, contacts, personal]);
 
-  const isImobileActive = activeSubItem === 'Proprietati' || activeSubItem === 'Imobile' || activeSubItem === 'Proprietăți';
+  const isImobileActive = activeSubItem === 'Imobile' || activeSubItem === 'Proprietăți';
   const isContacteActive = activeSubItem === 'Contacte' || activeSubItem === 'Clienți';
   const versionInfo = getCurrentVersion();
 
@@ -185,10 +185,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </button>
 
-            {/* Proprietati */}
+            {/* Imobile */}
             <button
               type="button"
-              onClick={() => handleItemClick('Proprietati')}
+              onClick={() => handleItemClick('Imobile')}
               className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 isImobileActive && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
@@ -197,7 +197,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <div className="flex items-center gap-3 min-w-0">
                 <Building2 size={18} className={isImobileActive && location.pathname !== '/calendar' ? 'text-[#BE9662]' : 'text-gray-500'} />
-                <span className="text-[13px] font-sans font-medium truncate">Proprietati</span>
+                <span className="text-[13px] font-sans font-medium truncate">Imobile</span>
               </div>
               {counts.proprietati > 0 && (
                 <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
@@ -283,13 +283,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => handleItemClick('Proprietati')}
+              onClick={() => handleItemClick('Imobile')}
               className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
                 isImobileActive && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
                   : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
               }`}
-              title={`Proprietati (${counts.proprietati})`}
+              title={`Imobile (${counts.proprietati})`}
             >
               <Building2 size={18} />
             </button>
