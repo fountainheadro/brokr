@@ -151,8 +151,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-5 overflow-y-auto text-xs flex-1">
-            <fieldset disabled={loading} className="border-0 p-0 m-0 min-w-0 space-y-3.5 flex-1 flex flex-col">
+          <form onSubmit={handleSubmit} className="p-5 space-y-3.5 overflow-y-auto text-xs flex-1">
             {/* Row 1: Tip & Categorie */}
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -384,7 +383,6 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                 )}
               </button>
             </div>
-            </fieldset>
           </form>
         </motion.div>
       </div>

@@ -23,7 +23,8 @@ service cloud.firestore {
     // --- Collection Routes ---
 
     match /leads/{leadId} {
-      allow read: if true;
+      allow get: if true;
+      allow list: if isSignedIn();
       allow create, update: if isSignedIn();
       allow delete: if isAdmin();
     }

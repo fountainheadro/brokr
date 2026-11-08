@@ -599,26 +599,30 @@ Returnează un JSON strict cu următoarele chei:
         docData = response.data;
       }
     } catch (directErr: any) {
-      const status = directErr.response?.status;
-      if (!status || status === 404 || status === 403 || status === 400) {
+      if (directErr.response && directErr.response.status === 404) {
         try {
-          const listUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads?key=${fbConfig.apiKey}`;
-          const listRes = await axios.get(listUrl, { timeout: 8000 });
-          const documents = listRes.data?.documents || [];
-          for (const docItem of documents) {
-            const nameParts = (docItem.name || "").split("/");
-            const currId = nameParts[nameParts.length - 1];
-            const fields = docItem.fields || {};
-            const propertyIdVal = fields.propertyId?.stringValue || "";
-            const extractedDataVal = fields.extractedData?.mapValue?.fields?.propertyId?.stringValue || "";
-            if (currId === id || propertyIdVal === id || extractedDataVal === id) {
-              docData = docItem;
-              docId = currId;
-              break;
+          const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery?key=${fbConfig.apiKey}`;
+          const queryBody = {
+            structuredQuery: {
+              from: [{ collectionId: "leads" }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: "propertyId" },
+                  op: "EQUAL",
+                  value: { stringValue: id }
+                }
+              },
+              limit: 1
             }
+          };
+          const queryRes = await axios.post(queryUrl, queryBody, { timeout: 8000 });
+          if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
+            docData = queryRes.data[0].document;
+            const nameParts = (docData.name || "").split("/");
+            docId = nameParts[nameParts.length - 1] || id;
           }
-        } catch (listErr: any) {
-          console.warn("[Server] propertyId fallback list failed:", listErr.message);
+        } catch (queryErr: any) {
+          console.warn("[Server] propertyId fallback query failed:", queryErr.message);
         }
       } else {
         throw directErr;
@@ -679,17 +683,11 @@ Returnează un JSON strict cu următoarele chei:
   });
 
   // OpenGraph SSR route for rich link previews on WhatsApp and social media
-  app.get("/share/:id", async (req, res, next) => {
-    const userAgent = (req.get('user-agent') || '').toLowerCase();
-    const isBot = /whatsapp|facebookexternalhit|twitterbot|linkedinbot|telegrambot|applebot|crawler|spider|bot|slackbot|discordbot/i.test(userAgent);
-    if (!isBot) {
-      return next();
-    }
-
+  app.get("/share/:id", async (req, res) => {
     try {
       const { id } = req.params;
       if (!id) {
-        return next();
+        return res.sendFile(path.join(process.cwd(), 'index.html'));
       }
 
       const property = await fetchPropertyById(id);
@@ -1006,7 +1004,7 @@ Returnează un JSON strict cu următoarele chei:
         return cleaned;
       };
 
-      // Priority 1: Check __NEXT_DATA__ recursively for all property photo candidates
+      // Priority 1: Check __NEXT_DATA__ for the target property's dedicated photo gallery
       let nextDataTargetImages: string[] = [];
       const nextDataScripts = $("script#__NEXT_DATA__, script:contains('__NEXT_DATA__')");
       if (nextDataScripts.length > 0) {
@@ -1014,27 +1012,22 @@ Returnează un JSON strict cu următoarele chei:
           const content = nextDataScripts.first().html() || "";
           if (content) {
             const data = JSON.parse(content);
-            const extractImagesRecursive = (obj: any) => {
-              if (!obj || typeof obj !== 'object') return;
-              if (Array.isArray(obj)) {
-                obj.forEach(item => extractImagesRecursive(item));
-                return;
-              }
-              for (const key of Object.keys(obj)) {
-                const val = obj[key];
-                if (typeof val === 'string' && (val.includes('http') || val.includes('.jpg') || val.includes('.png') || val.includes('.webp') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia'))) {
-                  if (imageExtensions.test(val) || val.includes('/files/') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia')) {
-                    const promoted = promoteToHighRes(val);
-                    if (!isForbiddenGraphic(promoted)) {
-                      nextDataTargetImages.push(promoted);
-                    }
-                  }
-                } else if (val && typeof val === 'object') {
-                  extractImagesRecursive(val);
+            const targetAd = data?.props?.pageProps?.ad || data?.props?.pageProps?.advert || data?.props?.pageProps?.offer;
+            const photoList = targetAd?.photos || targetAd?.images || targetAd?.gallery || targetAd?.media?.photos;
+            if (Array.isArray(photoList) && photoList.length > 0) {
+              photoList.forEach((item: any) => {
+                let candidate = item?.url || item?.large || item?.medium || item?.thumbnail || (typeof item === 'string' ? item : null);
+                if (!candidate && item?.filename) {
+                  candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
                 }
-              }
-            };
-            extractImagesRecursive(data?.props?.pageProps || data);
+                if (candidate && typeof candidate === 'string') {
+                  const promoted = promoteToHighRes(candidate);
+                  if (!isForbiddenGraphic(promoted)) {
+                    nextDataTargetImages.push(promoted);
+                  }
+                }
+              });
+            }
           }
         } catch (e) {}
       }
@@ -1098,9 +1091,10 @@ Returnează un JSON strict cu următoarele chei:
         ".slider-galerie, #anunt-galerie"
       );
 
+      // Never search full body to avoid grabbing thumbnails from recommendations and sidebar cards
       const searchScope = galleryContainers.length > 0 
         ? galleryContainers 
-        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article, body");
+        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article");
 
       searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
         const $el = $(el);

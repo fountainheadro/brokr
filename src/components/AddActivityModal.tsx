@@ -148,8 +148,7 @@ export const AddActivityModal: React.FC<AddActivityModalProps> = ({
           </div>
 
           {/* Form */}
-          <form onSubmit={handleSubmit} className="p-5">
-            <fieldset disabled={isSubmitting} className="border-0 p-0 m-0 min-w-0 space-y-3.5">
+          <form onSubmit={handleSubmit} className="p-5 space-y-3.5 text-xs">
             {/* Tip Activitate */}
             <div>
               <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
@@ -310,7 +309,6 @@ export const AddActivityModal: React.FC<AddActivityModalProps> = ({
                 )}
               </button>
             </div>
-            </fieldset>
           </form>
         </motion.div>
       </div>
