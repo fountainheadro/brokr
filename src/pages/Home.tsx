@@ -28,6 +28,7 @@ import { notificationsService, Notification as AppNotification } from "../servic
 import { motion, AnimatePresence, Transition } from "motion/react";
 import { extractData, extractBasicData } from "../services/geminiService";
 import { toast } from "react-hot-toast";
+import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
 import { 
   DetaliiGeneraleSection, 
   CaracteristiciSection, 
@@ -807,30 +808,40 @@ export const Home: React.FC = () => {
       console.log(`[Home] Crawler found ${rawImages?.length || 0} raw images`);
       
       setExtractionStatus("Filtrare imagini...");
+      // Relaxed image filtering: Ensure all property photos from crawler are retained, only dropping confirmed microscopic tracker pixels (< 40x40)
       const filterImagesBySize = async (urls: string[]): Promise<string[]> => {
+        if (!urls || urls.length === 0) return [];
         const filteredUrls: string[] = [];
         
-        // Check in batches of 8 to keep it incredibly fast without overloading the browser or server connection pooling
         const checkChunk = async (chunk: string[]) => {
           const promises = chunk.map(url => {
             return new Promise<void>((resolve) => {
               const img = new Image();
-              const timeout = setTimeout(() => {
-                img.src = "";
-                resolve();
-              }, 6000); // 6s timeout
-              
-              img.onload = () => {
+              let finished = false;
+              const complete = (keep: boolean) => {
+                if (finished) return;
+                finished = true;
                 clearTimeout(timeout);
-                // Accept if dimensions are unknown (0) or >= 150px to ensure all gallery photos are imported
-                if (img.width === 0 || img.height === 0 || img.width >= 150 || img.height >= 150) {
-                  filteredUrls.push(url);
-                }
+                if (keep) filteredUrls.push(url);
                 resolve();
               };
+
+              const timeout = setTimeout(() => {
+                // Relaxed rule: Never drop property images on timeout
+                complete(true);
+              }, 3000);
+              
+              img.onload = () => {
+                // Relaxed rule: Only discard confirmed tiny tracking pixels/icons (< 40x40)
+                if (img.width > 0 && img.height > 0 && img.width < 40 && img.height < 40) {
+                  complete(false);
+                } else {
+                  complete(true);
+                }
+              };
               img.onerror = () => {
-                clearTimeout(timeout);
-                resolve();
+                // Relaxed rule: Never drop property images on proxy or CORS error
+                complete(true);
               };
               img.src = `/api/proxy-image?url=${encodeURIComponent(url)}&noclean=true`;
             });
@@ -842,7 +853,7 @@ export const Home: React.FC = () => {
           await checkChunk(urls.slice(i, i + 8));
         }
         
-        return filteredUrls;
+        return filteredUrls.length > 0 ? filteredUrls : urls;
       };
 
       const images = await filterImagesBySize(rawImages || []);
@@ -895,11 +906,30 @@ export const Home: React.FC = () => {
 
       const deepCoverImage = images && images.length > 0 ? images[0] : lead.coverImage;
 
+      const finalTitle = finalCrmData.descriere?.titlu || title || generateStandardAdTitle({
+        categoria: categoria || lead.categoria || "Apartament",
+        camere: finalCrmData.caracteristici?.detalii?.camere,
+        suprafataUtila: finalCrmData.caracteristici?.suprafete?.utila,
+        zona: zone || lead.zone,
+        compartimentare: finalCrmData.caracteristici?.detalii?.compartimentare,
+        rawText: description || text || ""
+      });
+      finalCrmData.descriere.titlu = finalTitle;
+
+      let resolvedPrice = price || lead.price || "N/A";
+      if (resolvedPrice !== "N/A" && (resolvedPrice.toLowerCase().includes("ron") || resolvedPrice.toLowerCase().includes("lei"))) {
+        const digits = parseFloat(resolvedPrice.replace(/[^0-9.,]/g, "").replace(",", "."));
+        if (!isNaN(digits) && digits > 0) {
+          const inEur = Math.round(digits / 4.97);
+          resolvedPrice = `${inEur.toLocaleString("ro-RO")} €${transType === "Închiriere" ? " / lună" : ""}`;
+        }
+      }
+
       const updatedFields = {
         extractedData: extraction,
         categoria: finalCrmData.detaliiGenerale?.categoria || categoria || lead.categoria || "Apartament",
-        title: finalCrmData.descriere?.titlu || title || lead.title || "Fără titlu",
-        price: price || lead.price || "N/A",
+        title: finalTitle,
+        price: resolvedPrice,
         ownerName: ownerName || finalCrmData.detaliiGenerale?.proprietar || lead.ownerName || "Nespecificat",
         ownerPhone: ownerPhone || finalCrmData.detaliiGenerale?.contacteAditionale || lead.ownerPhone || "Nespecificat",
         transactionType: transType as "Închiriere" | "Vânzare",

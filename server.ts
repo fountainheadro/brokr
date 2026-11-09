@@ -14,6 +14,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { defaultFormats, defaultPlugins } from "jimp";
 import { createJimp } from "@jimp/core";
 import webp from "@jimp/wasm-webp";
+import { generateStandardAdTitle } from "./src/utils/propertyTitleGenerator";
 
 // Intercept global fetch so we can load @jsquash/webp WASM files locally instead of triggering sandbox fetch errors
 const originalFetch = global.fetch;
@@ -599,26 +600,30 @@ Returnează un JSON strict cu următoarele chei:
         docData = response.data;
       }
     } catch (directErr: any) {
-      const status = directErr.response?.status;
-      if (!status || status === 404 || status === 403 || status === 400) {
+      if (directErr.response && directErr.response.status === 404) {
         try {
-          const listUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads?key=${fbConfig.apiKey}`;
-          const listRes = await axios.get(listUrl, { timeout: 8000 });
-          const documents = listRes.data?.documents || [];
-          for (const docItem of documents) {
-            const nameParts = (docItem.name || "").split("/");
-            const currId = nameParts[nameParts.length - 1];
-            const fields = docItem.fields || {};
-            const propertyIdVal = fields.propertyId?.stringValue || "";
-            const extractedDataVal = fields.extractedData?.mapValue?.fields?.propertyId?.stringValue || "";
-            if (currId === id || propertyIdVal === id || extractedDataVal === id) {
-              docData = docItem;
-              docId = currId;
-              break;
+          const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery?key=${fbConfig.apiKey}`;
+          const queryBody = {
+            structuredQuery: {
+              from: [{ collectionId: "leads" }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: "propertyId" },
+                  op: "EQUAL",
+                  value: { stringValue: id }
+                }
+              },
+              limit: 1
             }
+          };
+          const queryRes = await axios.post(queryUrl, queryBody, { timeout: 8000 });
+          if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
+            docData = queryRes.data[0].document;
+            const nameParts = (docData.name || "").split("/");
+            docId = nameParts[nameParts.length - 1] || id;
           }
-        } catch (listErr: any) {
-          console.warn("[Server] propertyId fallback list failed:", listErr.message);
+        } catch (queryErr: any) {
+          console.warn("[Server] propertyId fallback query failed:", queryErr.message);
         }
       } else {
         throw directErr;
@@ -679,17 +684,11 @@ Returnează un JSON strict cu următoarele chei:
   });
 
   // OpenGraph SSR route for rich link previews on WhatsApp and social media
-  app.get("/share/:id", async (req, res, next) => {
-    const userAgent = (req.get('user-agent') || '').toLowerCase();
-    const isBot = /whatsapp|facebookexternalhit|twitterbot|linkedinbot|telegrambot|applebot|crawler|spider|bot|slackbot|discordbot/i.test(userAgent);
-    if (!isBot) {
-      return next();
-    }
-
+  app.get("/share/:id", async (req, res) => {
     try {
       const { id } = req.params;
       if (!id) {
-        return next();
+        return res.sendFile(path.join(process.cwd(), 'index.html'));
       }
 
       const property = await fetchPropertyById(id);
@@ -957,9 +956,7 @@ Returnează un JSON strict cu următoarele chei:
           "favicon", "button", "arrow", "pin", "pixel", "tracking", "analytics",
           "user", "profile", "agent", "broker", "agentie", "dezvoltator", "developer",
           "sponsor", "promovat", "blank", "default", "spinner", "loader", ".svg",
-          "schita", "plan", "schiță", "document", "pdf", ".gif", "thumb_", "small_",
-          "150x150", "75x75", "100x100", "160x120", "200x150", "50x50", "60x60", "32x32",
-          "card_thumb", "list_thumb", "mini_thumb", "recommend", "similar", "related",
+          "document", "pdf", ".gif", "recommend", "similar", "related",
           "header", "footer", "navbar", "ad-banner"
         ];
         return badPatterns.some(p => lower.includes(p));
@@ -973,7 +970,7 @@ Returnează un JSON strict cu următoarele chei:
         // Imobiliare.ro & Roamcdn high-resolution promotions
         if (cleaned.includes("imobiliare.ro") || cleaned.includes("roamcdn")) {
           cleaned = cleaned
-            .replace(/_(?:75x75|150x150|160x120|400x300)\.jpg/gi, "_800x600.jpg")
+            .replace(/_(?:75x75|100x100|150x150|160x120|200x150|400x300|640x480)\.jpg/gi, "_800x600.jpg")
             .replace(/\/thumb\//gi, "/large/")
             .replace(/\/small\//gi, "/large/")
             .replace(/\/medium\//gi, "/large/");
@@ -1006,7 +1003,45 @@ Returnează un JSON strict cu următoarele chei:
         return cleaned;
       };
 
-      // Priority 1: Check __NEXT_DATA__ recursively for all property photo candidates
+      // Priority 0: Dedicated Storia mosaic gallery view ([data-cy="mosaic-gallery-main-view"])
+      let mosaicGalleryImages: string[] = [];
+      const mosaicSelectors = [
+        '[data-cy="mosaic-gallery-main-view"]',
+        '[data-cy*="mosaic-gallery"]',
+        '[data-sentry-component="BaseMainView"]',
+        '[data-sentry-source-file*="MainView"]',
+        '[data-cy*="gallery-main-view"]'
+      ];
+      const $mosaic = $(mosaicSelectors.join(", "));
+      if ($mosaic.length > 0) {
+        $mosaic.find("img, source, a, button, div, picture").each((_, el) => {
+          const $el = $(el);
+          const src = $el.attr("src");
+          const dataSrc = $el.attr("data-src") || $el.attr("data-lazy") || $el.attr("data-full");
+          const srcset = $el.attr("srcset") || $el.attr("data-srcset");
+          const style = $el.attr("style");
+          let candidates = [src, dataSrc];
+          if (srcset) {
+            candidates.push(...srcset.split(",").map(s => s.trim().split(" ")[0]));
+          }
+          if (style && style.includes("url(")) {
+            const m = style.match(/url\(['"]?([^'"]+)['"]?\)/);
+            if (m) candidates.push(m[1]);
+          }
+          candidates.forEach(raw => {
+            if (!raw || typeof raw !== "string") return;
+            let absUrl = raw.trim().replace(/\\/g, "");
+            if (absUrl.startsWith("//")) absUrl = "https:" + absUrl;
+            if (!absUrl.startsWith("http")) return;
+            const promoted = promoteToHighRes(absUrl);
+            if (!isForbiddenGraphic(promoted)) {
+              mosaicGalleryImages.push(promoted);
+            }
+          });
+        });
+      }
+
+      // Priority 1: Check __NEXT_DATA__ for the target property's dedicated photo gallery
       let nextDataTargetImages: string[] = [];
       const nextDataScripts = $("script#__NEXT_DATA__, script:contains('__NEXT_DATA__')");
       if (nextDataScripts.length > 0) {
@@ -1014,27 +1049,25 @@ Returnează un JSON strict cu următoarele chei:
           const content = nextDataScripts.first().html() || "";
           if (content) {
             const data = JSON.parse(content);
-            const extractImagesRecursive = (obj: any) => {
-              if (!obj || typeof obj !== 'object') return;
-              if (Array.isArray(obj)) {
-                obj.forEach(item => extractImagesRecursive(item));
-                return;
-              }
-              for (const key of Object.keys(obj)) {
-                const val = obj[key];
-                if (typeof val === 'string' && (val.includes('http') || val.includes('.jpg') || val.includes('.png') || val.includes('.webp') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia'))) {
-                  if (imageExtensions.test(val) || val.includes('/files/') || val.includes('apollo') || val.includes('roamcdn') || val.includes('storia')) {
-                    const promoted = promoteToHighRes(val);
-                    if (!isForbiddenGraphic(promoted)) {
-                      nextDataTargetImages.push(promoted);
-                    }
-                  }
-                } else if (val && typeof val === 'object') {
-                  extractImagesRecursive(val);
+            const targetAd = data?.props?.pageProps?.ad || data?.props?.pageProps?.advert || data?.props?.pageProps?.offer || data?.props?.pageProps?.listing || data?.props?.pageProps?.data;
+            const photoList = targetAd?.photos || targetAd?.images || targetAd?.listingImages || targetAd?.gallery || targetAd?.media?.photos || targetAd?.media?.images || data?.props?.pageProps?.gallery;
+            if (Array.isArray(photoList) && photoList.length > 0) {
+              photoList.forEach((item: any) => {
+                let candidate = item?.large || item?.medium || item?.url || item?.thumbnail || item?.small || item?.src || (typeof item === 'string' ? item : null);
+                if (!candidate && item?.filename) {
+                  candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
                 }
-              }
-            };
-            extractImagesRecursive(data?.props?.pageProps || data);
+                if (!candidate && item?.id && typeof item?.id === 'string' && item.id.length > 5) {
+                  candidate = `https://apollo.olxcdn.com/v1/files/${item.id}/image;s=1000x700`;
+                }
+                if (candidate && typeof candidate === 'string') {
+                  const promoted = promoteToHighRes(candidate);
+                  if (!isForbiddenGraphic(promoted)) {
+                    nextDataTargetImages.push(promoted);
+                  }
+                }
+              });
+            }
           }
         } catch (e) {}
       }
@@ -1092,15 +1125,16 @@ Returnează un JSON strict cu următoarele chei:
       });
 
       const galleryContainers = $(
-        "#galerie, .galerie, [data-testid=\"gallery\"], [data-testid=\"swiper-image\"], .gallery-slider, " +
-        ".image-gallery, .swiper-wrapper, .property-gallery, .offer-photos, #slider-pro, .slider-for, " +
-        ".ad-gallery, [data-cy=\"ad-photos\"], .main-slider, #fotoGal, .foto-galerie, #photo-gallery, " +
+        "#galerie, .galerie, [data-testid=\"gallery\"], [data-testid*=\"gallery\"], [data-testid*=\"photo\"], .gallery-slider, " +
+        ".image-gallery, .swiper-wrapper, .swiper-container, .property-gallery, .offer-photos, #slider-pro, .slider-for, " +
+        ".ad-gallery, [data-cy=\"ad-photos\"], [data-cy*=\"photo\"], .main-slider, #fotoGal, .foto-galerie, #photo-gallery, " +
         ".slider-galerie, #anunt-galerie"
       );
 
+      // Search both dedicated gallery containers and general content to ensure no photos are missed
       const searchScope = galleryContainers.length > 0 
-        ? galleryContainers 
-        : $("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article, body");
+        ? galleryContainers.add("article[data-cy='ad-content'], [data-cy='ad-content'], .offer-view, .ad-content, #main-content, main, article")
+        : $("article, main, #main-content, .offer-view, [data-cy='ad-content'], body");
 
       searchScope.find("img, a, picture source, [data-src], [data-lazy], [data-full], [data-lazy-src], [data-original], [data-src-full], [data-zoom], [data-image], [data-gallery-src], [data-url]").each((_, el) => {
         const $el = $(el);
@@ -1126,22 +1160,24 @@ Returnează un JSON strict cu următoarele chei:
             } catch (e) {}
           }
           if (!absUrl.startsWith("http")) return;
-          if (isForbiddenGraphic(absUrl)) return;
-          if (socialMediaBlocked.some(s => absUrl.toLowerCase().includes(s))) return;
-          if (adKeywords.some(k => absUrl.toLowerCase().includes(k))) return;
+          
+          const promoted = promoteToHighRes(absUrl);
+          if (isForbiddenGraphic(promoted)) return;
+          if (socialMediaBlocked.some(s => promoted.toLowerCase().includes(s))) return;
+          if (adKeywords.some(k => promoted.toLowerCase().includes(k))) return;
 
-          const isKnownImage = imageExtensions.test(absUrl) || 
-            absUrl.includes("/files/") || absUrl.includes("/image") || absUrl.includes("/photos/") || absUrl.includes("roamcdn") || absUrl.includes("apollo");
+          const isKnownImage = imageExtensions.test(promoted) || 
+            promoted.includes("/files/") || promoted.includes("/image") || promoted.includes("/photos/") || promoted.includes("roamcdn") || promoted.includes("apollo");
 
           if (isKnownImage) {
-            const promoted = promoteToHighRes(absUrl);
             domGalleryImages.push(promoted);
           }
         });
       });
 
-      // Collect candidates combining all sources (nextData, jsonLd, and domGallery)
+      // Collect candidates combining all sources (mosaic, nextData, jsonLd, and domGallery)
       const rawCandidates = [
+        ...mosaicGalleryImages,
         ...nextDataTargetImages,
         ...jsonLdImages,
         ...domGalleryImages
@@ -1153,22 +1189,31 @@ Returnează un JSON strict cu următoarele chei:
 
         const getCanonical = (u: string) => {
           let base = u.split(/[?;]/)[0];
-          // 1. OLX / Storia file ID: /v1/files/([A-Za-z0-9_-]+)/
-          const olxMatch = base.match(/\/v1\/files\/([A-Za-z0-9_-]+)/i);
-          if (olxMatch) return `olx-file-${olxMatch[1].toLowerCase()}`;
+          // 1. OLX / Storia file ID or JWT token
+          const olxMatch = base.match(/\/v1\/files\/([^/]+)/i);
+          if (olxMatch) {
+            const token = olxMatch[1];
+            if (token.includes(".")) {
+              const parts = token.split(".");
+              try {
+                const payload = JSON.parse(Buffer.from(parts[1], "base64").toString());
+                if (payload.fn) return `olx-${payload.fn}`;
+              } catch (e) {}
+              return `olx-${parts[1]}`;
+            }
+            return `olx-${token.toLowerCase()}`;
+          }
 
-          // 2. Roamcdn / Imobiliare UUID or 32-char hex hash
-          const uuidMatch = base.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
-          if (uuidMatch) return `uuid-${uuidMatch[1].toLowerCase()}`;
-          const md5Match = base.match(/([a-f0-9]{32})/i);
-          if (md5Match) return `md5-${md5Match[1].toLowerCase()}`;
+          // Use filename and immediate parent directory as canonical key so different photos have unique keys
+          const segments = base.split("/").filter(Boolean);
+          const filename = segments.pop() || base;
+          const parentFolder = segments.pop() || "";
 
-          // 3. Filename cleaning (strip dimensions and responsive suffixes)
-          const filename = base.split("/").pop() || base;
+          // 2. Filename cleaning (strip dimensions and responsive suffixes)
           const cleanFilename = filename
             .replace(/_\d+x\d+(?=\.[a-z]+)/i, "")
             .replace(/-(?:full|small|medium|thumb|large|mini|1200w|1600w|800w|400w|600w|300w)/gi, "");
-          return cleanFilename.toLowerCase();
+          return `${parentFolder}-${cleanFilename}`.toLowerCase();
         };
 
         const getScore = (u: string) => {
@@ -1179,7 +1224,7 @@ Returnează un JSON strict cu următoarele chei:
           if (lower.includes("800x600")) score += 50;
           if (lower.includes("/large/") || lower.includes("/galerie/")) score += 40;
           if (lower.includes("/medium/")) score += 20;
-          if (lower.includes("/small/") || lower.includes("/thumb/") || lower.includes("140w")) score -= 50;
+          if (lower.includes("/small/") || lower.includes("/thumb/") || lower.includes("140w")) score += 5;
           if (isForbiddenGraphic(u)) score -= 10000;
           return score;
         };
@@ -1196,7 +1241,7 @@ Returnează un JSON strict cu următoarele chei:
         return Array.from(map.values()).filter(u => !isForbiddenGraphic(u));
       };
 
-      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 25);
+      const uniqueImages = deduplicateImages(rawCandidates).slice(0, 50);
       console.log(`Found ${uniqueImages.length} unique images for ${url}`);
 
       // Extract seller name explicitly if possible (OLX/Storia patterns)
@@ -1444,25 +1489,49 @@ Returnează un JSON strict cu următoarele chei:
       // 2. Price & Currency extraction
       let rawPriceNum = 0;
       let currency = "EUR";
-      if (nextAdData?.price?.regularPrice?.value) {
-        rawPriceNum = Number(nextAdData.price.regularPrice.value);
-        const currSym = String(nextAdData.price.regularPrice.currencySymbol || "").toUpperCase();
-        currency = currSym.includes("LEI") || currSym.includes("RON") ? "RON" : "EUR";
-      } else if (jsonLdData?.offers?.price) {
-        rawPriceNum = Number(jsonLdData.offers.price);
-        currency = String(jsonLdData.offers.priceCurrency || "EUR").toUpperCase();
+      const nextPriceObj = nextAdData?.price || nextAdData?.regularPrice || nextAdData?.ad?.price || nextAdData?.advert?.price;
+      if (nextPriceObj) {
+        if (typeof nextPriceObj === 'number') {
+          rawPriceNum = nextPriceObj;
+        } else if (nextPriceObj.value || nextPriceObj.regularPrice?.value) {
+          rawPriceNum = Number(nextPriceObj.value || nextPriceObj.regularPrice?.value);
+          const currSym = String(nextPriceObj.currencySymbol || nextPriceObj.regularPrice?.currencySymbol || "").toUpperCase();
+          if (currSym.includes("LEI") || currSym.includes("RON")) currency = "RON";
+        }
+      } else if (jsonLdData?.offers?.price || jsonLdData?.price) {
+        rawPriceNum = Number(jsonLdData.offers?.price || jsonLdData.price);
+        const curr = String(jsonLdData.offers?.priceCurrency || jsonLdData.priceCurrency || "").toUpperCase();
+        if (curr.includes("LEI") || curr.includes("RON")) currency = "RON";
       } else {
-        const priceRegex = /(?:pre[t\u021b]|chirie|\b)\s*[:\-–]?\s*(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i;
-        const pMatch = text.match(priceRegex) || title.match(/(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)\b/i);
+        let domPriceText = "";
+        const priceSelectors = ['[data-testid="ad-price"]', '[data-cy="ad-price"]', '.price', '.offer-price', '[class*="price"]', '[class*="pret"]'];
+        for (const sel of priceSelectors) {
+          const found = $(sel).first().text().trim();
+          if (found && /\d/.test(found)) {
+            domPriceText = found;
+            break;
+          }
+        }
+
+        const searchStr = domPriceText || title + " " + text;
+        const priceRegex = /(?:pre[t\u021b]|chirie|\b)\s*[:\-–]?\s*(€|eur|euro|ron|lei)?\s*(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)?\b/i;
+        const pMatch = searchStr.match(priceRegex) || title.match(/(\d[\d\s.,]{1,9})\s*(€|eur|euro|ron|lei)?\b/i);
         if (pMatch) {
-          rawPriceNum = parseInt(pMatch[1].replace(/[^0-9]/g, ""), 10) || 0;
-          const currStr = pMatch[2].toLowerCase();
-          currency = currStr.includes("ron") || currStr.includes("lei") ? "RON" : "EUR";
+          const numStr = pMatch[2] || pMatch[1] || "";
+          rawPriceNum = parseInt(numStr.replace(/[^0-9]/g, ""), 10) || 0;
+          const currStr = (pMatch[1] || pMatch[3] || searchStr || "").toLowerCase();
+          if (currStr.includes("ron") || currStr.includes("lei")) {
+            currency = "RON";
+          }
         }
       }
 
-      // Approximate price in EUR for threshold comparisons
-      const priceInEur = currency === "RON" ? Math.round(rawPriceNum / 5) : rawPriceNum;
+      // Transform price to EUR if it was in RON or Lei
+      const isRon = currency === "RON" || currency === "LEI";
+      const priceInEur = isRon ? Math.round(rawPriceNum / 4.97) : rawPriceNum;
+      // Enforce EUR currency and euro price throughout the CRM
+      rawPriceNum = priceInEur;
+      currency = "€";
 
       // 3. Robust Transaction Type Detection (Rent vs Sale)
       // Per rules: Usually rents are less than 10,000 euros, while sales are thousands of euros (20,000+).
@@ -1518,10 +1587,10 @@ Returnează un JSON strict cu următoarele chei:
       }
 
       const transactionType = isRent ? "Închiriere" : "Vânzare";
-      console.log(`[Crawler Transaction Detection] Price: ${priceInEur} EUR (${currency}) -> Type: ${transactionType} (URL Rent: ${urlHasRent}, Title Rent: ${titleHasRent})`);
+      console.log(`[Crawler Transaction Detection] Price: ${priceInEur} EUR -> Type: ${transactionType} (URL Rent: ${urlHasRent}, Title Rent: ${titleHasRent})`);
 
       const formattedPrice = rawPriceNum > 0 
-        ? `${rawPriceNum.toLocaleString("ro-RO")} ${currency}${transactionType === "Închiriere" ? " / lună" : ""}` 
+        ? `${rawPriceNum.toLocaleString("ro-RO")} €${transactionType === "Închiriere" ? " / lună" : ""}` 
         : "N/A";
 
       // 4. City & Zone
@@ -1650,11 +1719,19 @@ Returnează un JSON strict cu următoarele chei:
         }
       }
 
-      // Clean Title
-      let cleanTitle = title.replace(/\s*[-|•]\s*(OLX\.ro|Storia\.ro|Imobiliare\.ro|Publi24\.ro).*$/i, "").trim();
-      if (!cleanTitle || cleanTitle === "No title found") {
-        cleanTitle = `${categoria} ${camere} camere | ${zona} | ${formattedPrice}`;
-      }
+      // Generate compliant property ad title strictly adhering to AGENTS.md rules
+      const cleanTitle = generateStandardAdTitle({
+        categoria,
+        camere,
+        suprafataUtila: suprafataUtila || numUtila,
+        zona,
+        oras,
+        compartimentare,
+        sistemIncalzire: Array.isArray(sistemIncalzire) ? sistemIncalzire.join(", ") : sistemIncalzire,
+        mobilat,
+        balcoane: balcoaneFinal,
+        rawText: text
+      });
 
       // 7. Full baseline CRM Data object - all photos start in 'alteSpatii' for manual slot moving!
       const crmData = {
@@ -1790,17 +1867,65 @@ Returnează un JSON strict cu următoarele chei:
         },
         descriere: {
           titlu: cleanTitle,
-          continut: rawDescription,
+          continut: `📌 ID 
+🏡 ${cleanTitle}
+
+${suprafataUtila ? `${suprafataUtila} mp utili` : "Spațiu generos"}${balcoaneFinal && parseInt(String(balcoaneFinal), 10) > 0 ? ", balcon" : ""}, mobilat și utilat, disponibil imediat.
+Proprietate luminoasă și bine compartimentată, situată în zona ${zona || oras}, cu acces facil la toate facilitățile urbane.
+
+━━━━━━━━━━━━━━━━━━
+
+⭐ AVANTAJE PRINCIPALE
+
+-${compartimentare || "decomandat"}
+-poziționare excelentă în zonă cu infrastructură completă
+-lumină naturală generoasă și compartimentare eficientă
+-acces rapid la mijloacele de transport în comun
+
+━━━━━━━━━━━━━━━━━━
+
+🛋️ DOTĂRI
+
+-${Array.isArray(sistemIncalzire) && sistemIncalzire.length > 0 ? sistemIncalzire[0].toLowerCase() : "centrală proprie"}
+-finisaje de calitate și spații optime de depozitare
+-mobilat și utilat complet
+
+Spațiul este foarte bine organizat și oferă confort ridicat pentru locuire.
+
+━━━━━━━━━━━━━━━━━━
+
+📍 LOCAȚIE
+
+Acces rapid către:
+-stații de transport în comun
+-magazine, supermarketuri și servicii de proximitate
+-parcuri și spații verzi în zonă
+
+━━━━━━━━━━━━━━━━━━
+
+💰 ${transactionType === "Închiriere" ? "ÎNCHIRIERE" : "VÂNZARE"}
+
+${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garanție\nComision 50% + TVA\nDisponibil imediat` : `${formattedPrice || "N/A"}\nDisponibil imediat`}
+
+━━━━━━━━━━━━━━━━━━
+
+🤝 ${transactionType === "Închiriere" ? "SUPORT ÎNCHIRIERE" : "SUPORT VÂNZARE"}
+
+-consultanță dedicată din partea agenției brokr
+-asistență completă în întocmirea contractului și înregistrarea ANAF
+-posibilitate de vizionare rapidă și flexibilă
+
+📞 Pentru vizionare sau detalii suplimentare, contactează-ne telefonic.`.trim(),
           disponibilitate: "Imediat",
           video: "",
           turVirtual: ""
         },
         imagini: {
-          living: uniqueImages.map(img => ({ original: img })),
+          living: [],
           bucatarie: [],
           camera: [],
           baie: [],
-          alteSpatii: []
+          alteSpatii: uniqueImages.map(img => ({ original: img }))
         }
       };
 
@@ -1911,7 +2036,21 @@ Returnează un JSON strict cu următoarele chei:
       };
 
       const listingDetails = extractListingDetails(html, url);
-      const finalPrice = (formattedPrice && formattedPrice !== "N/A") ? formattedPrice : (listingDetails.price || "N/A");
+      let finalPrice = (formattedPrice && formattedPrice !== "N/A") ? formattedPrice : (listingDetails.price || "N/A");
+      if (finalPrice && finalPrice !== "N/A") {
+        const fpLower = finalPrice.toLowerCase();
+        if (fpLower.includes("ron") || fpLower.includes("lei")) {
+          const digits = parseFloat(finalPrice.replace(/[^0-9.,]/g, "").replace(",", "."));
+          if (!isNaN(digits) && digits > 0) {
+            const inEur = Math.round(digits / 4.97);
+            const hasLuna = /\/(?:lun[aă]|luni|month)\b/i.test(finalPrice) || transactionType === "Închiriere";
+            finalPrice = `${inEur.toLocaleString("ro-RO")} €${hasLuna ? " / lună" : ""}`;
+          }
+        }
+      }
+      crmData.pret.detalii.pret = finalPrice;
+      crmData.pret.detalii.moneda = "€";
+      presentationSections.tranzactie["Preț"] = finalPrice;
       const finalPhone = (sellerPhone && sellerPhone !== "Nespecificat") ? sellerPhone : (listingDetails.phone_number || "Nespecificat");
       const finalOwner = (sellerName && sellerName !== "Nespecificat") ? sellerName : (listingDetails.owner_name || "Nespecificat");
 

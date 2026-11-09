@@ -14,7 +14,8 @@ import {
   AlertTriangle,
   ArrowUpRight,
   FileText,
-  Inbox
+  Globe,
+  ExternalLink
 } from "lucide-react";
 import { Lead } from "../services/leadsService";
 import toast from "react-hot-toast";
@@ -111,31 +112,19 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50 shrink-0">
               <div className="flex items-center gap-2.5 min-w-0 flex-1">
                 <div className="w-8 h-8 rounded-lg bg-[#BE9662]/10 border border-[#BE9662]/20 flex items-center justify-center text-[#BE9662] shrink-0">
-                  <Inbox size={18} />
+                  <ShieldAlert size={18} />
                 </div>
-                <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+                <div className="min-w-0 flex-1">
                   <h3 className="text-sm font-semibold text-gray-900 leading-tight truncate">
                     Proprietate Calificată
                   </h3>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
-                    CALIFICATĂ
-                  </span>
+                  <p className="text-[10px] font-bold text-gray-400 tracking-wider uppercase mt-0.5">
+                    STATUS: CALIFICATE · Pregătită de activare
+                  </p>
                 </div>
               </div>
 
               <div className="flex items-center gap-1.5 shrink-0 ml-3">
-                {lead.url && (
-                  <a
-                    href={lead.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="h-7 w-7 rounded-md border border-gray-200 bg-white hover:bg-amber-50/50 hover:border-[#BE9662]/40 text-gray-700 hover:text-[#051D35] flex items-center justify-center transition-all shadow-2xs cursor-pointer"
-                    title="Deschide URL sursă în tab nou"
-                  >
-                    <ArrowUpRight size={14} className="text-[#BE9662]" />
-                  </a>
-                )}
-
                 {lead.id && (
                   <button
                     type="button"
@@ -146,6 +135,30 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
                     <Share2 size={12} className="text-[#BE9662]" />
                     <span>{copiedShare ? "Copiat!" : "Distribuie"}</span>
                   </button>
+                )}
+
+                {lead.id && (
+                  <a
+                    href={getPublicShareUrl(lead.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 transition-colors shadow-2xs"
+                    title="Deschide pagina publică a leadului"
+                  >
+                    <Globe size={13} />
+                  </a>
+                )}
+
+                {lead.url && (
+                  <a
+                    href={lead.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 transition-colors shadow-2xs"
+                    title="Deschide anunțul sursă"
+                  >
+                    <ExternalLink size={13} />
+                  </a>
                 )}
 
                 <button
@@ -209,32 +222,18 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
                     <MapPin size={14} />
                   </div>
                   <div className="min-w-0">
-                    <span className="text-[10px] uppercase font-semibold text-gray-400 block tracking-tight">Oraș</span>
+                    <span className="text-[10px] uppercase font-semibold text-gray-400 block tracking-tight">Oraș / Localitate</span>
                     <span className="text-xs font-semibold text-gray-800 truncate block">
-                      {lead.zone || lead.extractedData?.crmData?.detaliiGenerale?.localizare?.oras || "Nespecificat"}
+                      {lead.zone || "Nespecificat"}
                     </span>
                   </div>
                 </div>
               </div>
 
-              {/* Descriere Textarea */}
-              <div>
-                <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
-                  <Inbox size={12} className="text-[#BE9662]" />
-                  <span>Descriere</span>
-                </label>
-                <textarea
-                  rows={3}
-                  readOnly
-                  value={lead.extractedData?.originalDescription || lead.extractedData?.text || lead.extractedData?.crmData?.descriere?.continut || lead.extractedData?.markdownMarketing || "Nicio descriere disponibilă."}
-                  className="w-full p-2.5 border border-gray-200 rounded-md bg-gray-50 text-xs text-gray-800 resize-y"
-                />
-              </div>
-
               {/* Owner Info Block */}
               <div className="pt-2 border-t border-gray-100">
                 <span className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
-                  Proprietar
+                  Date Contact Proprietar
                 </span>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="flex items-center gap-2 text-gray-800 text-xs font-medium p-2 bg-gray-50 border border-gray-200 rounded-md">
@@ -252,7 +251,7 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
               <div className="pt-2 border-t border-gray-100">
                 <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
                   <FileText size={12} className="text-[#BE9662]" />
-                  <span>Observații</span>
+                  <span>Observații / Detalii Interne</span>
                 </label>
                 <div className="p-2.5 bg-gray-50 border border-gray-200 rounded-md text-xs text-gray-700 whitespace-pre-wrap leading-relaxed min-h-[60px]">
                   {lead.notes || "Fără observații suplimentare."}

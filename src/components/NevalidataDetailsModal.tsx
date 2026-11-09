@@ -20,10 +20,10 @@ import {
   XCircle,
   RotateCcw,
   Plus,
-  Inbox
+  ExternalLink
 } from "lucide-react";
 import { Lead } from "../services/leadsService";
-import { CATEGORIA_OPTIONS, ORAS_OPTIONS, ZONA_OPTIONS } from "../constants";
+import { CATEGORIA_OPTIONS, ORAS_OPTIONS } from "../constants";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
 
@@ -73,17 +73,6 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
   const [oras, setOras] = useState(
     lead.extractedData?.crmData?.detaliiGenerale?.localizare?.oras || lead.zone || "Bucuresti"
   );
-  const initialZona = Array.isArray(lead.extractedData?.crmData?.detaliiGenerale?.localizare?.zona)
-    ? lead.extractedData.crmData.detaliiGenerale.localizare.zona[0] || ""
-    : lead.extractedData?.crmData?.detaliiGenerale?.localizare?.zona || lead.zone || "";
-  const [zona, setZona] = useState(initialZona);
-
-  const initialDescription = 
-    lead.extractedData?.originalDescription || 
-    lead.extractedData?.text || 
-    lead.extractedData?.crmData?.descriere?.continut || 
-    lead.extractedData?.markdownMarketing || "";
-  const [description, setDescription] = useState(initialDescription);
 
   const [saving, setSaving] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
@@ -119,7 +108,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
           categoria: categoria,
           localizare: {
             oras: oras,
-            zona: [zona],
+            zona: [lead.zone || "Nespecificat"],
             strada: "",
             numar: "",
             bloc: "",
@@ -138,10 +127,6 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
             utila: suprafata,
             construita: suprafata ? String((parseFloat(suprafata) || 0) * 1.2) : ""
           }
-        },
-        descriere: {
-          titlu: title,
-          continut: description
         }
       }
     };
@@ -153,7 +138,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       if (!currentExtracted.crmData.detaliiGenerale.localizare) {
         currentExtracted.crmData.detaliiGenerale.localizare = {
           oras: oras,
-          zona: [zona],
+          zona: [],
           strada: "",
           numar: "",
           bloc: "",
@@ -162,7 +147,6 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
         };
       }
       currentExtracted.crmData.detaliiGenerale.localizare.oras = oras;
-      currentExtracted.crmData.detaliiGenerale.localizare.zona = [zona];
       
       if (!currentExtracted.crmData.caracteristici) {
         currentExtracted.crmData.caracteristici = {
@@ -175,12 +159,6 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       }
       currentExtracted.crmData.caracteristici.suprafete.utila = suprafata;
       currentExtracted.crmData.caracteristici.suprafete.construita = suprafata ? String(Math.round((parseFloat(suprafata) || 0) * 1.2)) : "";
-
-      if (!currentExtracted.crmData.descriere) {
-        currentExtracted.crmData.descriere = { titlu: title, continut: description };
-      }
-      currentExtracted.crmData.descriere.continut = description;
-      currentExtracted.originalDescription = description;
     }
 
     return {
@@ -191,7 +169,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       ownerName,
       ownerPhone,
       notes,
-      zone: zona || oras,
+      zone: oras,
       extractedData: currentExtracted
     };
   };
@@ -315,35 +293,25 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50 shrink-0">
             <div className="flex items-center gap-2.5 min-w-0 flex-1">
               <div className="w-8 h-8 rounded-lg bg-[#BE9662]/10 border border-[#BE9662]/20 flex items-center justify-center text-[#BE9662] shrink-0">
-                <Inbox size={18} />
+                <Globe size={18} />
               </div>
-              <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
+              <div className="min-w-0 flex-1">
                 <h3 className="text-sm font-semibold text-gray-900 leading-tight truncate">
                   Detalii Lead {lead.propertyId ? `#${lead.propertyId}` : ""}
                 </h3>
-                <span className={`text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded border shrink-0 ${
-                  lead.status === 'Pierdute' 
-                    ? 'bg-rose-50 text-rose-700 border-rose-200' 
-                    : 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                }`}>
-                  {lead.status === 'Pierdute' ? 'PIERDUT' : 'NOU'}
-                </span>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className={`text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.2 rounded border ${
+                    lead.status === 'Pierdute' 
+                      ? 'bg-rose-50 text-rose-700 border-rose-200' 
+                      : 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  }`}>
+                    STATUS: {lead.status === 'Pierdute' ? 'PIERDUT' : 'NOU'}
+                  </span>
+                </div>
               </div>
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0 ml-3">
-              {lead.url && (
-                <a
-                  href={lead.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="h-7 w-7 rounded-md border border-gray-200 bg-white hover:bg-amber-50/50 hover:border-[#BE9662]/40 text-gray-700 hover:text-[#051D35] flex items-center justify-center transition-all shadow-2xs cursor-pointer"
-                  title="Deschide URL sursă în tab nou"
-                >
-                  <ArrowUpRight size={14} className="text-[#BE9662]" />
-                </a>
-              )}
-
               {lead.id && (
                 <button
                   type="button"
@@ -354,6 +322,30 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   <Share2 size={12} className="text-[#BE9662]" />
                   <span>{copiedShare ? "Copiat!" : "Distribuie"}</span>
                 </button>
+              )}
+
+              {lead.id && (
+                <a
+                  href={getPublicShareUrl(lead.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 transition-colors shadow-2xs"
+                  title="Deschide pagina publică a leadului"
+                >
+                  <Globe size={13} />
+                </a>
+              )}
+
+              {lead.url && (
+                <a
+                  href={lead.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-7 h-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 transition-colors shadow-2xs"
+                  title="Deschide anunțul sursă"
+                >
+                  <ExternalLink size={13} />
+                </a>
               )}
 
               <button
@@ -369,6 +361,51 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
 
           {/* Form Content */}
           <div className="p-5 space-y-3.5 text-xs overflow-y-auto">
+
+            {/* URL Sursă Box */}
+            <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between gap-3 text-xs">
+              <div className="min-w-0 flex-1">
+                <span className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                  URL Sursă
+                </span>
+                <a
+                  href={lead.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-medium text-[#BE9662] hover:underline truncate block text-xs"
+                  title={lead.url}
+                >
+                  {lead.url}
+                </a>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCopyUrl}
+                  className="h-7 px-2 border border-gray-200 rounded-md bg-white hover:bg-gray-100 text-gray-700 text-[11px] font-medium flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
+                  title="Copiază URL sursă"
+                >
+                  <ClipboardCopy size={12} />
+                  <span>{copiedUrl ? "Copiat!" : "Copiază"}</span>
+                </button>
+                <a
+                  href={lead.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-7 h-7 flex items-center justify-center border border-gray-200 rounded-md bg-white hover:bg-gray-100 text-gray-600 transition-colors shadow-2xs"
+                  title="Deschide în tab nou"
+                >
+                  <ArrowUpRight size={13} />
+                </a>
+              </div>
+            </div>
+
+            {/* Section Divider */}
+            <div className="pt-1">
+              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                Detalii Identificate (corectează dacă e cazul)
+              </span>
+            </div>
 
             {/* Titlu Proprietate */}
             <div>
@@ -457,61 +494,27 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
               </div>
             </div>
 
-            {/* Oraș & Zonă */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
-                  <MapPin size={12} className="text-[#BE9662]" />
-                  <span>Oraș</span>
-                </label>
-                <select
-                  value={oras}
-                  onChange={(e) => setOras(e.target.value)}
-                  className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 cursor-pointer"
-                >
-                  {ORAS_OPTIONS.map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
-                  <MapPin size={12} className="text-[#BE9662]" />
-                  <span>Zonă</span>
-                </label>
-                <select
-                  value={zona}
-                  onChange={(e) => setZona(e.target.value)}
-                  className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 cursor-pointer"
-                >
-                  <option value="">Selectează zona...</option>
-                  {ZONA_OPTIONS.map((opt) => (
-                    <option key={opt} value={opt}>{opt}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Descriere Textarea */}
+            {/* Oraș / Localizare */}
             <div>
               <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
-                <Inbox size={12} className="text-[#BE9662]" />
-                <span>Descriere</span>
+                <MapPin size={12} className="text-[#BE9662]" />
+                <span>Oraș / Localizare</span>
               </label>
-              <textarea
-                rows={3}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Descrierea originală din anunțul sursă..."
-                className="w-full p-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 resize-y placeholder:text-gray-400"
-              />
+              <select
+                value={oras}
+                onChange={(e) => setOras(e.target.value)}
+                className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 cursor-pointer"
+              >
+                {ORAS_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
             </div>
 
-            {/* Proprietar */}
+            {/* Date Contact Proprietar */}
             <div className="pt-2 border-t border-gray-100">
               <span className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
-                Proprietar
+                Date Contact Proprietar
               </span>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -638,10 +641,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 onClick={handleConvertToImobil}
                 disabled={saving}
                 className="h-8 px-3.5 bg-[#051D35] hover:bg-[#0a2b4a] text-white font-medium rounded-md transition-colors shadow-xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                title="Concretizează leadul într-o Proprietate nouă pe piață"
+                title="Concretizează leadul într-un Imobil nou pe piață"
               >
                 <Plus size={14} className="text-[#BE9662]" />
-                <span>Adaugă Proprietate</span>
+                <span>Adaugă Imobil</span>
               </button>
             </div>
           </div>

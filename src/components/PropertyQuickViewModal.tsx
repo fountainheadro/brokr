@@ -14,7 +14,8 @@ import {
   Building2, 
   Check, 
   Copy, 
-  ExternalLink 
+  ExternalLink,
+  Globe
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { contactsService, Contact } from "../services/contactsService";
@@ -152,6 +153,18 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                 {copiedShare ? <Check size={13} className="text-emerald-600" /> : <Share2 size={13} className="text-[#BE9662]" />}
                 <span>{copiedShare ? "Copiat!" : "Distribuie"}</span>
               </button>
+
+              {lead.id && (
+                <a
+                  href={getPublicShareUrl(lead.id)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-8 h-8 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shadow-2xs"
+                  title="Deschide pagina publică a leadului"
+                >
+                  <Globe size={13} />
+                </a>
+              )}
 
               {lead.url && (
                 <a

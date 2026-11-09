@@ -7,6 +7,7 @@ import { auth } from "../lib/firebase";
 import { ZONA_OPTIONS, CATEGORIA_OPTIONS } from "../constants";
 import toast from "react-hot-toast";
 import { CETATENIE_OPTIONS } from "./AddCerereModal";
+import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
 
 interface AddLeadModalProps {
   isOpen: boolean;
@@ -98,11 +99,30 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
         const creatorName = currentUser?.displayName || (currentUser?.email ? currentUser.email.split('@')[0] : "Consilier Imobiliar");
         const creatorEmail = currentUser?.email || "";
 
+        const finalTitle = title || crmData?.descriere?.titlu || generateStandardAdTitle({
+          categoria: crawledCat || "Apartament",
+          camere: crmData?.caracteristici?.detalii?.camere,
+          suprafataUtila: crmData?.caracteristici?.suprafete?.utila,
+          zona: zone,
+          compartimentare: crmData?.caracteristici?.detalii?.compartimentare,
+          rawText: crawlData.description || crawlData.text || ""
+        });
+
+        let resolvedPrice = price || "N/A";
+        if (resolvedPrice !== "N/A" && (resolvedPrice.toLowerCase().includes("ron") || resolvedPrice.toLowerCase().includes("lei"))) {
+          const digits = parseFloat(resolvedPrice.replace(/[^0-9.,]/g, "").replace(",", "."));
+          if (!isNaN(digits) && digits > 0) {
+            const inEur = Math.round(digits / 4.97);
+            const isRentTrans = (crawledTrans || "").toLowerCase().includes("inchir");
+            resolvedPrice = `${inEur.toLocaleString("ro-RO")} €${isRentTrans ? " / lună" : ""}`;
+          }
+        }
+
         await leadsService.addLead({
           url: url.trim(),
-          title: title || "Fără titlu",
+          title: finalTitle,
           zone: zone || "Nespecificat",
-          price: price || "N/A",
+          price: resolvedPrice,
           ownerName: ownerName || "Nespecificat",
           ownerPhone: ownerPhone || "Nespecificat",
           transactionType: (crawledTrans as any) || 'Vânzare',

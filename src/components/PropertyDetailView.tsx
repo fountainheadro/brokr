@@ -42,7 +42,9 @@ import {
   Plus,
   Upload,
   Image as ImageIcon,
-  Trash2
+  Trash2,
+  Globe,
+  ArrowUp
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
@@ -56,7 +58,7 @@ export interface PropertyDetailViewProps {
   showTopNavbar?: boolean;
   onDelete?: () => void;
   onAddActivity?: () => void;
-  onUpdateLead?: (updatedData: any) => void;
+  onUpdateLead?: (updatedData: Partial<Lead>) => void;
 }
 
 interface NavSection {
@@ -66,14 +68,14 @@ interface NavSection {
 }
 
 const NAV_SECTIONS: NavSection[] = [
-  { id: "tranzactie", label: "Preț", icon: BadgePercent },
+  { id: "photos", label: "Photos", icon: Camera },
+  { id: "tranzactie", label: "Preț & Condiții", icon: BadgePercent },
   { id: "introducere", label: "Introducere", icon: FileText },
   { id: "apartament", label: "Apartament", icon: Home },
   { id: "bloc", label: "Bloc", icon: Building2 },
   { id: "imprejurimi", label: "Împrejurimi", icon: Compass },
   { id: "transport", label: "Transport", icon: Bus },
-  { id: "parcare", label: "Parcare", icon: Car },
-  { id: "acte", label: "Condiții", icon: ShieldCheck }
+  { id: "parcare", label: "Parcare", icon: Car }
 ];
 
 const COMPARTIMENTARE_OPTIONS = ["Decomandat", "Semidecomandat", "Nedecomandat", "Circular", "Open Space"];
@@ -330,8 +332,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onOpenEditForm,
   showTopNavbar = false,
   onDelete,
-  onAddActivity,
-  onUpdateLead
+  onAddActivity
 }) => {
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
   const [isCopied, setIsCopied] = useState<boolean>(false);
@@ -339,10 +340,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   // Ensure default active tab is always the first in jump links on mount or property change
   useEffect(() => {
     setActiveSection(NAV_SECTIONS[0]?.id || "tranzactie");
-    if (mainScrollRef.current) {
+    if (isPublicShared) {
+      window.scrollTo(0, 0);
+    } else if (mainScrollRef.current) {
       mainScrollRef.current.scrollTop = 0;
     }
-  }, [lead?.id]);
+  }, [lead?.id, isPublicShared]);
   
   // Persistent favorite stored in browser localStorage
   const favoriteStorageKey = `brokr_fav_prop_${lead.propertyId || lead.id || "default"}`;
@@ -355,6 +358,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   });
 
   const [copiedOwnerPhone, setCopiedOwnerPhone] = useState<boolean>(false);
+  const [showBackToTop, setShowBackToTop] = useState<boolean>(false);
   
   // Lightbox Modal state
   const [isGalleryOpen, setIsGalleryOpen] = useState<boolean>(false);
@@ -401,12 +405,45 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   // Track active jump link section on scroll
   useEffect(() => {
-    const scrollContainer = mainScrollRef.current;
-    if (!scrollContainer) return;
-
     const handleScroll = () => {
       // Don't override active tab during programmatic smooth scroll
       if (isManualScrollingRef.current) return;
+
+      if (isPublicShared) {
+        const scrollY = window.pageYOffset || document.documentElement.scrollTop || window.scrollY || 0;
+        setShowBackToTop(scrollY > 200);
+
+        // Window scroll check for public shared view
+        const isAtBottom = window.innerHeight + scrollY >= document.documentElement.scrollHeight - 60;
+        if (isAtBottom) {
+          setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
+          return;
+        }
+
+        if (scrollY <= 80) {
+          setActiveSection("photos");
+          return;
+        }
+
+        // Trigger line: 110px below viewport top (accounting for 90px fixed headers + 20px padding)
+        const triggerLine = 110;
+        let currentSectionId = "photos";
+        for (const sect of NAV_SECTIONS) {
+          const el = document.getElementById(sect.id);
+          if (el) {
+            const rect = el.getBoundingClientRect();
+            if (rect.top <= triggerLine + 10) {
+              currentSectionId = sect.id;
+            }
+          }
+        }
+
+        setActiveSection(currentSectionId);
+        return;
+      }
+
+      const scrollContainer = mainScrollRef.current;
+      if (!scrollContainer) return;
 
       // Check if user is scrolled to the absolute bottom of the container
       const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
@@ -440,15 +477,27 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       setActiveSection(currentSectionId);
     };
 
-    scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
+    if (isPublicShared) {
+      window.addEventListener("scroll", handleScroll, { passive: true });
+      return () => {
+        window.removeEventListener("scroll", handleScroll);
+        if (scrollTimeoutRef.current) {
+          clearTimeout(scrollTimeoutRef.current);
+        }
+      };
+    } else {
+      const scrollContainer = mainScrollRef.current;
+      if (!scrollContainer) return;
+      scrollContainer.addEventListener("scroll", handleScroll, { passive: true });
 
-    return () => {
-      scrollContainer.removeEventListener("scroll", handleScroll);
-      if (scrollTimeoutRef.current) {
-        clearTimeout(scrollTimeoutRef.current);
-      }
-    };
-  }, []);
+      return () => {
+        scrollContainer.removeEventListener("scroll", handleScroll);
+        if (scrollTimeoutRef.current) {
+          clearTimeout(scrollTimeoutRef.current);
+        }
+      };
+    }
+  }, [isPublicShared]);
 
   const toggleCard = (cardId: string) => {
     setCollapsedCards(prev => ({
@@ -458,9 +507,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   const scrollToSection = (sectionId: string) => {
-    const el = document.getElementById(sectionId);
-    if (!el) return;
-
     // Immediately set active section and lock it to prevent scroll bounceback
     setActiveSection(sectionId);
     isManualScrollingRef.current = true;
@@ -470,6 +516,40 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     scrollTimeoutRef.current = setTimeout(() => {
       isManualScrollingRef.current = false;
     }, 850);
+
+    if (sectionId === "photos") {
+      if (isPublicShared) {
+        window.scrollTo({
+          top: 0,
+          behavior: "smooth"
+        });
+      } else {
+        const scrollContainer = mainScrollRef.current;
+        if (scrollContainer instanceof HTMLElement) {
+          scrollContainer.scrollTo({ top: 0, behavior: "smooth" });
+        } else {
+          window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+      }
+      return;
+    }
+
+    const el = document.getElementById(sectionId);
+    if (!el) return;
+
+    if (isPublicShared) {
+      // 90px fixed header (50px navbar + 40px jump links) + 20px padding = 110px
+      // Exact alignment: section top lands at y = 110px, leaving 20px padding under the 90px fixed menu
+      const topOffset = 110;
+      const currentScroll = window.pageYOffset || document.documentElement.scrollTop || window.scrollY || 0;
+      const targetTop = el.getBoundingClientRect().top + currentScroll - topOffset;
+
+      window.scrollTo({
+        top: Math.max(0, targetTop),
+        behavior: "smooth"
+      });
+      return;
+    }
 
     const scrollContainer = mainScrollRef.current || getScrollContainer(el);
 
@@ -665,6 +745,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const isRent = lead?.transactionType === "Închiriere" || crmData?.detaliiGenerale?.tranzactie === "Închiriere";
   const displayTitle = crmData?.descriere?.titlu || lead?.title || "Proprietate Rezidențială";
   const internalCode = lead?.propertyId || (lead?.id ? `P${lead.id.slice(0, 4)}` : "P41");
+  const exactId = lead?.propertyId || (lead?.id ? (lead.id.length > 8 ? lead.id.slice(-6).toUpperCase() : lead.id) : internalCode);
   const categoria = crmData?.detaliiGenerale?.categoria || lead?.categoria || "Apartament";
 
   // Sync document title with property title
@@ -707,20 +788,35 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     };
   }, [crmData, lead]);
 
-  // Formatted price
-  const formattedPrice = useMemo(() => {
+  // Normalized price parts: amount, symbol '€' (strictly replacing any 'EUR', 'euro'), and rent flag
+  const priceParts = useMemo(() => {
+    let rawStr = "";
     if (crmData?.pret?.detalii?.pret) {
-      const val = crmData.pret.detalii.pret;
-      const currency = crmData.pret.detalii.moneda || "€";
-      return isRent ? `${val} ${currency} / lună` : `${val} ${currency}`;
+      rawStr = String(crmData.pret.detalii.pret);
+    } else if (lead?.price) {
+      rawStr = String(lead.price);
+    } else {
+      rawStr = isRent ? "775" : "145.000";
     }
-    if (lead?.price) {
-      return lead.price.includes("€") || lead.price.includes("EUR") 
-        ? lead.price 
-        : `${lead.price} €${isRent ? " / lună" : ""}`;
+
+    // Strip out currency words & suffixes to keep pure formatted number
+    let numOnly = rawStr
+      .replace(/\s*(?:EUR|eur|euro|Euro|lei|RON|ron|€|\/.*|pe\s+lun[aă])/gi, "")
+      .trim();
+
+    if (!numOnly) {
+      numOnly = isRent ? "775" : "145.000";
     }
-    return isRent ? "775 € / lună" : "145.000 €";
+
+    return {
+      amount: numOnly,
+      symbol: "€",
+      isRent: isRent,
+      fullText: `${numOnly} €${isRent ? " / lună" : ""}`
+    };
   }, [crmData, lead, isRent]);
+
+  const formattedPrice = priceParts.fullText;
 
   // Characteristics derived with intelligent fallbacks from crmData or lead text
   const rawDescText = `${crmData?.descriere?.continut || ""} ${(lead as any)?.description || ""} ${lead?.title || ""} ${lead?.notes || ""}`;
@@ -1217,7 +1313,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       }
 
       await leadsService.updateLeadData(lead.id, updates);
-      onUpdateLead?.(updates);
       toast.success("Modificările au fost salvate cu succes!");
     } catch (e) {
       console.error("Failed to save inline changes:", e);
@@ -1263,182 +1358,329 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   return (
-    <div ref={containerRef} className="w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden">
+    <div ref={containerRef} className={isPublicShared ? "w-full min-h-screen bg-transparent text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20" : "w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden"}>
       
-      {/* Top Navbar (only for standalone public share page) - Matches exact in-app top header dimensions */}
-      {showTopNavbar && (
-        <nav className="h-[50px] shrink-0 bg-white border-b border-gray-200 select-none z-30">
-          <div className="w-full h-[50px] flex items-center justify-between p-0">
-            <div className="flex items-center h-full">
-              <a 
-                href="/"
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 select-none group"
-                title="Înapoi la pagina principală"
-              >
-                <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-              </a>
-              <div className="px-4 flex items-center gap-1.5 focus:outline-none">
-                <span className="font-extrabold text-base tracking-tight text-[#051D35] font-sans flex items-center">
-                  brokr<span className="text-[#BE9662]">.</span>
-                </span>
+      {/* Header Container: 100% full-width fixed bar at the top for public shared page */}
+      {isPublicShared ? (
+        <header className="fixed top-0 left-0 right-0 w-full z-40 bg-white select-none shadow-none">
+          {/* Row 1: Logo & Actions (100% full-width bar with 1px solid border, no shadow, boxed 1280px content) */}
+          {showTopNavbar && (
+            <div className="w-full border-b border-gray-200 h-[50px] bg-white">
+              <div className="w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 h-[50px] flex items-center justify-between">
+                <div className="flex items-center h-full">
+                  <a 
+                    href="/"
+                    className="flex items-center select-none group focus:outline-none"
+                    title="Acasă - brokr"
+                  >
+                    <span className="text-[22px] font-bold tracking-tight text-[#051D35] font-sans leading-none flex items-center">
+                      brokr<span className="text-[#BE9662]">.</span>
+                    </span>
+                  </a>
+                </div>
+
+                <div className="flex items-center gap-1 sm:gap-2 h-full shrink-0">
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="h-9 w-9 rounded-lg flex items-center justify-center bg-transparent hover:bg-gray-100 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
+                    title="Tipărește oferta"
+                  >
+                    <Printer size={17} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleNativeShare}
+                    className="h-9 w-9 rounded-lg flex items-center justify-center bg-transparent hover:bg-gray-100 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                    title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+                  >
+                    <Share2 size={17} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+                  </button>
+                </div>
               </div>
             </div>
+          )}
 
-            <div className="flex items-stretch h-full shrink-0">
-              <button
-                type="button"
-                onClick={handleToggleFavorite}
-                className={`h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 transition-colors cursor-pointer select-none group ${
-                  isFavorite 
-                    ? "bg-amber-50/50 text-[#BE9662]" 
-                    : "bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900"
-                }`}
-                title={isFavorite ? "Elimină din favorite" : "Salvează ca favorit"}
-              >
-                <Bookmark size={16} className={isFavorite ? "fill-[#BE9662] text-[#BE9662]" : "text-gray-500 group-hover:text-[#BE9662] transition-colors"} />
-              </button>
+          {/* Row 2: Jump Links toolbar (100% full-width bar with 1px solid border, NO shadow, boxed 1280px content) */}
+          <div className="w-full border-b border-gray-200 h-10 bg-white">
+            <div className="w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 h-10 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
+                {NAV_SECTIONS.map((sect) => {
+                  const Icon = sect.icon;
+                  const isActive = activeSection === sect.id;
 
-              <button
-                type="button"
-                onClick={handlePrint}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
-                title="Tipărește oferta"
-              >
-                <Printer size={16} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-              </button>
-
-              <button
-                type="button"
-                onClick={handleNativeShare}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
-                title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
-              >
-                <Share2 size={16} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-              </button>
+                  return (
+                    <button
+                      key={sect.id}
+                      type="button"
+                      onClick={() => scrollToSection(sect.id)}
+                      className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                        isActive
+                          ? "bg-[#051D35] text-white font-medium shadow-xs"
+                          : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                      }`}
+                    >
+                      <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
+                      <span>{sect.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
           </div>
-        </nav>
+        </header>
+      ) : (
+        <>
+          {/* Top Navbar for modal/internal view */}
+          {showTopNavbar && (
+            <nav className="h-[50px] shrink-0 bg-white border-b border-gray-200 select-none z-30">
+              <div className="w-full px-4 h-[50px] flex items-center justify-between">
+                <div className="flex items-center h-full">
+                  <span className="text-[22px] font-bold tracking-tight text-[#051D35] font-sans leading-none flex items-center">
+                    brokr<span className="text-[#BE9662]">.</span>
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1 sm:gap-2 h-full shrink-0">
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="h-9 w-9 rounded-lg flex items-center justify-center bg-transparent hover:bg-gray-100 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
+                    title="Tipărește oferta"
+                  >
+                    <Printer size={17} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleNativeShare}
+                    className="h-9 w-9 rounded-lg flex items-center justify-center bg-transparent hover:bg-gray-100 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                    title="Distribuie proprietatea"
+                  >
+                    <Share2 size={17} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+                  </button>
+                </div>
+              </div>
+            </nav>
+          )}
+
+          {/* Jump Links toolbar for modal/internal view */}
+          <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20">
+            <div className="w-full px-4 h-10 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
+                {NAV_SECTIONS.map((sect) => {
+                  const Icon = sect.icon;
+                  const isActive = activeSection === sect.id;
+
+                  return (
+                    <button
+                      key={sect.id}
+                      type="button"
+                      onClick={() => scrollToSection(sect.id)}
+                      className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                        isActive
+                          ? "bg-[#051D35] text-white font-medium shadow-xs"
+                          : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                      }`}
+                    >
+                      <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
+                      <span>{sect.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                {onDelete && (
+                  <button 
+                    type="button"
+                    onClick={onDelete}
+                    className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer shadow-2xs group"
+                    title="Mută în Șterse"
+                  >
+                    <Trash2 size={14} className="text-gray-500 group-hover:text-red-600 transition-colors" />
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handlePrint}
+                  className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+                  title="Tipărește oferta"
+                >
+                  <Printer size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleNativeShare}
+                  className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+                  title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
+                >
+                  <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+                </button>
+
+                {lead?.id && (
+                  <a
+                    href={getPublicShareUrl(lead.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+                    title="Deschide pagina publică a leadului"
+                  >
+                    <Globe size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+                  </a>
+                )}
+
+                {lead?.url ? (
+                  <a
+                    href={lead.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
+                    title="Deschide anunțul sursă extern"
+                  >
+                    <ExternalLink size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed shrink-0"
+                    title="Fără link sursă extern"
+                  >
+                    <ExternalLink size={14} className="text-gray-300" />
+                  </button>
+                )}
+
+                {onAddActivity && (
+                  <button
+                    type="button"
+                    onClick={onAddActivity}
+                    className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
+                    title="Adaugă activitate pentru această proprietate"
+                  >
+                    <Plus size={13} className="text-[#BE9662]" />
+                    <span>Activitate</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </>
       )}
 
-      {/* Horizontal Fixed Menu with Jump Links (Left) and Actions (Right) - Matching Cereri subheader style */}
-      <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20 px-4 sm:px-6 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-        {/* Left: Jump Links (styled exactly like the filter tabs in Cereri) */}
-        <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
-          {NAV_SECTIONS.map((sect) => {
-            const Icon = sect.icon;
-            const isActive = activeSection === sect.id;
-
-            return (
-              <button
-                key={sect.id}
-                type="button"
-                onClick={() => scrollToSection(sect.id)}
-                className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
-                  isActive
-                    ? "bg-[#051D35] text-white font-medium shadow-xs"
-                    : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
-                }`}
-              >
-                <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
-                <span>{sect.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Right: Actions (matching Cereri action button style) */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          {/* 1. Șterge */}
-          {!isPublicShared && onDelete && (
-            <button 
-              type="button"
-              onClick={onDelete}
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-500 hover:text-red-600 transition-colors shrink-0 cursor-pointer shadow-2xs group"
-              title="Mută în Șterse"
-            >
-              <Trash2 size={14} className="text-gray-500 group-hover:text-red-600 transition-colors" />
-            </button>
-          )}
-
-          {/* 2. Printează */}
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-            title="Tipărește oferta"
-          >
-            <Printer size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-          </button>
-
-          {/* 3. Distribuie */}
-          <button
-            type="button"
-            onClick={handleNativeShare}
-            className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-            title="Distribuie proprietatea prin aplicația nativă a dispozitivului"
-          >
-            <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-          </button>
-
-          {/* 4. Link extern */}
-          {lead?.url ? (
-            <a
-              href={lead.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
-              title="Deschide anunțul sursă extern"
-            >
-              <ExternalLink size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-gray-50 text-gray-300 cursor-not-allowed shrink-0"
-              title="Fără link sursă extern"
-            >
-              <ExternalLink size={14} className="text-gray-300" />
-            </button>
-          )}
-
-          {/* 5. Activitate (PRIMARY) */}
-          {!isPublicShared && onAddActivity && (
-            <button
-              type="button"
-              onClick={onAddActivity}
-              className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
-              title="Adaugă activitate pentru această proprietate"
-            >
-              <Plus size={13} className="text-[#BE9662]" />
-              <span>Activitate</span>
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Main Two-Column Layout (Scrollable container below the fixed headers) */}
-      <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth">
-        <div className="grid grid-cols-1 lg:grid-cols-12 min-h-full items-start">
+      {/* Main Layout (Scrollable container below the fixed headers) */}
+      <main ref={mainScrollRef} className={isPublicShared ? "w-full bg-transparent p-0 overflow-visible pt-[110px]" : "w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth"}>
+        <div className={isPublicShared ? "w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 pb-[40px] space-y-[20px]" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
           
-          {/* Left Column: All Content Cards (8 cols on lg) with clean right border */}
-          <div className="lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-[20px] border-b lg:border-b-0 lg:border-r border-gray-200">
+          {/* Main Column */}
+          <div className={isPublicShared ? "w-full p-0 space-y-[20px]" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-[20px] border-b lg:border-b-0 lg:border-r border-gray-200"}>
 
-            {/* #CARD 1: "PREȚ & CONDIȚII" */}
-            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="space-y-1">
-                  <h2 className="text-sm font-semibold text-gray-900 leading-snug font-sans">
-                    {displayTitle}
-                  </h2>
-                  <div className="text-base font-bold text-[#051D35] font-mono">
-                    {formattedPrice}
+            {/* Mosaic Photo Gallery (no container card, no header) */}
+            {allImages.length > 0 && (
+              <div id="photos" className="w-full h-[50vh] lg:h-[420px] rounded-xl overflow-hidden grid grid-cols-4 gap-2 sm:gap-2.5 bg-gray-100 select-none scroll-mt-[110px]">
+                {/* Col 1 (50% width) - 1st photo */}
+                <div 
+                  onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                  className="col-span-2 row-span-2 relative h-full overflow-hidden cursor-pointer group bg-gray-200"
+                >
+                  <img 
+                    src={allImages[0]} 
+                    alt={`${displayTitle} - foto principală`}
+                    className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+
+                {/* Col 2 (25% width) - 2 equal height stacked photos */}
+                <div className="col-span-1 grid grid-rows-2 gap-2 sm:gap-2.5 h-full min-h-0">
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(1); setIsGalleryOpen(true); }}
+                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                  >
+                    <img 
+                      src={allImages[1] || allImages[0]} 
+                      alt={`${displayTitle} - foto 2`}
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(2); setIsGalleryOpen(true); }}
+                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                  >
+                    <img 
+                      src={allImages[2] || allImages[0]} 
+                      alt={`${displayTitle} - foto 3`}
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3">
-                  <span className="text-[11px] font-mono text-[#BE9662] font-semibold">
-                    (Cod intern: {internalCode})
+                {/* Col 3 (25% width) - 2 equal height stacked photos, last photo acts as open lightbox link */}
+                <div className="col-span-1 grid grid-rows-2 gap-2 sm:gap-2.5 h-full min-h-0">
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(3); setIsGalleryOpen(true); }}
+                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                  >
+                    <img 
+                      src={allImages[3] || allImages[0]} 
+                      alt={`${displayTitle} - foto 4`}
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(4); setIsGalleryOpen(true); }}
+                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                  >
+                    <img 
+                      src={allImages[4] || allImages[0]} 
+                      alt={`${displayTitle} - foto 5`}
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                    {/* Dark overlay showing total count & open lightbox link */}
+                    <div className="absolute inset-0 bg-black/55 group-hover:bg-black/65 transition-colors flex flex-col items-center justify-center text-center p-2 cursor-pointer z-10">
+                      <span className="text-white text-sm sm:text-base md:text-lg font-bold underline underline-offset-4 decoration-2 font-sans tracking-wide">
+                        Toate imaginile ({allImages.length})
+                      </span>
+                      {allImages.length > 5 && (
+                        <span className="text-gray-200 text-[11px] sm:text-xs mt-1 font-medium font-sans">
+                          +{allImages.length - 4} imagini
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* #CARD 1: "PREȚ & CONDIȚII" */}
+            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
+              <div className="p-[20px] bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-[20px] select-none">
+                <div className="space-y-1.5 min-w-0 flex-1">
+                  <h1 className="text-[18px] font-normal text-gray-900 leading-snug tracking-normal font-sans">
+                    {displayTitle}
+                  </h1>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-2xl sm:text-3xl font-black text-[#051D35] tracking-tight">
+                      {priceParts.amount} €
+                    </span>
+                    {priceParts.isRent && (
+                      <span className="text-[16px] font-normal text-gray-500 font-sans">
+                        / lună
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-[20px] shrink-0 border-l border-gray-200 pl-[20px] py-1">
+                  <span className="text-sm sm:text-base font-bold text-gray-900 font-sans tracking-tight">
+                    ID: {exactId}
                   </span>
                   <SectionEditButton
                     isEditing={editingSection === "tranzactie"}
@@ -1451,16 +1693,37 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
 
-              <div className="font-sans divide-y divide-gray-100">
-                {renderRow("tranzactie", "Preț", formattedPrice)}
-                {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
-                {renderRow("tranzactie", "Comision", defaultCommission, true)}
+              {/* 2-column layout: Col 1 = moved from CONDITII in same order; Col 2 = existing items (Preț, TVA, Comision) */}
+              <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 font-sans">
+                {/* Column 1: Items moved from CONDIȚII */}
+                <div className="divide-y divide-gray-100">
+                  {isRent ? (
+                    <>
+                      {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
+                      {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
+                      {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
+                    </>
+                  ) : (
+                    <>
+                      {renderRow("acte", "Situație juridică", "Fara probleme")}
+                      {renderRow("acte", "Disponibilitate", "Imediată")}
+                      {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
+                    </>
+                  )}
+                </div>
+
+                {/* Column 2: Existing items in card */}
+                <div className="divide-y divide-gray-100">
+                  {renderRow("tranzactie", "Preț", formattedPrice)}
+                  {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
+                  {renderRow("tranzactie", "Comision", defaultCommission, true)}
+                </div>
               </div>
             </div>
 
             {/* #CARD 2: "INTRODUCERE" */}
-            <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+            <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
+              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <FileText size={16} />
@@ -1482,7 +1745,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="p-6 font-sans">
+              <div className="p-[20px] font-sans">
                 {editingSection === "introducere" ? (
                   <div 
                     onClick={() => introTextareaRef.current?.focus()}
@@ -1517,8 +1780,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "APARTAMENT" */}
-            <div id="apartament" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+            <div id="apartament" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px]">
+              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Home size={16} />
@@ -1529,128 +1792,135 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
 
-              <div className="font-sans divide-y divide-gray-100">
-                {/* -Subcategorie "Configuratie" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Configurație" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "configuratie"}
-                        isDirty={isSectionDirty("configuratie")}
-                        onStartEdit={() => handleStartEditSection("configuratie")}
-                        onCancel={() => handleCancelEditSection("configuratie")}
-                        onSave={() => handleSaveSection("configuratie")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
-                    {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
-                    {renderRow("configuratie", "Etaj", etaj)}
-                    {renderRow("configuratie", "An construcție", anConstructie)}
-                    {renderRow("configuratie", "Număr camere", String(camere))}
-                    {renderRow("configuratie", "Număr băi", String(bai))}
-                    {renderRow("configuratie", "Balcon", String(balcoane))}
-                    {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
+              <div className="font-sans divide-y divide-gray-200">
+                {/* 1. Configurație & Finisaje Side by Side */}
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                  {/* Left: Configurație */}
+                  <div className="flex flex-col">
+                    <SubCategoryHeader 
+                      title="Configurație" 
+                      actions={
+                        <SectionEditButton
+                          isEditing={editingSection === "configuratie"}
+                          isDirty={isSectionDirty("configuratie")}
+                          onStartEdit={() => handleStartEditSection("configuratie")}
+                          onCancel={() => handleCancelEditSection("configuratie")}
+                          onSave={() => handleSaveSection("configuratie")}
+                          disabled={isPublicShared}
+                        />
+                      }
+                    />
+                    <div className="divide-y divide-gray-100 flex-1">
+                      {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
+                      {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
+                      {renderRow("configuratie", "Etaj", etaj)}
+                      {renderRow("configuratie", "An construcție", anConstructie)}
+                      {renderRow("configuratie", "Număr camere", String(camere))}
+                      {renderRow("configuratie", "Număr băi", String(bai))}
+                      {renderRow("configuratie", "Balcon", String(balcoane))}
+                      {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
+                    </div>
+                  </div>
+
+                  {/* Right: Finisaje */}
+                  <div className="flex flex-col">
+                    <SubCategoryHeader 
+                      title="Finisaje" 
+                      actions={
+                        <SectionEditButton
+                          isEditing={editingSection === "finisaje"}
+                          isDirty={isSectionDirty("finisaje")}
+                          onStartEdit={() => handleStartEditSection("finisaje")}
+                          onCancel={() => handleCancelEditSection("finisaje")}
+                          onSave={() => handleSaveSection("finisaje")}
+                          disabled={isPublicShared}
+                        />
+                      }
+                    />
+                    <div className="divide-y divide-gray-100 flex-1">
+                      {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
+                      {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
+                      {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
+                      {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
+                      {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
+                      {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
+                      {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
+                      {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
+                    </div>
                   </div>
                 </div>
 
-                {/* -Subcategorie "Finisaje" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Finisaje" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "finisaje"}
-                        isDirty={isSectionDirty("finisaje")}
-                        onStartEdit={() => handleStartEditSection("finisaje")}
-                        onCancel={() => handleCancelEditSection("finisaje")}
-                        onSave={() => handleSaveSection("finisaje")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
-                    {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
-                    {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
-                    {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
-                    {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
-                    {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
-                    {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
-                    {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
+                {/* 2. Mobilare & Dotări Side by Side */}
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                  {/* Left: Mobilare */}
+                  <div className="flex flex-col">
+                    <SubCategoryHeader 
+                      title="Mobilare" 
+                      actions={
+                        <SectionEditButton
+                          isEditing={editingSection === "mobilare"}
+                          isDirty={isSectionDirty("mobilare")}
+                          onStartEdit={() => handleStartEditSection("mobilare")}
+                          onCancel={() => handleCancelEditSection("mobilare")}
+                          onSave={() => handleSaveSection("mobilare")}
+                          disabled={isPublicShared}
+                        />
+                      }
+                    />
+                    <div className="divide-y divide-gray-100 flex-1">
+                      {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
+                      {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
+                      {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
+                      {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
+                      {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
+                      {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
+                      {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
+                      {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
+                      {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
+                      {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
+                      {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
+                    </div>
                   </div>
-                </div>
 
-                {/* -Subcategorie "Mobilare" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Mobilare" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "mobilare"}
-                        isDirty={isSectionDirty("mobilare")}
-                        onStartEdit={() => handleStartEditSection("mobilare")}
-                        onCancel={() => handleCancelEditSection("mobilare")}
-                        onSave={() => handleSaveSection("mobilare")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
-                    {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
-                    {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
-                    {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
-                    {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
-                    {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
-                    {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
-                    {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
-                    {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
-                    {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
-                    {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
-                  </div>
-                </div>
-
-                {/* -Subcategorie "Dotari" */}
-                <div>
-                  <SubCategoryHeader 
-                    title="Dotări" 
-                    actions={
-                      <SectionEditButton
-                        isEditing={editingSection === "dotari"}
-                        isDirty={isSectionDirty("dotari")}
-                        onStartEdit={() => handleStartEditSection("dotari")}
-                        onCancel={() => handleCancelEditSection("dotari")}
-                        onSave={() => handleSaveSection("dotari")}
-                        disabled={isPublicShared}
-                      />
-                    }
-                  />
-                  <div className="divide-y divide-gray-100">
-                    {renderRow("dotari", "Living", "aer condiționat, smart TV")}
-                    {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
-                    {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
-                    {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
-                    {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
-                    {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
-                    {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
-                    {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
-                    {renderRow("dotari", "Hol", "interfon")}
-                    {renderRow("dotari", "Altele", "-", true)}
+                  {/* Right: Dotări */}
+                  <div className="flex flex-col">
+                    <SubCategoryHeader 
+                      title="Dotări" 
+                      actions={
+                        <SectionEditButton
+                          isEditing={editingSection === "dotari"}
+                          isDirty={isSectionDirty("dotari")}
+                          onStartEdit={() => handleStartEditSection("dotari")}
+                          onCancel={() => handleCancelEditSection("dotari")}
+                          onSave={() => handleSaveSection("dotari")}
+                          disabled={isPublicShared}
+                        />
+                      }
+                    />
+                    <div className="divide-y divide-gray-100 flex-1">
+                      {renderRow("dotari", "Living", "aer condiționat, smart TV")}
+                      {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
+                      {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
+                      {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
+                      {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
+                      {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
+                      {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
+                      {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
+                      {baiCount >= 3 && renderRow("dotari", "Baie 3", "-")}
+                      {baiCount >= 4 && renderRow("dotari", "Baie 4", "-")}
+                      {renderRow("dotari", "Hol", "interfon", true)}
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
 
             {/* #CARD "BLOC" */}
-            <div id="bloc" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+            <div id="bloc" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
+              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Building2 size={16} />
@@ -1679,8 +1949,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "IMPREJURIMI" */}
-            <div id="imprejurimi" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+            <div id="imprejurimi" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
+              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Compass size={16} />
@@ -1712,8 +1982,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "TRANSPORT" */}
-            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
+              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Bus size={16} />
@@ -1742,8 +2012,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "PARCARE" */}
-            <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+            <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
+              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
                 <div className="flex items-center gap-2.5">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
                     <Car size={16} />
@@ -1768,52 +2038,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
-            {/* #CARD "CONDIȚII" */}
-            <div id="acte" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-28 sm:scroll-mt-32 font-sans">
-              <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
-                    <ShieldCheck size={16} />
-                  </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    CONDIȚII
-                  </h2>
-                </div>
-
-                <SectionEditButton
-                  isEditing={editingSection === "acte"}
-                  isDirty={isSectionDirty("acte")}
-                  onStartEdit={() => handleStartEditSection("acte")}
-                  onCancel={() => handleCancelEditSection("acte")}
-                  onSave={() => handleSaveSection("acte")}
-                  disabled={isPublicShared}
-                />
-              </div>
-
-              <div className="font-sans divide-y divide-gray-100">
-                {isRent ? (
-                  <>
-                    {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
-                    {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
-                    {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
-                  </>
-                ) : (
-                  <>
-                    {renderRow("acte", "Situație juridică", "Fara probleme")}
-                    {renderRow("acte", "Disponibilitate", "Imediată")}
-                    {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
-                  </>
-                )}
-              </div>
-            </div>
-
-            {/* Generous bottom spacing ensuring the last cards can scroll to the top under the jump links bar */}
-            <div className="h-[60vh] min-h-[480px] pointer-events-none" aria-hidden="true" />
+            {/* Bottom spacing ensuring smooth scrolling */}
+            <div className="h-[20vh] min-h-[160px] pointer-events-none" aria-hidden="true" />
 
           </div>
 
-          {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share */}
-          <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-[20px] lg:sticky lg:top-0">
+          {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share - STRICTLY EXCLUDED on isPublicShared */}
+          {!isPublicShared && (
+            <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-[20px] lg:sticky lg:top-0">
             
             {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
             {!isPublicShared && (
@@ -2224,9 +2456,23 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
           </div>
+        )}
 
         </div>
       </main>
+
+      {/* Back to Top Button: Square button on the right side with arrow up icon */}
+      {isPublicShared && showBackToTop && (
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className="fixed bottom-6 right-6 z-40 w-10 h-10 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 hover:text-[#051D35] flex items-center justify-center shadow-xs hover:shadow-sm transition-all cursor-pointer select-none group"
+          title="Înapoi sus"
+          aria-label="Înapoi sus"
+        >
+          <ArrowUp size={18} className="text-gray-600 group-hover:text-[#051D35] transition-colors" />
+        </button>
+      )}
 
       {/* Lightbox Photo Gallery Modal */}
       {isGalleryOpen && allImages.length > 0 && (
