@@ -295,9 +295,12 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  const isRunningBundledServer = import.meta.url.includes('/dist/') || (typeof process !== 'undefined' && process.argv[1] && process.argv[1].includes('/dist/'));
+  const isProduction = process.env.NODE_ENV === "production" || isRunningBundledServer;
+
   // Initialize Vite dev server instance early if in development mode so it is accessible to SSR routes
   let vite: any = null;
-  if (process.env.NODE_ENV !== "production") {
+  if (!isProduction) {
     vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -695,22 +698,29 @@ Returnează un JSON strict cu următoarele chei:
   // Helper to resolve the correct index.html file:
   // In production (or when dist/index.html is built), we MUST serve dist/index.html with bundled hashed assets.
   // Serving raw unbundled src/main.tsx in production crashes the browser with a fatal module MIME error.
+  // Helper to resolve the correct index.html file:
+  // Whenever dist/index.html is built, we MUST serve dist/index.html with bundled hashed assets.
+  // Serving raw unbundled src/main.tsx crashes the browser with a fatal module MIME error.
   function getEffectiveIndexPath(): { path: string; isDist: boolean } {
-    const distIndexPath = path.join(process.cwd(), 'dist', 'index.html');
-    const rootIndexPath = path.join(process.cwd(), 'index.html');
+    const distCandidates = [
+      path.join(process.cwd(), 'dist', 'index.html'),
+      path.join(__dirname, 'index.html'),
+      path.join(__dirname, 'dist', 'index.html'),
+      path.resolve('./dist/index.html')
+    ];
 
-    if (process.env.NODE_ENV === "production" && fs.existsSync(distIndexPath)) {
-      return { path: distIndexPath, isDist: true };
+    // Whenever a compiled dist/index.html exists, ALWAYS prefer it!
+    for (const distCandidate of distCandidates) {
+      if (fs.existsSync(distCandidate)) {
+        return { path: distCandidate, isDist: true };
+      }
     }
-    if (fs.existsSync(distIndexPath) && !vite) {
-      return { path: distIndexPath, isDist: true };
-    }
+
+    const rootIndexPath = path.join(process.cwd(), 'index.html');
     if (fs.existsSync(rootIndexPath)) {
       return { path: rootIndexPath, isDist: false };
     }
-    if (fs.existsSync(distIndexPath)) {
-      return { path: distIndexPath, isDist: true };
-    }
+
     return { path: rootIndexPath, isDist: false };
   }
 
@@ -761,12 +771,55 @@ Returnează un JSON strict cu următoarele chei:
 
       let html = fs.readFileSync(indexInfo.path, 'utf8');
 
-      // In dev mode with Vite server, pass through vite.transformIndexHtml
+      // In dev mode without prebuilt dist, pass through vite.transformIndexHtml
       if (!indexInfo.isDist && vite) {
         try {
           html = await vite.transformIndexHtml(req.originalUrl, html);
         } catch (viteErr: any) {
           console.warn("[Server] vite.transformIndexHtml error:", viteErr.message);
+        }
+      }
+
+      // CRITICAL FAILSAFE: If the loaded HTML still contains raw /src/main.tsx, ALWAYS swap for compiled bundle
+      if (html.includes('/src/main.tsx')) {
+        const distAssetsDirs = [
+          path.join(process.cwd(), 'dist', 'assets'),
+          path.join(__dirname, 'assets'),
+          path.join(__dirname, 'dist', 'assets')
+        ];
+
+        let jsAsset = "";
+        let cssAsset = "";
+
+        for (const assetsDir of distAssetsDirs) {
+          if (fs.existsSync(assetsDir)) {
+            try {
+              const files = fs.readdirSync(assetsDir);
+              const jsFile = files.find(f => f.startsWith('index-') && f.endsWith('.js'));
+              const cssFile = files.find(f => f.startsWith('index-') && f.endsWith('.css'));
+              if (jsFile) jsAsset = `/assets/${jsFile}`;
+              if (cssFile) cssAsset = `/assets/${cssFile}`;
+              if (jsAsset) break;
+            } catch (err) {
+              // ignore
+            }
+          }
+        }
+
+        if (jsAsset) {
+          html = html.replace(
+            /<script\s+type=["']module["']\s+src=["']\/src\/main\.tsx["']\s*><\/script>/gi,
+            `<script type="module" crossorigin src="${jsAsset}"></script>`
+          );
+          if (cssAsset && !html.includes(cssAsset)) {
+            html = html.replace('</head>', `<link rel="stylesheet" crossorigin href="${cssAsset}">\n</head>`);
+          }
+        } else if (vite) {
+          try {
+            html = await vite.transformIndexHtml(req.originalUrl, html);
+          } catch (viteErr: any) {
+            console.warn("[Server] vite.transformIndexHtml fallback error:", viteErr.message);
+          }
         }
       }
 
@@ -2347,15 +2400,35 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
     res.status(500).json({ error: "Internal server error", details: err.message });
   });
 
-  // Vite middleware for development or static serving for production
-  if (vite) {
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), "dist");
+  // Resolve dist directory across multiple potential locations (root, __dirname, etc.)
+  const candidateDistDirs = [
+    path.join(process.cwd(), "dist"),
+    __dirname,
+    path.join(__dirname, "dist"),
+    path.resolve("./dist")
+  ];
+  let distPath = "";
+  for (const dir of candidateDistDirs) {
+    if (fs.existsSync(path.join(dir, "index.html"))) {
+      distPath = dir;
+      break;
+    }
+  }
+
+  // If dist exists, ALWAYS mount express.static so that all compiled assets are served with proper MIME types!
+  if (distPath) {
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+  }
+
+  // Vite middleware for development or fallback for production
+  if (isProduction || !vite) {
+    if (distPath) {
+      app.get("*", (req, res) => {
+        res.sendFile(path.join(distPath, "index.html"));
+      });
+    }
+  } else if (vite) {
+    app.use(vite.middlewares);
   }
 
   const server = app.listen(PORT, "0.0.0.0", () => {
