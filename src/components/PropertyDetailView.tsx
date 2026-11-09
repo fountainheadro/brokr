@@ -2038,8 +2038,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
-            {/* Bottom spacing ensuring smooth scrolling */}
-            <div className="h-[20vh] min-h-[160px] pointer-events-none" aria-hidden="true" />
+            {/* Bottom spacing ensuring smooth scrolling and precise alignment for all jump links */}
+            <div className={isPublicShared ? "h-[calc(100vh-110px)] pointer-events-none" : "h-[20vh] min-h-[160px] pointer-events-none"} aria-hidden="true" />
 
           </div>
 

@@ -295,6 +295,15 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  // Initialize Vite dev server instance early if in development mode so it is accessible to SSR routes
+  let vite: any = null;
+  if (process.env.NODE_ENV !== "production") {
+    vite = await createViteServer({
+      server: { middlewareMode: true },
+      appType: "spa",
+    });
+  }
+
   // Global Logging Middleware
   app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
@@ -683,12 +692,39 @@ Returnează un JSON strict cu următoarele chei:
     }
   });
 
+  // Helper to resolve the correct index.html file:
+  // In production (or when dist/index.html is built), we MUST serve dist/index.html with bundled hashed assets.
+  // Serving raw unbundled src/main.tsx in production crashes the browser with a fatal module MIME error.
+  function getEffectiveIndexPath(): { path: string; isDist: boolean } {
+    const distIndexPath = path.join(process.cwd(), 'dist', 'index.html');
+    const rootIndexPath = path.join(process.cwd(), 'index.html');
+
+    if (process.env.NODE_ENV === "production" && fs.existsSync(distIndexPath)) {
+      return { path: distIndexPath, isDist: true };
+    }
+    if (fs.existsSync(distIndexPath) && !vite) {
+      return { path: distIndexPath, isDist: true };
+    }
+    if (fs.existsSync(rootIndexPath)) {
+      return { path: rootIndexPath, isDist: false };
+    }
+    if (fs.existsSync(distIndexPath)) {
+      return { path: distIndexPath, isDist: true };
+    }
+    return { path: rootIndexPath, isDist: false };
+  }
+
   // OpenGraph SSR route for rich link previews on WhatsApp and social media
-  app.get("/share/:id", async (req, res) => {
+  app.get(["/share/:id", "/p/:id"], async (req, res) => {
     try {
       const { id } = req.params;
+      const indexInfo = getEffectiveIndexPath();
+
       if (!id) {
-        return res.sendFile(path.join(process.cwd(), 'index.html'));
+        if (!fs.existsSync(indexInfo.path)) {
+          return res.status(404).send("Not found");
+        }
+        return res.sendFile(indexInfo.path);
       }
 
       const property = await fetchPropertyById(id);
@@ -717,14 +753,22 @@ Returnează un JSON strict cu următoarele chei:
         imageUrl = `${req.protocol}://${req.get('host')}/public/og-default.jpg`;
       }
 
-      const shareUrl = `${req.protocol}://${req.get('host')}/share/${id}`;
+      const shareUrl = `${req.protocol}://${req.get('host')}${req.path}`;
 
-      const indexPath = path.join(process.cwd(), 'index.html');
-      if (!fs.existsSync(indexPath)) {
+      if (!fs.existsSync(indexInfo.path)) {
         return res.status(404).send("Not found");
       }
 
-      let html = fs.readFileSync(indexPath, 'utf8');
+      let html = fs.readFileSync(indexInfo.path, 'utf8');
+
+      // In dev mode with Vite server, pass through vite.transformIndexHtml
+      if (!indexInfo.isDist && vite) {
+        try {
+          html = await vite.transformIndexHtml(req.originalUrl, html);
+        } catch (viteErr: any) {
+          console.warn("[Server] vite.transformIndexHtml error:", viteErr.message);
+        }
+      }
 
       const esc = (s: string) => String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -763,6 +807,10 @@ Returnează un JSON strict cu următoarele chei:
       res.send(html);
     } catch (err: any) {
       console.warn("[Server] /share/:id OpenGraph error:", err.message);
+      const fallbackInfo = getEffectiveIndexPath();
+      if (fs.existsSync(fallbackInfo.path)) {
+        return res.sendFile(fallbackInfo.path);
+      }
       res.sendFile(path.join(process.cwd(), 'index.html'));
     }
   });
@@ -2299,12 +2347,8 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
     res.status(500).json({ error: "Internal server error", details: err.message });
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+  // Vite middleware for development or static serving for production
+  if (vite) {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");

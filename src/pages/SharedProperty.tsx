@@ -114,11 +114,13 @@ export const SharedProperty: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (lead) {
+    if (loading) {
+      document.title = "Loading page...";
+    } else if (lead) {
       const pageTitle = lead.title || lead.extractedData?.crmData?.descriere?.titlu || "Proprietate imobiliară";
       document.title = `${pageTitle} • brokr.`;
     }
-  }, [lead]);
+  }, [loading, lead]);
 
   if (loading) {
     return (
