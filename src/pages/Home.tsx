@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate, matchPath } from "react-router-dom";
 import { Header } from "../components/Header";
 import { Sidebar, NavSubItem, NavTransactionType } from "../components/Sidebar";
 import { ContactsView } from "../components/ContactsView";
+import { ContactDetailView } from "../components/ContactDetailView";
 import { PersonalView } from "../components/PersonalView";
 import { AddLeadModal } from "../components/AddLeadModal";
 import { LeadList } from "../components/LeadList";
@@ -21,14 +22,18 @@ import { AddActivityModal } from "../components/AddActivityModal";
 import { AddTourModal } from "../components/AddTourModal";
 import { PropertyQuickViewModal } from "../components/PropertyQuickViewModal";
 import { PropertyDetailView } from "../components/PropertyDetailView";
+import { LeadCerereDetailPage } from "../components/LeadCerereDetailPage";
 import { NotificationsModal } from "../components/NotificationsModal";
-import { CalendarDrawer } from "../components/CalendarDrawer";
+import { CalendarView } from "../components/CalendarView";
 import { ExtractionRulesModal } from "../components/ExtractionRulesModal";
 import { notificationsService, Notification as AppNotification } from "../services/notificationsService";
 import { motion, AnimatePresence, Transition } from "motion/react";
 import { extractData, extractBasicData } from "../services/geminiService";
+import { getApiAuthHeaders } from "../lib/apiAuth";
 import { toast } from "react-hot-toast";
 import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
+import { automationSettingsService } from "../services/automationSettingsService";
+import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { 
   DetaliiGeneraleSection, 
   CaracteristiciSection, 
@@ -70,17 +75,36 @@ import {
   Building2,
   ClipboardList,
   SlidersHorizontal,
-  Edit3
+  Timer,
+  Edit3,
+  ShieldAlert,
+  AlertCircle
 } from "lucide-react";
 import { getPublicShareUrl } from "../utils/shareUtils";
 import { auth } from "../lib/firebase";
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
+import { useAuth } from "../core/auth/ctx_auth";
+import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { CATEGORIA_OPTIONS, TRANZACTIE_OPTIONS } from "../constants";
 
 import { ViewingDetailsModal } from "../components/ViewingDetailsModal";
 import { NevalidataUrlList } from "../components/NevalidataUrlList";
 import { NevalidataDetailsModal } from "../components/NevalidataDetailsModal";
 import { CalificataDetailsModal } from "../components/CalificataDetailsModal";
+import {
+  OlxLeadDrawer,
+  OLX_MAX_AGE_STEPS,
+  DEFAULT_OLX_MIN_AD_AGE_HOURS,
+  DEFAULT_OLX_MAX_AD_AGE_HOURS,
+  type OlxLeadDrawerMode,
+} from "../components/OlxLeadDrawer";
+import {
+  OlxLeadFilters,
+  DEFAULT_OLX_LEAD_FILTERS,
+  countActiveOlxFilters,
+  hasActiveOlxFilters,
+  matchesOlxLeadFilter,
+} from "../utils/olxFilterUtils";
 
 const TABS: LeadStatus[] = [
   "Noi",
@@ -131,24 +155,8 @@ const STATUS_LABELS: Record<string, string> = {
   "Sterse": "Șterse"
 };
 
-const pageSlideVariants = {
-  enter: (direction: number) => ({
-    x: direction >= 0 ? "100%" : "-100%",
-    opacity: 1,
-  }),
-  center: {
-    x: "0%",
-    opacity: 1,
-  },
-  exit: (direction: number) => ({
-    x: direction >= 0 ? "-100%" : "100%",
-    opacity: 1,
-  }),
-};
-
 const pageSlideTransition: Transition = {
-  x: { type: "tween", duration: 0.22, ease: [0.25, 1, 0.5, 1] },
-  opacity: { duration: 0.15 },
+  x: { type: "tween", duration: 0.28, ease: [0.22, 1, 0.36, 1] },
 };
 
 type SortOption = 'newest' | 'oldest' | 'expensive' | 'cheap';
@@ -347,13 +355,21 @@ export const Home: React.FC = () => {
   const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>('Toate');
   const [leadRoleFilter, setLeadRoleFilter] = useState<LeadRoleFilter>('Toate');
   const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Proprietati');
-  const [navDirection, setNavDirection] = useState<number>(1);
   const location = useLocation();
+  const navigate = useNavigate();
+  const prevPathnameRef = useRef(location.pathname);
+  const closingDetailRouteRef = useRef(false);
+  const skipRouteClearRef = useRef(false);
 
   const handleSelectSidebarItem = (subItem: NavSubItem) => {
-    if (selectedLead) {
-      setNavDirection(-1);
+    if (selectedLead || location.pathname !== "/") {
+      closingDetailRouteRef.current = true;
       setSelectedLead(null);
+      setIsEditingDetails(false);
+      setShowDeleteConfirm(false);
+    }
+    if (selectedContact) {
+      setSelectedContact(null);
     }
     const normalized = subItem === 'Imobile' || subItem === 'Proprietăți' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
@@ -380,6 +396,62 @@ export const Home: React.FC = () => {
   }, [location.state]);
 
   const [categoryFilter, setCategoryFilter] = useState<string>('Toate');
+  const [olxDrawerMode, setOlxDrawerMode] = useState<OlxLeadDrawerMode | null>(null);
+  const [olxFilters, setOlxFilters] = useState<OlxLeadFilters>(DEFAULT_OLX_LEAD_FILTERS);
+  const [olxAutoScanFilters, setOlxAutoScanFilters] = useState<OlxLeadFilters>(() => {
+    try {
+      const saved = localStorage.getItem("brokr_olx_autoscan_filters");
+      if (!saved) return DEFAULT_OLX_LEAD_FILTERS;
+      const parsed = JSON.parse(saved);
+      return {
+        ...DEFAULT_OLX_LEAD_FILTERS,
+        ...parsed,
+        zones: Array.isArray(parsed?.zones) ? parsed.zones : [],
+      };
+    } catch {
+      return DEFAULT_OLX_LEAD_FILTERS;
+    }
+  });
+  const [olxScanIntervalMinutes, setOlxScanIntervalMinutes] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem("brokr_olx_scan_interval") || 0);
+      return [0, 1, 5, 15, 30, 60].includes(saved) ? saved : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [olxScanLimit, setOlxScanLimit] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem("brokr_olx_scan_limit") || 3);
+      return [3, 6, 9, 12, 24, 48].includes(saved) ? saved : 3;
+    } catch {
+      return 3;
+    }
+  });
+  const [olxMinAdAgeHours, setOlxMinAdAgeHours] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem("brokr_olx_min_ad_age_hours") || DEFAULT_OLX_MIN_AD_AGE_HOURS);
+      return OLX_MAX_AGE_STEPS.some((s) => s.hours === saved) ? saved : DEFAULT_OLX_MIN_AD_AGE_HOURS;
+    } catch {
+      return DEFAULT_OLX_MIN_AD_AGE_HOURS;
+    }
+  });
+  const [olxMaxAdAgeHours, setOlxMaxAdAgeHours] = useState<number>(() => {
+    try {
+      const saved = Number(localStorage.getItem("brokr_olx_max_ad_age_hours") || DEFAULT_OLX_MAX_AD_AGE_HOURS);
+      return OLX_MAX_AGE_STEPS.some((s) => s.hours === saved && s.hours > 0) ? saved : DEFAULT_OLX_MAX_AD_AGE_HOURS;
+    } catch {
+      return DEFAULT_OLX_MAX_AD_AGE_HOURS;
+    }
+  });
+  const [isOlxAutoScanning, setIsOlxAutoScanning] = useState<boolean>(false);
+  const [lastOlxScanAt, setLastOlxScanAt] = useState<number | null>(null);
+  const [olxScanNotice, setOlxScanNotice] = useState<{
+    type: "info" | "error";
+    title: string;
+    message: string;
+    timestamp: number;
+  } | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [personal, setPersonal] = useState<PersonalMember[]>([]);
@@ -471,19 +543,19 @@ export const Home: React.FC = () => {
   const [editedCategoria, setEditedCategoria] = useState("");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [isExtractionRulesOpen, setIsExtractionRulesOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
-  const [user, setUser] = useState<any>(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const { user, isLoading: authLoading, loginWithGoogle, logout } = useAuth();
+  const { isAccessDenied, accessDeniedReason, isLoading: isTenantLoading, startPreview } = useTenantContext();
   const [loginError, setLoginError] = useState<string | null>(null);
   const [copiedDomain, setCopiedDomain] = useState<string | null>(null);
 
   useEffect(() => {
     if (location.search.includes('calendar=true')) {
-      setIsCalendarOpen(true);
+      handleSelectSidebarItem('Calendar');
+      navigate('/', { replace: true });
     }
-  }, [location.search]);
+  }, [location.search, navigate]);
 
   const handleCopyDomain = async (domain: string) => {
     try {
@@ -761,6 +833,12 @@ export const Home: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (user) {
+      void automationSettingsService.fetchTitleRule().catch(() => {});
+    }
+  }, [user]);
+
+  useEffect(() => {
     if (selectedLead?.id && user) {
       const unsub = viewingsService.subscribeToPropertyViewings(selectedLead.id, (v) => {
         setViewings(v);
@@ -776,19 +854,34 @@ export const Home: React.FC = () => {
     setExtractionStatus("Accesare URL...");
     try {
       console.log(`[Home] Fetching /api/crawl for ${lead.url}`);
-      const crawlRes = await fetch("/api/crawl", {
-        method: "POST",
-        headers: { 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+      let crawlRes: Response;
+      try {
+        const crawlHeaders = await getApiAuthHeaders({
           "Content-Type": "application/json",
           "Accept": "application/json"
-        },
-        body: JSON.stringify({ url: lead.url }),
-      });
+        });
+        const activeTitleRule = automationSettingsService.getCachedTitleRule();
+        crawlRes = await fetch("/api/crawl", {
+          method: "POST",
+          headers: crawlHeaders,
+          body: JSON.stringify({ url: lead.url, titleAutomationRule: activeTitleRule }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
       
       const contentType = crawlRes.headers.get("content-type");
       if (!crawlRes.ok || !contentType || !contentType.includes("application/json")) {
         const text = await crawlRes.text();
-        console.error("Server error response:", text.substring(0, 500));
+        if (crawlRes.status >= 500) {
+          console.error("Server error response:", text.substring(0, 500));
+        } else {
+          console.warn("Crawl blocked or unavailable:", crawlRes.status, text.substring(0, 200));
+        }
         
         let errorMessage = "Eroare la accesarea URL-ului";
         try {
@@ -843,7 +936,10 @@ export const Home: React.FC = () => {
                 // Relaxed rule: Never drop property images on proxy or CORS error
                 complete(true);
               };
-              img.src = `/api/proxy-image?url=${encodeURIComponent(url)}&noclean=true`;
+              const normalizedUrl = url.startsWith("//") ? `https:${url}` : url;
+              img.src = normalizedUrl.includes("/api/proxy-image")
+                ? normalizedUrl
+                : `/api/proxy-image?url=${encodeURIComponent(normalizedUrl)}`;
             });
           });
           await Promise.all(promises);
@@ -891,11 +987,16 @@ export const Home: React.FC = () => {
         if (!finalCrmData.imagini) {
           finalCrmData.imagini = { living: [], bucatarie: [], camera: [], baie: [], alteSpatii: [] };
         }
-        finalCrmData.imagini.alteSpatii = images.map((img: string) => ({ original: img }));
+        finalCrmData.imagini.alteSpatii = images.map((img: string) => ({ 
+          original: img.startsWith("http") && !img.includes("/api/proxy-image")
+            ? `/api/proxy-image?url=${encodeURIComponent(img)}`
+            : img 
+        }));
       }
 
       const extraction = {
         crmData: finalCrmData,
+        automationSource: crawlData.automationSource || null,
         markdownMarketing: finalCrmData.descriere?.continut || description || "",
         summary: `${categoria || "Proprietate"} în ${zone || "București"}, ${price || "N/A"}`
       };
@@ -904,15 +1005,24 @@ export const Home: React.FC = () => {
         ? "Închiriere" 
         : "Vânzare";
 
-      const deepCoverImage = images && images.length > 0 ? images[0] : lead.coverImage;
+      const rawCover = images && images.length > 0 ? images[0] : lead.coverImage;
+      const deepCoverImage = rawCover && rawCover.startsWith("http") && !rawCover.includes("/api/proxy-image")
+        ? `/api/proxy-image?url=${encodeURIComponent(rawCover)}`
+        : rawCover;
 
+      const fallbackRule = automationSettingsService.getCachedTitleRule();
       const finalTitle = finalCrmData.descriere?.titlu || title || generateStandardAdTitle({
+        transactionType: transType,
         categoria: categoria || lead.categoria || "Apartament",
         camere: finalCrmData.caracteristici?.detalii?.camere,
         suprafataUtila: finalCrmData.caracteristici?.suprafete?.utila,
+        etaj: finalCrmData.caracteristici?.detalii?.etaj,
         zona: zone || lead.zone,
         compartimentare: finalCrmData.caracteristici?.detalii?.compartimentare,
-        rawText: description || text || ""
+        propertyId: lead.propertyId,
+        rawTitle: title,
+        rawText: description || text || "",
+        titleRule: fallbackRule,
       });
       finalCrmData.descriere.titlu = finalTitle;
 
@@ -956,14 +1066,239 @@ export const Home: React.FC = () => {
         ...prev,
         ...updatedFields
       } : prev);
-    } catch (error) {
-      console.error(error);
+    } catch (error: any) {
+      console.warn("[Home] triggerExtraction error:", error?.message || error);
+      const isAbort = error?.name === "AbortError";
+      const isFetchError = error instanceof TypeError || error?.message?.includes("fetch");
+      if (isAbort) {
+        toast.error("Conectarea la site-ul extern a durat prea mult. Verificați link-ul și reîncercați.");
+      } else if (isFetchError) {
+        toast.error("Eroare de conexiune la server. Verificați link-ul și reîncercați.");
+      } else {
+        toast.error(error?.message || "Eroare la extracție");
+      }
       setExtractionStatus("Eroare la extracție");
     } finally {
       setIsExtracting(false);
       setExtractionStatus("");
     }
   }, []);
+
+  const leadsRef = useRef<Lead[]>([]);
+  const olxAutoScanFiltersRef = useRef<OlxLeadFilters>(olxAutoScanFilters);
+  const olxScanLimitRef = useRef<number>(olxScanLimit);
+  const olxMinAdAgeHoursRef = useRef<number>(olxMinAdAgeHours);
+  const olxMaxAdAgeHoursRef = useRef<number>(olxMaxAdAgeHours);
+  const isOlxAutoScanningRef = useRef<boolean>(false);
+  const seenOlxScanUrlsRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    leadsRef.current = leads;
+    leads.forEach((l) => {
+      if (l.url) seenOlxScanUrlsRef.current.add(l.url.split("?")[0].trim().toLowerCase());
+    });
+  }, [leads]);
+
+  useEffect(() => {
+    olxAutoScanFiltersRef.current = olxAutoScanFilters;
+    try {
+      localStorage.setItem("brokr_olx_autoscan_filters", JSON.stringify(olxAutoScanFilters));
+    } catch {}
+  }, [olxAutoScanFilters]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("brokr_olx_scan_interval", String(olxScanIntervalMinutes));
+    } catch {}
+  }, [olxScanIntervalMinutes]);
+
+  useEffect(() => {
+    olxScanLimitRef.current = olxScanLimit;
+    try {
+      localStorage.setItem("brokr_olx_scan_limit", String(olxScanLimit));
+    } catch {}
+  }, [olxScanLimit]);
+
+  useEffect(() => {
+    olxMinAdAgeHoursRef.current = olxMinAdAgeHours;
+    try {
+      localStorage.setItem("brokr_olx_min_ad_age_hours", String(olxMinAdAgeHours));
+    } catch {}
+  }, [olxMinAdAgeHours]);
+
+  useEffect(() => {
+    olxMaxAdAgeHoursRef.current = olxMaxAdAgeHours;
+    try {
+      localStorage.setItem("brokr_olx_max_ad_age_hours", String(olxMaxAdAgeHours));
+    } catch {}
+  }, [olxMaxAdAgeHours]);
+
+  const runOlxNewAdsScan = React.useCallback(async (isManual = false) => {
+    if (isOlxAutoScanningRef.current) return;
+    if (!auth.currentUser) return;
+    isOlxAutoScanningRef.current = true;
+    setIsOlxAutoScanning(true);
+    try {
+      const authHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
+      const existingUrls = Array.from(
+        new Set([
+          ...leadsRef.current.map((l) => l.url).filter(Boolean),
+          ...Array.from(seenOlxScanUrlsRef.current),
+        ])
+      );
+      const activeTitleRule = automationSettingsService.getCachedTitleRule();
+      const res = await fetch("/api/crawl-olx-leads", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          filters: olxAutoScanFiltersRef.current,
+          page: 1,
+          existingUrls,
+          limit: olxScanLimitRef.current,
+          minAgeHours: olxMinAdAgeHoursRef.current,
+          maxAgeHours: olxMaxAdAgeHoursRef.current,
+          titleAutomationRule: activeTitleRule,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || `Eroare HTTP ${res.status}`);
+      }
+
+      setLastOlxScanAt(Date.now());
+      const crawledItems: any[] = Array.isArray(data?.items) ? data.items : [];
+      if (crawledItems.length === 0) {
+        setOlxScanIntervalMinutes(0);
+        if (data?.warning) {
+          setOlxScanNotice({
+            type: "error",
+            title: "Eroare la scanarea automată OLX.ro",
+            message: String(data.warning),
+            timestamp: Date.now(),
+          });
+          if (isManual) {
+            toast.error(String(data.warning));
+          }
+        } else {
+          const emptyMsg =
+            data?.emptyReason === "all_seen"
+              ? "Toate anunțurile de pe OLX.ro care corespund filtrelor autocrawler au fost deja preluate în aplicație."
+              : "Nu mai există anunțuri pe OLX.ro care să corespundă filtrelor și intervalului selectat în autocrawler.";
+          setOlxScanNotice({
+            type: "info",
+            title: "Niciun anunț nou potrivit filtrelor autocrawler",
+            message: emptyMsg,
+            timestamp: Date.now(),
+          });
+          if (isManual) {
+            toast(emptyMsg);
+          }
+        }
+        return;
+      }
+
+      const currentUser = auth.currentUser;
+      const creatorName = currentUser?.displayName || (currentUser?.email ? currentUser.email.split("@")[0] : "Consilier Imobiliar");
+      const creatorEmail = currentUser?.email || "";
+
+      let addedCount = 0;
+      const saveErrors: string[] = [];
+      for (const item of crawledItems) {
+        const cleanKey = String(item.url || "").split("?")[0].trim().toLowerCase();
+        if (cleanKey && seenOlxScanUrlsRef.current.has(cleanKey)) continue;
+        try {
+          await leadsService.addLead({
+            url: item.url,
+            title: item.title,
+            zone: item.zone || "București",
+            price: item.price || "N/A",
+            ownerName: item.ownerName || "Proprietar OLX",
+            ownerPhone: item.ownerPhone || "Nespecificat",
+            transactionType: item.transactionType === "Vânzare" ? "Vânzare" : "Închiriere",
+            categoria: item.categoria || "Apartament",
+            status: "Noi",
+            leadType: item.leadType || "Proprietar",
+            coverImage: item.coverImage || undefined,
+            images: Array.isArray(item.images) ? item.images : [],
+            notes: item.notes || "",
+            extractedData: item.extractedData || undefined,
+            createdByName: creatorName,
+            createdByEmail: creatorEmail,
+            author: creatorName,
+            agent: creatorName,
+          });
+          if (cleanKey) seenOlxScanUrlsRef.current.add(cleanKey);
+          addedCount++;
+        } catch (saveErr: any) {
+          console.warn("[Home] Failed saving scanned OLX lead:", saveErr);
+          saveErrors.push(saveErr?.message || "Eroare la salvarea anunțului în baza de date.");
+        }
+      }
+
+      if (saveErrors.length > 0 && addedCount === 0) {
+        const errMsg = `Nu s-au putut salva anunțurile găsite: ${saveErrors[0]}`;
+        setOlxScanIntervalMinutes(0);
+        setOlxScanNotice({
+          type: "error",
+          title: "Eroare la salvarea lead-urilor autocrawler",
+          message: errMsg,
+          timestamp: Date.now(),
+        });
+        if (isManual) toast.error(errMsg);
+      } else if (saveErrors.length > 0 && addedCount > 0) {
+        const partialMsg = `${addedCount} anunțuri salvate, însă ${saveErrors.length} nu au putut fi salvate: ${saveErrors[0]}`;
+        setOlxScanIntervalMinutes(0);
+        setOlxScanNotice({
+          type: "error",
+          title: "Eroare parțială la salvarea lead-urilor",
+          message: partialMsg,
+          timestamp: Date.now(),
+        });
+        toast.success(`${addedCount} anunțuri noi adăugate în Noi`);
+      } else if (addedCount > 0) {
+        setOlxScanNotice(null);
+        toast.success(`${addedCount} ${addedCount === 1 ? "anunț nou găsit" : "anunțuri noi găsite"} pe OLX.ro și adăugate în Noi`);
+      } else {
+        const emptyMsg = "Toate anunțurile găsite care corespund filtrelor autocrawler au fost deja preluate anterior.";
+        setOlxScanIntervalMinutes(0);
+        setOlxScanNotice({
+          type: "info",
+          title: "Niciun anunț nou potrivit filtrelor autocrawler",
+          message: emptyMsg,
+          timestamp: Date.now(),
+        });
+        if (isManual) {
+          toast(emptyMsg);
+        }
+      }
+    } catch (err: any) {
+      const errMsg = err?.message || "Eroare necunoscută la scanarea anunțurilor de pe OLX.ro";
+      setOlxScanIntervalMinutes(0);
+      setOlxScanNotice({
+        type: "error",
+        title: "Eroare autocrawler OLX.ro",
+        message: errMsg,
+        timestamp: Date.now(),
+      });
+      if (isManual) {
+        toast.error(errMsg);
+      } else {
+        console.warn("[Home] OLX auto-scan error:", errMsg);
+      }
+    } finally {
+      isOlxAutoScanningRef.current = false;
+      setIsOlxAutoScanning(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (olxScanIntervalMinutes <= 0) return;
+    const intervalMs = olxScanIntervalMinutes * 60 * 1000;
+    const timerId = window.setInterval(() => {
+      void runOlxNewAdsScan(false);
+    }, intervalMs);
+    return () => window.clearInterval(timerId);
+  }, [olxScanIntervalMinutes, runOlxNewAdsScan]);
 
   const groupedLeads = React.useMemo(() => {
     const filtered = leads
@@ -1061,6 +1396,12 @@ export const Home: React.FC = () => {
         const isLandMatch = (normalizedFilter.includes("teren") && normalizedLead.includes("teren"));
 
         return isCommMatch || isOfficeMatch || isIndMatch || isDepMatch || isHaleMatch || isAppMatch || isHouseMatch || isLandMatch;
+      })
+      .filter(lead => {
+        if (activeSidebarItem === 'Lead-uri' && hasActiveOlxFilters(olxFilters)) {
+          return matchesOlxLeadFilter(lead, olxFilters);
+        }
+        return true;
       });
 
     const sorted = [...filtered].sort((a, b) => {
@@ -1100,19 +1441,38 @@ export const Home: React.FC = () => {
     });
 
     return groups;
-  }, [leads, activeTab, activeSidebarItem, sortOption, transactionFilter, leadRoleFilter, categoryFilter, searchQuery]);
+  }, [leads, activeTab, activeSidebarItem, sortOption, transactionFilter, leadRoleFilter, categoryFilter, searchQuery, olxFilters]);
 
   const handleLeadClick = React.useCallback((lead: Lead) => {
-    if (lead.status === "Nevalidata" || lead.status === "Noi" || lead.status === "Pierdute") {
-      setSelectedNevalidatLead(lead);
-      return;
-    }
-    if (lead.status === "Calificata") {
-      setSelectedCalificatLead(lead);
+    closingDetailRouteRef.current = false;
+
+    if (isCerereLead(lead)) {
+      setSelectedLead(lead);
+      setShowDeleteConfirm(false);
+      setIsEditingDetails(false);
+      if (lead.id) {
+        navigate(`/cereri/${lead.id}`);
+      }
       return;
     }
 
-    setNavDirection(1);
+    const isLeadItem =
+      activeSidebarItem === 'Lead-uri' ||
+      lead.status === "Nevalidata" ||
+      lead.status === "Noi" ||
+      lead.status === "Pierdute" ||
+      lead.status === "Calificata";
+
+    if (isLeadItem) {
+      setSelectedLead(lead);
+      setShowDeleteConfirm(false);
+      setIsEditingDetails(false);
+      if (lead.id) {
+        navigate(`/leads/${lead.id}`);
+      }
+      return;
+    }
+
     setSelectedLead(lead);
     setShowDeleteConfirm(false);
     setEditedName(lead.ownerName || "");
@@ -1124,7 +1484,11 @@ export const Home: React.FC = () => {
     setEditedTransactionType(lead.transactionType || "Vânzare");
     setEditedCategoria(lead.categoria || "");
     setIsEditingDetails(false);
-  }, []);
+    if (location.pathname !== "/") {
+      skipRouteClearRef.current = true;
+      navigate("/");
+    }
+  }, [activeSidebarItem, location.pathname, navigate]);
 
   useEffect(() => {
     setLastVisitedTimes(prev => {
@@ -1133,14 +1497,6 @@ export const Home: React.FC = () => {
       return updated;
     });
   }, [activeTab, leads]);
-
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
-      setAuthLoading(false);
-    });
-    return () => unsubscribe();
-  }, []);
 
   useEffect(() => {
     const checkAutoArchive = async () => {
@@ -1219,6 +1575,65 @@ export const Home: React.FC = () => {
     }
   }, [user]);
 
+  const selectedLeadIdRef = useRef<string | undefined>(selectedLead?.id);
+  selectedLeadIdRef.current = selectedLead?.id;
+
+  useEffect(() => {
+    const leadMatch = matchPath("/leads/:id", location.pathname);
+    const cerereMatch = matchPath("/cereri/:id", location.pathname);
+    const targetId = leadMatch?.params?.id || cerereMatch?.params?.id;
+
+    if (targetId) {
+      if (closingDetailRouteRef.current) {
+        prevPathnameRef.current = location.pathname;
+        return;
+      }
+
+      if (leadMatch) {
+        setActiveSidebarItem("Lead-uri");
+        setActiveTab((prev) => (prev === "Noi" || prev === "Pierdute" ? prev : "Noi"));
+      } else if (cerereMatch) {
+        setActiveSidebarItem("Cereri");
+        setActiveTab((prev) => (CERERI_TABS.includes(prev) ? prev : "Noua"));
+      }
+
+      const found = leads.find((l) => l.id === targetId);
+      if (found) {
+        if (selectedLeadIdRef.current !== found.id) {
+          setSelectedLead(found);
+          setIsEditingDetails(false);
+          setShowDeleteConfirm(false);
+        }
+      } else if (user) {
+        let cancelled = false;
+        void leadsService.getLead(targetId).then((fetched) => {
+          if (!cancelled && fetched && !closingDetailRouteRef.current) {
+            setSelectedLead(fetched);
+            setIsEditingDetails(false);
+            setShowDeleteConfirm(false);
+          }
+        });
+        return () => {
+          cancelled = true;
+        };
+      }
+    } else {
+      closingDetailRouteRef.current = false;
+      if (skipRouteClearRef.current) {
+        skipRouteClearRef.current = false;
+      } else if (
+        location.pathname === "/" &&
+        (prevPathnameRef.current.startsWith("/leads/") || prevPathnameRef.current.startsWith("/cereri/"))
+      ) {
+        setSelectedLead(null);
+        setShowDeleteConfirm(false);
+        setIsEditingDetails(false);
+      }
+    }
+
+    prevPathnameRef.current = location.pathname;
+  }, [location.pathname, leads, user]);
+
   useEffect(() => {
     if (selectedLead && leads.length > 0) {
       const currentLead = leads.find(l => l.id === selectedLead.id);
@@ -1255,20 +1670,19 @@ export const Home: React.FC = () => {
   const handleLogin = async () => {
     try {
       setLoginError(null);
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+      await loginWithGoogle();
     } catch (error: any) {
       console.error("Login failed:", error);
       setLoginError(error?.message || String(error));
     }
   };
 
-  if (authLoading) {
+  if (authLoading || isTenantLoading) {
     return (
       <div className="min-h-screen bg-[#f9fafb] flex flex-col items-center justify-center p-6 select-none">
         <div className="flex flex-col items-center">
           <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center mb-4 shadow-2xs">
-            <span className="font-montserrat text-2xl font-black tracking-tight text-[#051D35]">
+            <span className="font-title text-2xl font-semibold tracking-tight text-[#051D35]">
               b<span className="text-[#BE9662]">.</span>
             </span>
           </div>
@@ -1277,6 +1691,31 @@ export const Home: React.FC = () => {
             <span>Se inițializează brokr...</span>
           </div>
           <p className="text-[11px] text-gray-400 font-medium">Sistem CRM & Extracție Date Imobiliare</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAccessDenied && user) {
+    return (
+      <div className="min-h-screen bg-[#f9fafb] flex flex-col items-center justify-center p-6 text-center select-none">
+        <div className="w-full max-w-sm bg-white border border-gray-200 rounded-lg p-8 shadow-sm flex flex-col items-center text-center">
+          <div className="w-14 h-14 rounded-lg bg-red-50 border border-red-200 flex items-center justify-center mb-5 text-red-600 shadow-2xs">
+            <ShieldAlert size={28} />
+          </div>
+          <h2 className="font-title text-xl font-semibold tracking-tight text-gray-900 mb-2">
+            Acces Restricționat
+          </h2>
+          <p className="text-xs text-gray-600 leading-relaxed mb-6 font-normal">
+            {accessDeniedReason || "Nu aveți calitatea de membru activ în această agenție."}
+          </p>
+          <motion.button
+            whileTap={{ scale: 0.98 }}
+            onClick={() => logout()}
+            className="w-full h-10 bg-[#051D35] hover:bg-[#0a2b4a] text-white transition-colors rounded-md font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+          >
+            Deconectare / Schimbă contul
+          </motion.button>
         </div>
       </div>
     );
@@ -1293,10 +1732,10 @@ export const Home: React.FC = () => {
 
           {/* Heading */}
           <div className="mb-6">
-            <h1 className="font-montserrat text-3xl font-extrabold tracking-tight text-gray-900">
+            <h1 className="font-title text-3xl font-semibold tracking-tight text-gray-900">
               brokr<span className="ml-[-1px] text-[#BE9662]">.</span>
             </h1>
-            <p className="mt-2 text-xs text-gray-500 font-medium max-w-xs mx-auto leading-relaxed">
+            <p className="mt-2 text-xs text-gray-500 font-normal max-w-xs mx-auto leading-relaxed">
               Extracție de date imobiliare asistată de AI și gestiune de portofoliu.
             </p>
           </div>
@@ -1305,7 +1744,7 @@ export const Home: React.FC = () => {
           <motion.button
             whileTap={{ scale: 0.98 }}
             onClick={handleLogin}
-            className="w-full h-10 bg-[#051D35] hover:bg-[#0a2b4a] text-white transition-colors rounded-md font-semibold text-xs flex items-center justify-center gap-2.5 shadow-2xs cursor-pointer"
+            className="w-full h-10 bg-[#051D35] hover:bg-[#0a2b4a] text-white transition-colors rounded-md font-semibold text-xs flex items-center justify-center gap-3 shadow-2xs cursor-pointer"
           >
             <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
               <path
@@ -1333,7 +1772,7 @@ export const Home: React.FC = () => {
             <div className="mt-6 p-4 bg-red-50/70 border border-red-200 rounded-lg text-left w-full text-xs text-red-800">
               {loginError.includes("auth/configuration-not-found") ? (
                 <>
-                  <h3 className="font-bold text-red-900 mb-1.5 text-xs">Eroare de configurare Firebase</h3>
+                  <h3 className="font-title font-semibold text-red-900 mb-2 text-xs">Eroare de configurare Firebase</h3>
                   <p className="mb-2 text-red-700 leading-relaxed text-[11px]">
                     Furnizorul <strong>Google Sign-In</strong> nu este activat în proiectul Firebase <strong>brokr-42038</strong>.
                   </p>
@@ -1355,20 +1794,20 @@ export const Home: React.FC = () => {
                 </>
               ) : loginError.includes("auth/unauthorized-domain") ? (
                 <>
-                  <h3 className="font-bold text-red-900 mb-1 text-xs">Domeniu neautorizat (Unauthorized Domain)</h3>
+                  <h3 className="font-title font-semibold text-red-900 mb-1 text-xs">Domeniu neautorizat (Unauthorized Domain)</h3>
                   <p className="mb-2 text-red-700 text-[11px] leading-relaxed">
                     Adăugați domeniul curent în lista <strong>Authorized domains</strong> din Firebase:
                   </p>
-                  <div className="space-y-1.5 font-mono text-[11px] text-red-900 mb-2">
-                    <div className="flex justify-between items-center bg-white px-2 py-1.5 rounded-md border border-gray-200">
-                      <span className="font-semibold truncate">{window.location.hostname}</span>
+                  <div className="space-y-2 text-[11px] text-red-900 mb-2 tabular-nums">
+                    <div className="flex justify-between items-center bg-white px-2 py-2 rounded-md border border-gray-200">
+                      <span className="font-normal truncate">{window.location.hostname}</span>
                       <button
                         onClick={() => handleCopyDomain(window.location.hostname)}
                         className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-gray-900"
                         title="Copiază"
                       >
                         {copiedDomain === window.location.hostname ? (
-                          <Check size={13} className="text-emerald-600 font-bold" />
+                          <Check size={13} className="text-emerald-600 font-semibold" />
                         ) : (
                           <Copy size={13} />
                         )}
@@ -1378,7 +1817,7 @@ export const Home: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <h3 className="font-bold text-red-900 mb-1 text-xs">Eroare la autentificare</h3>
+                  <h3 className="font-title font-semibold text-red-900 mb-1 text-xs">Eroare la autentificare</h3>
                   <p className="text-red-700 text-[11px]">{loginError}</p>
                 </>
               )}
@@ -1388,7 +1827,7 @@ export const Home: React.FC = () => {
           {/* Card footer */}
           <div className="mt-6 pt-5 border-t border-gray-100 w-full flex items-center justify-between text-[11px] text-gray-400">
             <span>Securizat prin Google Identity</span>
-            <span className="font-mono text-[10px]">v2.4</span>
+            <span className="text-[10px] tabular-nums">v2.4</span>
           </div>
         </div>
       </div>
@@ -1485,11 +1924,14 @@ export const Home: React.FC = () => {
     }
   };
 
-  const handleCloseDetails = async () => {
-    setNavDirection(-1);
-    await handleSaveDetails();
+  const handleCloseDetails = () => {
+    closingDetailRouteRef.current = true;
     setShowDeleteConfirm(false);
+    setIsEditingDetails(false);
     setSelectedLead(null);
+    if (location.pathname !== "/") {
+      navigate("/");
+    }
   };
 
   const updateStatus = async (leadId: string, newStatus: LeadStatus) => {
@@ -1519,13 +1961,16 @@ export const Home: React.FC = () => {
   const handleDeleteLead = async () => {
     if (!selectedLead?.id) return;
     try {
-      setNavDirection(-1);
+      closingDetailRouteRef.current = true;
       await leadsService.deleteLead(selectedLead.id);
       setSelectedLead(null);
       setShowDeleteConfirm(false);
+      if (location.pathname !== "/") {
+        navigate("/");
+      }
     } catch (error) {
       console.error("Failed to delete lead:", error);
-      alert("Eroare la ștergere. Verifică permisiunile.");
+      toast.error("Eroare la ștergere. Verifică permisiunile.");
     }
   };
 
@@ -1558,9 +2003,10 @@ export const Home: React.FC = () => {
       let formattedDescription = originalDescription;
 
       try {
+        const aiHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
         const aiRes = await fetch("/api/generate-ai-text", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: aiHeaders,
           body: JSON.stringify({
             category,
             transactionType,
@@ -1708,9 +2154,10 @@ export const Home: React.FC = () => {
       let formattedDescription = originalDescription;
 
       try {
+        const aiHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
         const aiRes = await fetch("/api/generate-ai-text", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: aiHeaders,
           body: JSON.stringify({
             category,
             transactionType,
@@ -1817,7 +2264,6 @@ export const Home: React.FC = () => {
           onAddDocumentClick={() => setIsDocumentModalOpen(true)}
           onAddActivityClick={() => setIsActivityModalOpen(true)}
           onAddTourClick={() => setIsActivityModalOpen(true)}
-          onCalendarClick={() => setIsCalendarOpen(true)}
           onNotificationsClick={() => setIsNotificationsOpen(true)} 
           onExtractionRulesClick={() => setIsExtractionRulesOpen(true)}
           onSelectLead={handleLeadClick}
@@ -1828,32 +2274,29 @@ export const Home: React.FC = () => {
           onSelectPersonal={(_p) => {
             setActiveSidebarItem('Personal');
           }}
+          onSelectActivity={() => handleSelectSidebarItem('Calendar')}
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
         />
 
         <div className="flex-1 min-h-0 relative overflow-hidden">
-          <AnimatePresence mode="popLayout" initial={false} custom={navDirection}>
-          {!selectedLead ? (
-            <motion.div
-              key="list-view"
-              custom={navDirection}
-              variants={pageSlideVariants}
-              initial="enter"
-              animate="center"
-              exit="exit"
-              transition={pageSlideTransition}
-              className="w-full h-full flex flex-col bg-gray-50 overflow-hidden"
-            >
-
+          {/* Layer 1: Always-mounted List View (slides left -100% when covered, pushes details right when returning) */}
+          <motion.div
+            initial={false}
+            animate={{ x: (selectedLead || selectedContact) ? "-100%" : "0%" }}
+            transition={pageSlideTransition}
+            className={`absolute inset-0 w-full h-full flex flex-col bg-gray-50 overflow-hidden ${
+              (selectedLead || selectedContact) ? "pointer-events-none" : ""
+            }`}
+          >
             {activeSidebarItem === 'Clienți' || activeSidebarItem === 'Contacte' ? (
               <ContactsView 
                 contacts={contacts}
                 onAddContactClick={() => setIsContactModalOpen(true)}
+                onContactClick={(contact) => setSelectedContact(contact)}
                 onSelectProperty={(propId) => {
                   const lead = leads.find(l => l.propertyId === propId || l.id === propId);
                   if (lead) {
-                    setNavDirection(1);
                     handleLeadClick(lead);
                   }
                 }}
@@ -1862,30 +2305,35 @@ export const Home: React.FC = () => {
               <PersonalView 
                 personal={personal}
               />
+            ) : activeSidebarItem === 'Calendar' ? (
+              <CalendarView
+                leads={leads}
+                contacts={contacts}
+                onAddActivityClick={(defaultDate, defaultHour) => {
+                  setActivityDefaultDate(defaultDate || "");
+                  setActivityDefaultHour(defaultHour || "");
+                  setIsActivityModalOpen(true);
+                }}
+              />
             ) : (
               <>
                 {/* Top Header / Action Bar (matching Clienți style) */}
-                <div className="bg-white border-b border-gray-200 shrink-0 px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/10 flex items-center justify-center text-[#051D35]">
+                <div className="bg-white border-b border-gray-200 shrink-0 h-[42px] min-h-[42px] max-h-[42px] box-border px-6 flex items-center justify-between gap-4">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="flex items-center justify-center shrink-0">
                       {sectionHeaderInfo.icon}
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h2 className="text-[15px] font-semibold tracking-tight text-[#051D35]">
-                          {sectionHeaderInfo.title}
-                        </h2>
-                        <span className="text-[11px] font-mono font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
-                          {sectionHeaderInfo.count} total
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-gray-500 mt-0.5">
-                        {sectionHeaderInfo.description}
-                      </p>
+                    </span>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <h2 className="font-title text-[15px] font-semibold tracking-tight text-[#051D35] truncate leading-tight">
+                        {sectionHeaderInfo.title}
+                      </h2>
+                      <span className="text-[11px] font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded tabular-nums leading-none shrink-0">
+                        {sectionHeaderInfo.count} total
+                      </span>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2.5">
+                  <div className="flex items-center gap-3">
                     {/* In-page Quick Search */}
                     <div className="relative w-56 sm:w-64">
                       <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -1894,7 +2342,7 @@ export const Home: React.FC = () => {
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder={sectionHeaderInfo.searchPlaceholder}
-                        className="w-full h-8 pl-9 pr-7 text-xs bg-gray-50 border border-gray-200 rounded-md placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-gray-400 transition-colors font-sans"
+                        className="w-full h-8 pl-9 pr-7 text-xs font-normal bg-gray-50 border border-gray-200 rounded-md placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-gray-400 transition-colors font-sans"
                       />
                       {searchQuery && (
                         <button
@@ -1910,21 +2358,43 @@ export const Home: React.FC = () => {
 
                     {/* Action buttons per section */}
                     {activeSidebarItem === 'Lead-uri' && (
-                      <button
-                        type="button"
-                        onClick={() => setIsModalOpen(true)}
-                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
-                      >
-                        <Plus size={14} className="text-[#BE9662]" />
-                        <span>Adaugă Lead</span>
-                      </button>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => setOlxDrawerMode((prev) => (prev === "autoScan" ? null : "autoScan"))}
+                          title={
+                            olxScanIntervalMinutes > 0
+                              ? `Scanare automată OLX.ro activă (la ${olxScanIntervalMinutes} min)`
+                              : "Scanare automată OLX.ro (timer)"
+                          }
+                          className={`relative h-8 px-3 flex items-center gap-2 text-xs font-semibold rounded-md border transition-colors cursor-pointer shrink-0 shadow-xs ${
+                            olxDrawerMode === "autoScan"
+                              ? "bg-gray-100 text-[#051D35] border-gray-300"
+                              : "bg-white hover:bg-gray-50 text-[#051D35] border-gray-200 hover:border-gray-300"
+                          }`}
+                        >
+                          <Timer size={14} className={olxScanIntervalMinutes > 0 ? "text-[#BE9662]" : "text-gray-500"} />
+                          <span>Auto Crawl</span>
+                          {olxScanIntervalMinutes > 0 && (
+                            <span className="w-2 h-2 rounded-full bg-emerald-500 border border-white shrink-0" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setIsModalOpen(true)}
+                          className="h-8 px-3 flex items-center gap-2 text-xs font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
+                        >
+                          <Plus size={14} className="text-[#BE9662]" />
+                          <span>Adaugă Lead</span>
+                        </button>
+                      </div>
                     )}
 
                     {(activeSidebarItem === 'Proprietati' || activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
                       <button
                         type="button"
                         onClick={() => setIsModalOpen(true)}
-                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
+                        className="h-8 px-3 flex items-center gap-2 text-xs font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
                       >
                         <Plus size={14} className="text-[#BE9662]" />
                         <span>Adaugă Proprietate</span>
@@ -1935,7 +2405,7 @@ export const Home: React.FC = () => {
                       <button
                         type="button"
                         onClick={() => setIsCerereModalOpen(true)}
-                        className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
+                        className="h-8 px-3 flex items-center gap-2 text-xs font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
                       >
                         <Plus size={14} className="text-[#BE9662]" />
                         <span>Adaugă Cerere</span>
@@ -1945,9 +2415,9 @@ export const Home: React.FC = () => {
                 </div>
 
                 {/* Sub-header Filter Tabs / Menu (same style as Clienți) */}
-                <div className="bg-white border-b border-gray-200 shrink-0 px-6 h-[40px] flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
+                <div className="bg-transparent border-b border-gray-200 shrink-0 px-6 h-[42px] min-h-[42px] max-h-[42px] box-border flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
                   {/* Left: Filter Tabs with counts */}
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0">
                     {sectionTabs.map((tab) => {
                       const tabCount = leads.filter(l => {
                         if (activeSidebarItem === 'Lead-uri') {
@@ -1987,20 +2457,20 @@ export const Home: React.FC = () => {
                         <button
                           key={tab}
                           onClick={() => setActiveTab(tab)}
-                          className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                          className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer ${
                             isSelected
-                              ? "bg-[#051D35] text-white font-medium shadow-xs"
-                              : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+                              ? "bg-[#051D35] text-white font-semibold shadow-xs"
+                              : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100 font-semibold"
                           }`}
                         >
                           <span>{STATUS_LABELS[tab] || tab}</span>
-                          <span className={`text-[10px] font-mono px-1 rounded ${
+                          <span className={`text-[10px] font-normal px-1 rounded tabular-nums ${
                             isSelected ? "bg-white/15 text-[#BE9662]" : "bg-gray-100 text-gray-500"
                           }`}>
                             {tabCount}
                           </span>
                           {hasNew && (
-                            <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662] animate-pulse ml-0.5" />
+                            <span className="w-2 h-2 rounded-full bg-[#BE9662] animate-pulse ml-1" />
                           )}
                         </button>
                       );
@@ -2010,7 +2480,7 @@ export const Home: React.FC = () => {
                   {/* Right: Lead Role pills (in Lead-uri) or Transaction pills (Imobile/Cereri), Category & Sort dropdowns */}
                   <div className="flex items-center gap-2 shrink-0">
                     {activeSidebarItem === 'Lead-uri' ? (
-                      <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-md">
+                      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
                         {([
                           { id: 'Toate', label: 'Toate' },
                           { id: 'Proprietari', label: 'Proprietari' },
@@ -2021,7 +2491,7 @@ export const Home: React.FC = () => {
                             key={roleItem.id}
                             type="button"
                             onClick={() => setLeadRoleFilter(roleItem.id)}
-                            className={`h-6 px-2.5 text-[11px] font-medium rounded transition-all cursor-pointer ${
+                            className={`h-6 px-3 text-[11px] font-semibold rounded transition-all cursor-pointer ${
                               leadRoleFilter === roleItem.id
                                 ? "bg-[#051D35] text-white shadow-xs"
                                 : "text-gray-600 hover:text-[#051D35] hover:bg-white/70"
@@ -2032,7 +2502,7 @@ export const Home: React.FC = () => {
                         ))}
                       </div>
                     ) : activeSidebarItem === 'Cereri' ? (
-                      <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-md">
+                      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
                         {([
                           { id: 'Toate', label: 'Toate' },
                           { id: 'Cumpărare', label: 'Cumpărare' },
@@ -2042,7 +2512,7 @@ export const Home: React.FC = () => {
                             key={typeItem.id}
                             type="button"
                             onClick={() => setTransactionFilter(typeItem.id as any)}
-                            className={`h-6 px-2 text-[11px] font-medium rounded transition-all cursor-pointer ${
+                            className={`h-6 px-2 text-[11px] font-semibold rounded transition-all cursor-pointer ${
                               transactionFilter === typeItem.id
                                 ? "bg-[#051D35] text-white shadow-xs"
                                 : "text-gray-600 hover:text-[#051D35] hover:bg-white/70"
@@ -2054,7 +2524,7 @@ export const Home: React.FC = () => {
                       </div>
                     ) : (
                       /* Imobile (sau Proprietăți) */
-                      <div className="flex items-center gap-1 bg-gray-100 p-0.5 rounded-md">
+                      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
                         {([
                           { id: 'Toate', label: 'Toate' },
                           { id: 'Vânzare', label: 'Vânzare' },
@@ -2064,7 +2534,7 @@ export const Home: React.FC = () => {
                             key={typeItem.id}
                             type="button"
                             onClick={() => setTransactionFilter(typeItem.id as any)}
-                            className={`h-6 px-2 text-[11px] font-medium rounded transition-all cursor-pointer ${
+                            className={`h-6 px-2 text-[11px] font-semibold rounded transition-all cursor-pointer ${
                               transactionFilter === typeItem.id
                                 ? "bg-[#051D35] text-white shadow-xs"
                                 : "text-gray-600 hover:text-[#051D35] hover:bg-white/70"
@@ -2080,7 +2550,7 @@ export const Home: React.FC = () => {
                       <select
                         value={categoryFilter}
                         onChange={(e) => setCategoryFilter(e.target.value)}
-                        className="h-7 bg-gray-50 border border-gray-200 rounded-md pl-2.5 pr-6 text-xs text-gray-700 appearance-none focus:outline-none focus:bg-white focus:border-gray-400 transition-colors cursor-pointer"
+                        className="h-7 bg-gray-50 border border-gray-200 rounded-md pl-3 pr-6 text-xs font-normal text-gray-700 appearance-none focus:outline-none focus:bg-white focus:border-gray-400 transition-colors cursor-pointer"
                       >
                         <option value="Toate">Toate categoriile</option>
                         {CATEGORIA_OPTIONS.map(opt => (
@@ -2094,7 +2564,7 @@ export const Home: React.FC = () => {
                       <select
                         value={sortOption}
                         onChange={(e) => setSortOption(e.target.value as SortOption)}
-                        className="h-7 bg-gray-50 border border-gray-200 rounded-md pl-2.5 pr-6 text-xs text-gray-700 appearance-none focus:outline-none focus:bg-white focus:border-gray-400 transition-colors cursor-pointer"
+                        className="h-7 bg-gray-50 border border-gray-200 rounded-md pl-3 pr-6 text-xs font-normal text-gray-700 appearance-none focus:outline-none focus:bg-white focus:border-gray-400 transition-colors cursor-pointer"
                       >
                         <option value="newest">Cele mai noi</option>
                         <option value="oldest">Cele mai vechi</option>
@@ -2103,8 +2573,88 @@ export const Home: React.FC = () => {
                       </select>
                       <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                     </div>
+
+                    {activeSidebarItem === 'Lead-uri' && (
+                      <button
+                        type="button"
+                        onClick={() => setOlxDrawerMode((prev) => (prev === "filter" ? null : "filter"))}
+                        title="Filtrare anunțuri OLX.ro"
+                        className={`h-7 px-2 flex items-center justify-center gap-1.5 rounded-md border text-xs transition-colors cursor-pointer shrink-0 ${
+                          olxDrawerMode === "filter" || hasActiveOlxFilters(olxFilters)
+                            ? "bg-[#051D35] text-white border-[#051D35]"
+                            : "bg-gray-50 text-gray-600 border-gray-200 hover:text-[#051D35] hover:bg-gray-100"
+                        }`}
+                      >
+                        <SlidersHorizontal size={13} />
+                        {countActiveOlxFilters(olxFilters) > 0 && (
+                          <span className="text-[10px] font-semibold px-1 rounded bg-[#BE9662] text-white tabular-nums">
+                            {countActiveOlxFilters(olxFilters)}
+                          </span>
+                        )}
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {activeSidebarItem === 'Lead-uri' && (
+                  <OlxLeadDrawer
+                    isOpen={olxDrawerMode !== null}
+                    mode={olxDrawerMode || "filter"}
+                    onClose={() => setOlxDrawerMode(null)}
+                    filters={olxDrawerMode === "autoScan" ? olxAutoScanFilters : olxFilters}
+                    onChange={(next) => {
+                      if (olxDrawerMode === "autoScan") {
+                        setOlxAutoScanFilters(next);
+                      } else {
+                        setOlxFilters(next);
+                      }
+                    }}
+                    onReset={() => {
+                      if (olxDrawerMode === "autoScan") {
+                        setOlxAutoScanFilters(DEFAULT_OLX_LEAD_FILTERS);
+                        setOlxScanIntervalMinutes(0);
+                        setOlxScanLimit(3);
+                        setOlxMinAdAgeHours(DEFAULT_OLX_MIN_AD_AGE_HOURS);
+                        setOlxMaxAdAgeHours(DEFAULT_OLX_MAX_AD_AGE_HOURS);
+                        setOlxScanNotice(null);
+                      } else {
+                        setOlxFilters(DEFAULT_OLX_LEAD_FILTERS);
+                      }
+                    }}
+                    scanIntervalMinutes={olxScanIntervalMinutes}
+                    onScanIntervalChange={(mins) => {
+                      setOlxScanIntervalMinutes(mins);
+                      if (mins > 0) {
+                        void runOlxNewAdsScan(true);
+                      }
+                    }}
+                    scanLimit={olxScanLimit}
+                    onScanLimitChange={setOlxScanLimit}
+                    minAdAgeHours={olxMinAdAgeHours}
+                    onMinAdAgeChange={(hours) => {
+                      const minIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === hours);
+                      const maxIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === olxMaxAdAgeHours);
+                      if (minIdx >= 0 && maxIdx >= 1) {
+                        const clampedIdx = Math.min(minIdx, maxIdx - 1);
+                        setOlxMinAdAgeHours(OLX_MAX_AGE_STEPS[clampedIdx].hours);
+                      } else {
+                        setOlxMinAdAgeHours(hours);
+                      }
+                    }}
+                    maxAdAgeHours={olxMaxAdAgeHours}
+                    onMaxAdAgeChange={(hours) => {
+                      const maxIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === hours);
+                      const minIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === olxMinAdAgeHours);
+                      if (maxIdx >= 0 && minIdx >= 0) {
+                        const clampedIdx = Math.max(maxIdx, minIdx + 1);
+                        setOlxMaxAdAgeHours(OLX_MAX_AGE_STEPS[clampedIdx].hours);
+                      } else {
+                        setOlxMaxAdAgeHours(hours);
+                      }
+                    }}
+                    lastScanAt={lastOlxScanAt}
+                  />
+                )}
 
             {/* Content */}
             <div className="flex-1 overflow-hidden relative">
@@ -2123,182 +2673,216 @@ export const Home: React.FC = () => {
                     setSelectedQuickViewLead(lead);
                     setIsQuickViewOpen(true);
                   }}
+                  quickViewLabel={activeSidebarItem === 'Lead-uri' || activeSidebarItem === 'Cereri' ? 'Vezi rapid' : 'Detalii'}
+                  compactTypography={activeSidebarItem === 'Lead-uri' || activeSidebarItem === 'Cereri'}
+                  header={
+                    activeSidebarItem === 'Lead-uri' && olxScanNotice ? (
+                      <div
+                        role={olxScanNotice.type === "error" ? "alert" : "status"}
+                        className={`flex items-start justify-between gap-3 px-3.5 py-2.5 rounded-lg border text-xs ${
+                          olxScanNotice.type === "error"
+                            ? "bg-red-50 border-red-200 text-red-900"
+                            : "bg-amber-50/80 border-amber-200/90 text-[#051D35]"
+                        }`}
+                      >
+                        <div className="flex items-start gap-2.5 min-w-0">
+                          {olxScanNotice.type === "error" ? (
+                            <AlertCircle size={15} className="text-red-600 shrink-0 mt-0.5" />
+                          ) : (
+                            <Info size={15} className="text-[#BE9662] shrink-0 mt-0.5" />
+                          )}
+                          <div className="min-w-0 space-y-0.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-[12px]">
+                                {olxScanNotice.title}
+                              </span>
+                              <span
+                                className={`text-[10px] font-normal tabular-nums ${
+                                  olxScanNotice.type === "error" ? "text-red-600/80" : "text-gray-500"
+                                }`}
+                              >
+                                {new Date(olxScanNotice.timestamp).toLocaleTimeString("ro-RO", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                  second: "2-digit",
+                                })}
+                              </span>
+                            </div>
+                            <p
+                              className={`text-[11px] font-normal leading-snug ${
+                                olxScanNotice.type === "error" ? "text-red-800" : "text-gray-600"
+                              }`}
+                            >
+                              {olxScanNotice.message}
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setOlxScanNotice(null)}
+                          className={`p-1 rounded transition-colors cursor-pointer shrink-0 ${
+                            olxScanNotice.type === "error"
+                              ? "text-red-500 hover:text-red-800 hover:bg-red-100"
+                              : "text-gray-400 hover:text-[#051D35] hover:bg-amber-100/70"
+                          }`}
+                          title="Închide mesajul"
+                          aria-label="Închide mesajul"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : undefined
+                  }
                 />
               )}
             </div>
           </>
         )}
-      </motion.div>
-        ) : selectedContact ? (
-          <motion.div
-            key="contact-detail"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ duration: 0.5, ease: [0.4, 0, 0.2, 1] }}
-            className="fixed inset-0 bg-gray-50 z-[300] overflow-y-auto flex flex-col"
-          >
-            <div className="sticky top-0 bg-white border-b border-gray-200 h-[50px] min-h-[50px] max-h-[50px] flex items-center p-0 z-10 shadow-xs select-none">
-              <button 
-                onClick={() => setSelectedContact(null)}
-                className="h-full aspect-square w-[50px] flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
-                title="Înapoi la listă"
-              >
-                <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-              </button>
-
-              <div className="flex-1 min-w-0 px-4">
-                <h2 className="text-[14px] font-bold text-gray-900 truncate tracking-tight">{selectedContact.firstName} {selectedContact.lastName}</h2>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-[#BE9662] uppercase tracking-[0.15em]">{selectedContact.type}</span>
-                  <div className="w-1 h-1 bg-gray-300 rounded-full" />
-                  <span className="text-[11px] text-gray-500 font-bold uppercase tracking-wider">{selectedContact.phone}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-5 space-y-6 flex-1">
-              <div className="bg-white rounded-[16px] border border-gray-100 p-5 space-y-5">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[12px] font-bold text-[--color-text-placeholder] uppercase tracking-wider">Prenume</span>
-                    <span className="text-[15px] text-[--color-text-main] font-medium px-4 py-3 bg-gray-50 rounded-[16px]">{selectedContact.firstName}</span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[12px] font-bold text-[--color-text-placeholder] uppercase tracking-wider">Nume</span>
-                    <span className="text-[15px] text-[--color-text-main] font-medium px-4 py-3 bg-gray-50 rounded-[16px]">{selectedContact.lastName}</span>
-                  </div>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[12px] font-bold text-[--color-text-placeholder] uppercase tracking-wider">Telefon</span>
-                    <span className="text-[15px] text-[--color-text-main] font-medium px-4 py-3 bg-gray-50 rounded-[16px]">{selectedContact.phone}</span>
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[12px] font-bold text-[--color-text-placeholder] uppercase tracking-wider">Tip Contact</span>
-                    <span className="text-[15px] text-[--color-text-main] font-medium px-4 py-3 bg-gray-50 rounded-[16px]">{selectedContact.type}</span>
-                  </div>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <span className="text-[12px] font-bold text-[--color-text-placeholder] uppercase tracking-wider">ID Proprietate Asociată</span>
-                  <span className="text-[15px] text-[--color-text-main] font-medium px-4 py-3 bg-gray-50 rounded-[16px]">{selectedContact.propertyId}</span>
-                </div>
-              </div>
-
-              {/* Find associated lead if possible */}
-              {leads.find(l => l.id === selectedContact.propertyId) && (
-                <div className="mt-6">
-                   <h3 className="text-[13px] font-bold text-[--color-text-placeholder] uppercase tracking-wider mb-4">Proprietate Asociată</h3>
-                   <LeadCard 
-                    lead={leads.find(l => l.id === selectedContact.propertyId)!} 
-                    contacts={contacts.filter(c => c.propertyId === selectedContact.propertyId)}
-                    onClick={() => {
-                      const lead = leads.find(l => l.id === selectedContact.propertyId)!;
-                      handleLeadClick(lead);
-                      setSelectedContact(null);
-                    }} 
-                   />
-                </div>
-              )}
-            </div>
           </motion.div>
-        ) : (
-          <motion.div
-            key="detail-view"
-            custom={navDirection}
-            variants={pageSlideVariants}
-            initial="enter"
-            animate="center"
-            exit="exit"
-            transition={pageSlideTransition}
-            className="w-full h-full bg-gray-50 overflow-hidden flex flex-col"
-          >
-            {/* Top Fixed Header Bar (Permanently fixed at top, never scrolls away) */}
-            <div className="h-[50px] min-h-[50px] max-h-[50px] shrink-0 bg-white border-b border-gray-200 box-border flex items-center justify-between p-0 z-30 select-none">
-              {/* Back Button (Square, height = container height, bg = container bg, menu hover effect) */}
-              <button 
-                onClick={() => {
-                  if (isEditingDetails) {
-                    setIsEditingDetails(false);
-                  } else {
-                    setNavDirection(-1);
-                    handleCloseDetails();
-                  }
-                }}
-                className="h-full w-[50px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
-                title={isEditingDetails ? "Înapoi la prezentare" : "Înapoi la listă"}
+
+          {/* Layer 2: Lead / Cerere / Property Detail View */}
+          <AnimatePresence initial={false}>
+            {selectedLead && (
+              <motion.div
+                key="detail-view"
+                initial={{ x: "100%" }}
+                animate={{ x: selectedContact ? "-100%" : "0%" }}
+                exit={{ x: "100%" }}
+                transition={pageSlideTransition}
+                className={`absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-20 ${
+                  selectedContact ? "pointer-events-none" : ""
+                }`}
               >
+                {/* Top Fixed Header Bar (Permanently fixed at top, never scrolls away) */}
+                <div className="h-[42px] min-h-[42px] max-h-[42px] shrink-0 bg-white border-b border-gray-200 box-border flex items-center justify-between p-0 z-30 select-none">
+                  {/* Back Button (Square, height = container height, bg = container bg, menu hover effect) */}
+                  <button 
+                    onClick={() => {
+                      if (isEditingDetails) {
+                        setIsEditingDetails(false);
+                      } else {
+                        handleCloseDetails();
+                      }
+                    }}
+                    className="h-full w-[42px] aspect-square flex items-center justify-center border-r border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer select-none group"
+                    title={isEditingDetails ? "Înapoi la prezentare" : "Înapoi la listă"}
+                  >
                 <ChevronLeft size={18} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
               </button>
 
-              {/* Title & Info Center */}
-              <div className="flex items-center gap-2.5 min-w-0 flex-1 px-3.5">
-                <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 text-[#051D35] flex items-center justify-center shrink-0">
-                  <Building2 size={16} />
-                </div>
- 
-                <div className="flex-1 min-w-0 pr-2">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <h2 className="text-[13px] font-semibold text-gray-900 truncate tracking-tight leading-tight">
-                      {isEditingDetails ? `Modificare: ${selectedLead.title}` : selectedLead.title}
-                    </h2>
-                    {selectedLead.propertyId && (
-                      <span className="text-[10px] font-mono font-semibold px-1.5 py-0.2 rounded bg-[#051D35]/5 text-[#051D35] border border-[#051D35]/15 shrink-0">
-                        #{selectedLead.propertyId}
-                      </span>
-                    )}
-                    <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0">
-                      {STATUS_LABELS[selectedLead.status] || selectedLead.status}
-                    </span>
-                    {isEditingDetails && (
-                      <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-[#BE9662] border border-[#BE9662]/30 shrink-0">
-                        Mod editare
-                      </span>
-                    )}
-                  </div>
+              {/* Title & Info Center + Right Share & ID Area */}
+              {(() => {
+                const isLeadOrCerere =
+                  isCerereLead(selectedLead) ||
+                  selectedLead.status === "Noi" ||
+                  selectedLead.status === "Pierdute" ||
+                  selectedLead.status === "Nevalidata" ||
+                  selectedLead.status === "Calificata";
 
-                  <div className="flex items-center gap-1.5 text-xs mt-0.5">
-                    <span className="text-[11px] font-mono font-bold text-gray-900">{selectedLead.price}</span>
-                    <span className="text-gray-300">·</span>
-                    <span className="text-[11px] text-gray-500 font-medium truncate">{selectedLead.zone || selectedLead.ownerName}</span>
-                  </div>
-                </div>
-              </div>
+                const internalId = selectedLead.propertyId || (selectedLead.id ? selectedLead.id.slice(0, 5) : "");
+                const leadRole = getLeadRole(selectedLead);
 
-              {/* Right: Actions in Edit Mode */}
-              {isEditingDetails && (
-                <div className="flex items-stretch h-full shrink-0 border-l border-gray-200">
-                  <button
-                    type="button"
-                    onClick={() => setIsEditingDetails(false)}
-                    className="h-full px-3.5 flex items-center gap-1.5 bg-white hover:bg-gray-50 text-gray-600 hover:text-gray-900 text-xs font-medium border-r border-gray-200 transition-colors cursor-pointer"
-                  >
-                    <X size={14} className="text-gray-400" />
-                    <span>Cancel</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await handleSaveDetails();
-                      toast.success("Modificările au fost salvate cu succes!");
-                      setIsEditingDetails(false);
-                    }}
-                    className="h-full px-4 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                    title="Salvează modificările și revino la prezentare"
-                  >
-                    <Check size={14} className="text-[#BE9662]" />
-                    <span>Salvează</span>
-                  </button>
-                </div>
-              )}
+                return (
+                  <>
+                    <div className="flex items-center gap-3 min-w-0 flex-1 px-4">
+                      {(!isLeadOrCerere || isEditingDetails) && (
+                        <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 text-[#051D35] flex items-center justify-center shrink-0">
+                          <Building2 size={16} />
+                        </div>
+                      )}
+
+                      <div className="flex-1 min-w-0 flex items-center gap-2">
+                        <h2 className="font-title text-[13px] font-semibold text-gray-900 truncate tracking-tight leading-tight">
+                          {isEditingDetails ? `Modificare: ${selectedLead.title}` : selectedLead.title}
+                        </h2>
+                        {isLeadOrCerere && !isEditingDetails && (
+                          <span
+                            className={`text-[10px] font-normal px-2 py-0.5 rounded border tracking-wide uppercase shrink-0 leading-none ${
+                              leadRole === "Proprietar"
+                                ? "bg-amber-50 text-amber-800 border-amber-200"
+                                : leadRole === "Chirias"
+                                  ? "bg-emerald-50 text-emerald-800 border-emerald-200"
+                                  : "bg-blue-50 text-blue-800 border-blue-200"
+                            }`}
+                          >
+                            {leadRole === "Chirias" ? "Chiriaș" : leadRole === "Cumparator" ? "Cumpărător" : "Proprietar"}
+                          </span>
+                        )}
+                        <span className="text-[10px] font-normal px-2 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0 leading-none">
+                          {STATUS_LABELS[selectedLead.status] || selectedLead.status}
+                        </span>
+                        {isEditingDetails && (
+                          <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-[#BE9662] border border-[#BE9662]/30 shrink-0 leading-none">
+                            Mod editare
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center h-full shrink-0">
+                      {!isEditingDetails && selectedLead.id && (
+                        <div className="flex items-center px-3 h-full shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => void handleCopyShareLink(selectedLead.id!)}
+                            className="h-8 w-8 rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
+                            title="Copiază link public de prezentare (fără date proprietar)"
+                            aria-label="Distribuie"
+                          >
+                            {copiedShareId === selectedLead.id ? (
+                              <Check size={14} className="text-emerald-600" />
+                            ) : (
+                              <Share2 size={14} />
+                            )}
+                          </button>
+                        </div>
+                      )}
+
+                      {internalId && (
+                        <div className="h-full px-4 flex items-center justify-center border-l border-gray-200 shrink-0 select-text">
+                          <span className="text-[10px] font-normal text-[#051D35] tabular-nums leading-none">
+                            #{internalId}
+                          </span>
+                        </div>
+                      )}
+
+                      {isEditingDetails && (
+                        <div className="flex items-stretch h-full shrink-0 border-l border-gray-200">
+                          <button
+                            type="button"
+                            onClick={() => setIsEditingDetails(false)}
+                            className="h-full px-4 flex items-center gap-2 bg-white hover:bg-gray-50 text-gray-600 hover:text-gray-900 text-xs font-semibold border-r border-gray-200 transition-colors cursor-pointer"
+                          >
+                            <X size={14} className="text-gray-400" />
+                            <span>Cancel</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await handleSaveDetails();
+                              toast.success("Modificările au fost salvate cu succes!");
+                              setIsEditingDetails(false);
+                            }}
+                            className="h-full px-4 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-2 transition-colors cursor-pointer"
+                            title="Salvează modificările și revino la prezentare"
+                          >
+                            <Check size={14} className="text-[#BE9662]" />
+                            <span>Salvează</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </>
+                );
+              })()}
             </div>
 
             {/* Content view: Edit form or Presentation layout */}
             {isEditingDetails ? (
               <div className="flex-1 overflow-y-auto bg-gray-50 flex flex-col font-sans" onScroll={handleDetailsScroll}>
                 {/* Sticky Jump-links bar in Edit Mode */}
-                <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-gray-200 px-4 sm:px-6 py-2.5 flex items-center justify-between gap-3 shadow-xs">
-                  <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+                <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-gray-200 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 shadow-xs">
+                  <div className="flex items-center gap-2 overflow-x-auto no-scrollbar py-1">
                     {[
                       { id: "basicale", label: "Informații de Bază" },
                       { id: "detaliigenerale", label: "Detalii Generale" },
@@ -2315,7 +2899,7 @@ export const Home: React.FC = () => {
                           const el = document.getElementById(sect.id);
                           el?.scrollIntoView({ behavior: "smooth", block: "start" });
                         }}
-                        className="px-2.5 py-1 rounded-md text-[11px] font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors shrink-0 uppercase tracking-wider"
+                        className="px-3 py-1 rounded-md text-[11px] font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-100 transition-colors shrink-0 uppercase tracking-wider"
                       >
                         {sect.label}
                       </button>
@@ -2326,7 +2910,7 @@ export const Home: React.FC = () => {
                     <button
                       type="button"
                       onClick={() => setIsEditingDetails(false)}
-                      className="h-8 px-3 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer"
+                      className="h-8 px-3 rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
                     >
                       Anulează
                     </button>
@@ -2337,7 +2921,7 @@ export const Home: React.FC = () => {
                         toast.success("Modificările au fost salvate cu succes!");
                         setIsEditingDetails(false);
                       }}
-                      className="h-8 px-3.5 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                      className="h-8 px-4 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-2 shadow-xs transition-colors cursor-pointer"
                     >
                       <Check size={13} className="text-[#BE9662]" />
                       <span>Salvează</span>
@@ -2346,7 +2930,7 @@ export const Home: React.FC = () => {
                 </div>
 
                 {/* Edit Form Content with text fields and many checkboxes */}
-                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 w-full space-y-5">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 py-6 w-full space-y-4">
                   <SectionCard id="basicale" title="Informații de Bază">
                     <BasicInfoSection 
                       editedTitle={editedTitle}
@@ -2380,11 +2964,11 @@ export const Home: React.FC = () => {
                   />
 
                   {/* Bottom Save Bar */}
-                  <div className="pt-4 pb-12 flex items-center justify-end gap-3 border-t border-gray-200">
+                  <div className="pt-4 pb-12 flex items-center justify-end gap-4 border-t border-gray-200">
                     <button
                       type="button"
                       onClick={() => setIsEditingDetails(false)}
-                      className="h-9 px-4 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-medium transition-colors cursor-pointer"
+                      className="h-9 px-4 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold transition-colors cursor-pointer"
                     >
                       Înapoi la Prezentare
                     </button>
@@ -2395,7 +2979,7 @@ export const Home: React.FC = () => {
                         toast.success("Modificările au fost salvate cu succes!");
                         setIsEditingDetails(false);
                       }}
-                      className="h-9 px-5 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-colors cursor-pointer"
+                      className="h-9 px-5 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold flex items-center gap-2 shadow-sm transition-colors cursor-pointer"
                     >
                       <Check size={14} className="text-[#BE9662]" />
                       <span>Salvează Modificările</span>
@@ -2403,6 +2987,27 @@ export const Home: React.FC = () => {
                   </div>
                 </div>
               </div>
+            ) : (isCerereLead(selectedLead) ||
+              selectedLead.status === 'Noi' ||
+              selectedLead.status === 'Pierdute' ||
+              selectedLead.status === 'Nevalidata' ||
+              selectedLead.status === 'Calificata') ? (
+              <LeadCerereDetailPage
+                lead={selectedLead}
+                contacts={contacts.filter(c => c.propertyId === selectedLead.propertyId || c.propertyId === selectedLead.id)}
+                onBack={() => {
+                  void handleCloseDetails();
+                }}
+                onUpdateLead={(updatedData) => {
+                  setSelectedLead(prev => prev ? { ...prev, ...updatedData } : null);
+                  setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, ...updatedData } : l));
+                }}
+                onContactClick={(contact) => setSelectedContact(contact)}
+                onAddContactClick={() => setIsContactModalOpen(true)}
+                onDeleteLead={handleDeleteNevalidatLead}
+                onMarkAsLost={handleMarkAsLost}
+                onReactivateLead={handleReactivateLead}
+              />
             ) : (
               <PropertyDetailView 
                 lead={selectedLead}
@@ -2435,10 +3040,36 @@ export const Home: React.FC = () => {
                 onAddActivity={() => setIsActivityModalOpen(true)}
               />
             )}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Layer 3: Contact Detail View */}
+          <AnimatePresence initial={false}>
+            {selectedContact && (
+              <motion.div
+                key="contact-detail"
+                initial={{ x: "100%" }}
+                animate={{ x: "0%" }}
+                exit={{ x: "100%" }}
+                transition={pageSlideTransition}
+                className="absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-30"
+              >
+                <ContactDetailView
+                  contact={selectedContact}
+                  leads={leads}
+                  contacts={contacts}
+                  onBack={() => setSelectedContact(null)}
+                  onContactUpdated={(updated) => setSelectedContact(updated)}
+                  onSelectLead={(lead) => {
+                    handleLeadClick(lead);
+                    setSelectedContact(null);
+                  }}
+                />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
       <NotificationsModal 
         isOpen={isNotificationsOpen} 
@@ -2446,7 +3077,7 @@ export const Home: React.FC = () => {
         notifications={notifications}
         onSelectNotification={(notification) => {
           if (notification.type === 'viewing' || notification.message?.toLowerCase().includes('vizionare programată')) {
-            setIsCalendarOpen(true);
+            handleSelectSidebarItem('Calendar');
             return;
           }
 
@@ -2468,14 +3099,16 @@ export const Home: React.FC = () => {
           }
 
           if (targetLead) {
+            closingDetailRouteRef.current = false;
             if (isCerereLead(targetLead)) {
               handleSelectSidebarItem('Cereri');
+              if (targetLead.id) navigate(`/cereri/${targetLead.id}`);
             } else if (targetLead.status === 'Noi' || targetLead.status === 'Pierdute' || targetLead.status === 'Nevalidata' || targetLead.status === 'Calificata') {
               handleSelectSidebarItem('Lead-uri');
+              if (targetLead.id) navigate(`/leads/${targetLead.id}`);
             } else {
               handleSelectSidebarItem('Proprietati');
             }
-            setNavDirection(1);
             setSelectedLead(targetLead);
             return;
           }
@@ -2487,19 +3120,6 @@ export const Home: React.FC = () => {
           } else {
             handleSelectSidebarItem('Proprietati');
           }
-        }}
-      />
-
-      <CalendarDrawer 
-        isOpen={isCalendarOpen} 
-        onClose={() => setIsCalendarOpen(false)} 
-        leads={leads}
-        contacts={contacts}
-        onAddActivityClick={(defaultDate, defaultHour) => {
-          setActivityDefaultDate(defaultDate || "");
-          setActivityDefaultHour(defaultHour || "");
-          setIsCalendarOpen(false);
-          setIsActivityModalOpen(true);
         }}
       />
 
@@ -2594,9 +3214,9 @@ const BasicInfoSection = ({
 }: any) => (
   <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
     {/* Column 1: Info Fields */}
-    <div className="space-y-5">
+    <div className="space-y-[16px]">
       <div className="flex flex-col gap-1">
-        <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider">Titlu Proprietate</span>
+        <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider">Titlu Proprietate</span>
         <FormInput 
           value={editedTitle}
           onChange={setEditedTitle}
@@ -2604,9 +3224,9 @@ const BasicInfoSection = ({
           placeholder="Introduceți titlul..."
         />
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-[16px]">
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider">Nume Contact</span>
+          <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider">Nume Contact</span>
           <FormInput 
             value={editedName}
             onChange={setEditedName}
@@ -2615,7 +3235,7 @@ const BasicInfoSection = ({
           />
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider">Telefon</span>
+          <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider">Telefon</span>
           <FormInput 
             value={editedPhone}
             onChange={setEditedPhone}
@@ -2624,9 +3244,9 @@ const BasicInfoSection = ({
           />
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-[16px]">
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider">Zonă</span>
+          <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider">Zonă</span>
           <FormInput 
             value={editedZone}
             onChange={setEditedZone}
@@ -2635,7 +3255,7 @@ const BasicInfoSection = ({
           />
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider">Preț</span>
+          <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider">Preț</span>
           <FormInput 
             value={editedPrice}
             onChange={setEditedPrice}
@@ -2644,9 +3264,9 @@ const BasicInfoSection = ({
           />
         </div>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-[16px]">
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider">Tranzacție</span>
+          <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider">Tranzacție</span>
           <FormSelect 
             value={editedTransactionType}
             onChange={setEditedTransactionType}
@@ -2656,7 +3276,7 @@ const BasicInfoSection = ({
           />
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider">Categorie</span>
+          <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider">Categorie</span>
           <FormSelect 
             value={editedCategoria}
             onChange={setEditedCategoria}
@@ -2681,7 +3301,7 @@ const BasicInfoSection = ({
             <span className="text-[10px] text-gray-500 font-normal group-open:hidden">Afișează textul original</span>
             <span className="text-[10px] text-gray-500 font-normal hidden group-open:inline">Ascunde</span>
           </summary>
-          <div className="p-3.5 text-xs text-gray-700 bg-white border-t border-gray-200 max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+          <div className="p-4 text-xs font-normal text-gray-700 bg-white border-t border-gray-200 max-h-60 overflow-y-auto whitespace-pre-wrap leading-relaxed">
             {extractedData?.originalDescription || extractedData?.text || extractedData?.crmData?.descriere?.continut || extractedData?.markdownMarketing || "Niciun text de descriere original preluat din URL-ul sursă."}
           </div>
         </details>
@@ -2691,7 +3311,7 @@ const BasicInfoSection = ({
     {/* Column 2: Property Image */}
     <div>
       <div className="flex flex-col gap-1 h-full">
-        <span className="text-[12px] font-bold text-[--color-text-placeholder] tracking-wider mb-2">Imagine Principală</span>
+        <span className="text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider mb-2">Imagine Principală</span>
         <div className="relative aspect-square md:aspect-auto md:flex-1 w-full bg-gray-50 rounded-[16px] overflow-hidden border border-gray-100 group/img">
           {(() => {
             const images = extractedData?.crmData?.imagini;
@@ -2725,15 +3345,16 @@ const BasicInfoSection = ({
 
             return displayImage ? (
               <img 
-                src={displayImage} 
+                src={getThumbnailImageUrl(displayImage, 800)} 
                 alt="Property"
+                decoding="async"
                 className="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover/img:scale-110"
                 referrerPolicy="no-referrer"
               />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-200">
                 <Database size={40} className="mb-2" />
-                <span className="text-[10px] font-bold uppercase tracking-widest">Nicio imagine</span>
+                <span className="text-[10px] font-semibold uppercase tracking-widest">Nicio imagine</span>
               </div>
             );
           })()}
@@ -2744,14 +3365,14 @@ const BasicInfoSection = ({
 );
 
 const InfoRow = ({ label, value, isLink }: { label: string, value: string, isLink?: boolean }) => (
-  <div className="flex flex-col gap-0.5 py-2 border-b border-gray-100 last:border-0">
-    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">{label}</span>
+  <div className="flex flex-col gap-1 py-2 border-b border-gray-100 last:border-0">
+    <span className="text-[12px] font-semibold text-[#051D35]">{label}</span>
     {isLink ? (
-      <a href={value} target="_blank" rel="noreferrer" className="text-[12px] text-[#BE9662] font-medium truncate hover:underline">
+      <a href={value} target="_blank" rel="noreferrer" className="text-[12px] text-[#BE9662] font-normal truncate hover:underline">
         Deschide URL
       </a>
     ) : (
-      <span className="text-[12px] text-gray-800 font-medium">{value}</span>
+      <span className="text-[12px] text-gray-800 font-normal">{value}</span>
     )}
   </div>
 );
@@ -2761,10 +3382,10 @@ const SectionCard = ({ id, title, children }: { id: string, title: string, child
     id={id} 
     className="bg-white rounded-md border border-gray-200 shadow-none overflow-hidden scroll-mt-16"
   >
-    <div className="h-9 flex items-center px-3.5 bg-gray-50/80 border-b border-gray-200">
-      <span className="text-[11px] font-semibold text-gray-800 uppercase tracking-wider">{title}</span>
+    <div className="h-9 flex items-center px-4 bg-gray-50/80 border-b border-gray-200">
+      <span className="font-title text-[12px] font-semibold text-[#051D35]">{title}</span>
     </div>
-    <div className="p-3.5">{children}</div>
+    <div className="p-4">{children}</div>
   </div>
 );
 
@@ -2774,7 +3395,7 @@ const ExtractionViewer = ({ data, leadId, propertyId, onUpdate, basicInfoProps, 
   };
 
   return (
-    <div className="space-y-3.5">
+    <div className="space-y-4">
       <SectionCard id="detaliigenerale" title="Detalii Generale">
         <DetaliiGeneraleSection 
           data={data?.crmData?.detaliiGenerale} 
@@ -2824,7 +3445,7 @@ const Accordion = ({ title, children, isOpen: isOpenProp, onToggle, defaultOpen 
         onClick={toggle}
         className="w-full h-9 flex items-center justify-between px-3 text-left transition-colors hover:bg-gray-50"
       >
-        <span className="text-[11px] font-semibold text-gray-800 uppercase tracking-wider">{title}</span>
+        <span className="font-title text-[12px] font-semibold text-[#051D35]">{title}</span>
         <motion.div animate={{ rotate: isOpen ? 180 : 0 }} className="text-gray-400"><ChevronDown size={14} /></motion.div>
       </button>
       <AnimatePresence>
@@ -2841,12 +3462,12 @@ const Accordion = ({ title, children, isOpen: isOpenProp, onToggle, defaultOpen 
 const markdownComponents = {
   h1: () => null,
   h2: ({children}: any) => (
-    <h2 className="text-[13px] font-semibold text-gray-900 tracking-tight mt-0 mb-2 font-sans capitalize">
+    <h2 className="font-title text-[13px] font-semibold text-gray-900 tracking-tight mt-0 mb-2 capitalize">
       {children}
     </h2>
   ),
-  ul: ({children}: any) => <ul className="space-y-0.5 mb-3">{children}</ul>,
-  li: ({children}: any) => <li className="text-gray-600 border-b border-gray-100 py-1 text-xs last:border-0">{children}</li>,
+  ul: ({children}: any) => <ul className="space-y-1 mb-3">{children}</ul>,
+  li: ({children}: any) => <li className="text-gray-600 border-b border-gray-100 py-1 text-xs font-normal last:border-0">{children}</li>,
   table: ({children}: any) => {
     return (
       <div className="mb-3 rounded-md border border-gray-200 overflow-x-auto w-full group/table">
@@ -2856,14 +3477,14 @@ const markdownComponents = {
       </div>
     );
   },
-  thead: ({children}: any) => <thead className="bg-gray-50/80 border-b border-gray-200 text-gray-500 font-medium text-xs">{children}</thead>,
+  thead: ({children}: any) => <thead className="bg-gray-50/80 border-b border-gray-200 text-gray-500 font-semibold text-xs">{children}</thead>,
   th: ({children}: any) => {
     const rawText = getTextFromChildren(children);
     const isImageTable = rawText.toLowerCase().includes("imagine");
     const isIdHeader = rawText.trim().toLowerCase().startsWith("id ") || rawText.trim().toLowerCase() === "id";
     const displayContent = isIdHeader ? "ID" : children;
     return (
-      <th className="px-3 py-1.5 text-[11px] font-semibold text-gray-700 capitalize tracking-wide first:w-[20%] first:min-w-[120px]">
+      <th className="px-3 py-2 text-[11px] font-semibold text-gray-700 capitalize tracking-wide first:w-[20%] first:min-w-[120px]">
         <TableHeaderCopyButton isImageTable={isImageTable}>{displayContent}</TableHeaderCopyButton>
       </th>
     );
@@ -2883,7 +3504,7 @@ const markdownComponents = {
     const isCategoryLabel = (textContent === "living" || textContent === "bucătărie" || textContent === "dormitor" || textContent === "baie" || textContent === "alte spații");
 
     return (
-      <td className="px-3 py-1.5 text-[12px] border-b border-gray-100 text-gray-600 first:font-medium first:text-gray-900 first:w-[20%] first:min-w-[120px] relative group/row align-top">
+      <td className="px-3 py-2 text-[12px] font-normal border-b border-gray-100 text-gray-600 first:font-semibold first:text-gray-900 first:w-[20%] first:min-w-[120px] relative group/row align-top">
          <div className={`break-words whitespace-normal w-full overflow-hidden flex ${isImageCell ? 'flex-row flex-wrap gap-2' : 'flex-col gap-1'}`}>
             {children}
          </div>
@@ -2912,7 +3533,7 @@ const markdownComponents = {
   },
   img: ({src, alt}: any) => src ? (
     <div className="relative group/img inline-block" style={{ width: '64px' }}>
-      <img src={src} alt={alt} className="rounded w-full h-14 object-cover border border-gray-200 shadow-none transition-all" referrerPolicy="no-referrer" />
+      <img src={getThumbnailImageUrl(src, 160)} alt={alt} loading="lazy" decoding="async" className="rounded w-full h-14 object-cover border border-gray-200 shadow-none transition-all" referrerPolicy="no-referrer" />
     </div>
   ) : null,
 };

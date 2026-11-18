@@ -8,21 +8,58 @@
  * 4. FĂRĂ "0% comision", "comision 0", etc.
  */
 
+import { TitleAutomationRule } from "../core/automation/typ_title-automation";
+import { buildTitleFromAutomationRule } from "./titleAutomationEngine";
+
 export interface PropertyTitleParams {
+  transactionType?: string;
   categoria?: string;
   camere?: string | number;
   suprafataUtila?: string | number;
+  suprafataConstruita?: string | number;
+  etaj?: string | number;
+  etajeTotal?: string | number;
   zona?: string;
   oras?: string;
   compartimentare?: string;
   sistemIncalzire?: string;
   mobilat?: string;
+  utilare?: string;
   balcoane?: string | number;
   hasParcare?: boolean;
+  parcare?: string | boolean;
+  petFriendly?: string | boolean;
+  propertyId?: string;
+  rawTitle?: string;
   rawText?: string;
+  titleRule?: TitleAutomationRule | null;
 }
 
 export function generateStandardAdTitle(params: PropertyTitleParams): string {
+  if (params.titleRule && params.titleRule.enabled) {
+    const automated = buildTitleFromAutomationRule(params.titleRule, {
+      transactionType: params.transactionType,
+      categoria: params.categoria,
+      camere: params.camere,
+      suprafataUtila: params.suprafataUtila,
+      suprafataConstruita: params.suprafataConstruita,
+      etaj: params.etaj,
+      etajeTotal: params.etajeTotal,
+      zona: params.zona,
+      oras: params.oras,
+      mobilat: params.mobilat,
+      utilare: params.utilare,
+      parcare: params.parcare ?? params.hasParcare,
+      petFriendly: params.petFriendly,
+      propertyId: params.propertyId,
+      rawTitle: params.rawTitle,
+      rawText: params.rawText,
+    });
+    if (automated && automated.trim().length > 0) {
+      return automated;
+    }
+  }
+
   const {
     categoria = "Apartament",
     camere,

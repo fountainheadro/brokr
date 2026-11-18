@@ -19,14 +19,14 @@ export const NotificationManager: React.FC = () => {
     if (permission === 'default') {
       const timer = setTimeout(() => {
         toast((t) => (
-          <div className="flex flex-col gap-2.5 font-sans min-w-[280px]">
-            <div className="flex items-start gap-2.5">
-              <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 text-[#051D35] flex items-center justify-center shrink-0 mt-0.5">
+          <div className="flex flex-col gap-3 font-sans min-w-[280px]">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 text-[#051D35] flex items-center justify-center shrink-0 mt-1">
                 <Bell size={15} className="text-[#BE9662]" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-bold text-gray-900 leading-tight">Activați Notificările Native</p>
-                <p className="text-[11px] text-gray-500 font-medium mt-1 leading-normal">
+                <p className="font-title text-xs font-semibold text-gray-900 leading-tight">Activați Notificările Native</p>
+                <p className="text-[11px] text-gray-500 font-normal mt-1 leading-normal">
                   Rămâneți la curent cu vizionările și activitățile programate chiar și când nu sunteți în aplicație.
                 </p>
               </div>
@@ -34,7 +34,7 @@ export const NotificationManager: React.FC = () => {
             <div className="flex items-center justify-end gap-2 mt-1 pt-2 border-t border-gray-100">
               <button
                 onClick={() => toast.dismiss(t.id)}
-                className="h-7 px-2.5 text-xs font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors border border-gray-200 cursor-pointer"
+                className="h-7 px-3 text-xs font-semibold text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md transition-colors border border-gray-200 cursor-pointer"
               >
                 Nu acum
               </button>
@@ -224,9 +224,9 @@ export const NotificationManager: React.FC = () => {
       {(t) => (
         <ToastBar toast={t}>
           {({ icon, message }) => (
-            <div className="flex items-center gap-2.5 w-full">
+            <div className="flex items-center gap-3 w-full">
               {icon}
-              <div className="flex-1 text-xs font-medium text-gray-800 leading-snug">{message}</div>
+              <div className="flex-1 text-xs font-normal text-gray-800 leading-snug">{message}</div>
               {t.type !== 'loading' && (
                 <button 
                   onClick={() => toast.dismiss(t.id)}

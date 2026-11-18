@@ -16,9 +16,16 @@
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
-      "@/*": [
-        "./*"
-      ]
+      "@/*": ["./src/*"],
+      "@design/*": ["./design/*"],
+      "@ui/*": ["./src/ui/*"],
+      "@core/*": ["./src/core/*"],
+      "@server/*": ["./server/*"],
+      "@ai/*": ["./ai/*"],
+      "@lib/*": ["./lib/*"],
+      "@pkg/*": ["./packages/*"],
+      "@config/*": ["./config/*"],
+      "~/*": ["./*"]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true

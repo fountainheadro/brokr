@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, 
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { Notification, notificationsService } from "../services/notificationsService";
 import { useNotifications } from "./NotificationProvider";
+import { VirtualizedStack } from "./VirtualizedList";
 
 interface NotificationsModalProps {
   isOpen: boolean;
@@ -37,6 +38,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   const { openSettings } = useNotifications();
   const [activeFilter, setActiveFilter] = useState<FilterType>('toate');
   const [searchQuery, setSearchQuery] = useState('');
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Counts for filters
   const counts = useMemo(() => {
@@ -172,22 +174,22 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             {/* 1. Drawer Header */}
             <div className="p-4 border-b border-gray-200 bg-white shrink-0">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-3">
                   <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 text-[#051D35] flex items-center justify-center shrink-0">
                     <Bell size={16} />
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h2 className="text-[14px] font-bold text-gray-900 tracking-tight leading-tight">
+                      <h2 className="font-title text-[14px] font-semibold text-gray-900 tracking-tight leading-tight">
                         Notificări
                       </h2>
                       {counts.necitite > 0 && (
-                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-[#BE9662]/15 text-[#051D35] border border-[#BE9662]/30">
+                        <span className="text-[10px] font-semibold px-2 py-1 rounded-full bg-[#BE9662]/15 text-[#051D35] border border-[#BE9662]/30">
                           {counts.necitite} noi
                         </span>
                       )}
                     </div>
-                    <p className="text-[11px] text-gray-500 font-medium leading-tight mt-0.5">
+                    <p className="text-[11px] text-gray-500 font-medium leading-tight mt-1">
                       Alerte, activități și actualizări în timp real
                     </p>
                   </div>
@@ -203,15 +205,15 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
               </div>
 
               {/* 2. Top Filter Menu (Clienți Sub-Header Style) */}
-              <div className="mt-3.5 pt-3 border-t border-gray-100">
-                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+              <div className="mt-4 pt-3 border-t border-gray-100">
+                <div className="flex items-center gap-2 overflow-x-auto no-scrollbar pb-1">
                   {filterTabs.map(tab => {
                     const isActive = activeFilter === tab.id;
                     return (
                       <button
                         key={tab.id}
                         onClick={() => setActiveFilter(tab.id)}
-                        className={`h-7 px-2.5 rounded-md text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors cursor-pointer select-none ${
+                        className={`h-7 px-3 rounded-md text-xs font-semibold flex items-center gap-2 shrink-0 transition-colors cursor-pointer select-none ${
                           isActive
                             ? 'bg-[#051D35] text-white shadow-xs'
                             : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
@@ -219,7 +221,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                       >
                         <span>{tab.label}</span>
                         <span 
-                          className={`text-[10px] font-mono px-1 py-0.2 rounded ${
+                          className={`text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded ${
                             isActive 
                               ? 'bg-[#BE9662] text-white' 
                               : 'bg-gray-100 text-gray-600'
@@ -234,14 +236,14 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
 
                 {/* Quick Search in notifications */}
                 {notifications.length > 5 && (
-                  <div className="mt-2.5 relative">
-                    <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <div className="mt-3 relative">
+                    <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                     <input
                       type="text"
                       placeholder="Filtrează în notificări..."
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      className="w-full h-7 pl-7 pr-7 text-[12px] bg-gray-50/70 border border-gray-200 rounded-md focus:bg-white focus:outline-none focus:border-[#051D35] transition-colors"
+                      className="w-full h-7 pl-8 pr-8 text-[12px] font-normal bg-gray-50/70 border border-gray-200 rounded-md focus:bg-white focus:outline-none focus:border-[#051D35] transition-colors"
                     />
                     {searchQuery && (
                       <button
@@ -257,98 +259,106 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             </div>
 
             {/* 3. Notifications List Area (Scrollable with Split-Button List Item Style) */}
-            <div className="flex-1 overflow-y-auto divide-y divide-gray-100 custom-scrollbar">
+            <div ref={scrollContainerRef} className="flex-1 overflow-y-auto custom-scrollbar">
               {filteredNotifications.length > 0 ? (
-                filteredNotifications.map((notification, idx) => {
-                  const visuals = getItemVisuals(notification.type);
-                  return (
-                    <div
-                      key={notification.id || idx}
-                      onClick={() => {
-                        handleMarkAsRead(notification);
-                        onSelectNotification?.(notification);
-                        onClose();
-                      }}
-                      className={`group w-full px-4 py-3 flex items-start justify-between transition-colors cursor-pointer select-none text-left relative ${
-                        notification.read 
-                          ? 'bg-white hover:bg-gray-50/70 opacity-75' 
-                          : 'bg-[#051D35]/[0.02] hover:bg-[#051D35]/[0.05]'
-                      }`}
-                    >
-                      {/* Unread Left Border / Indicator */}
-                      {!notification.read && (
-                        <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-[#BE9662]" />
-                      )}
+                <VirtualizedStack
+                  items={filteredNotifications}
+                  scrollContainerRef={scrollContainerRef}
+                  getItemKey={(notification, idx) => notification.id || `notif-${idx}`}
+                  estimateItemHeight={86}
+                  overscanRatio={0.5}
+                  className="divide-y divide-gray-100"
+                  renderItem={(notification, _idx, itemRef) => {
+                    const visuals = getItemVisuals(notification.type);
+                    return (
+                      <div
+                        ref={itemRef}
+                        onClick={() => {
+                          handleMarkAsRead(notification);
+                          onSelectNotification?.(notification);
+                          onClose();
+                        }}
+                        className={`group w-full px-4 py-3 flex items-start justify-between transition-colors cursor-pointer select-none text-left relative ${
+                          notification.read 
+                            ? 'bg-white hover:bg-gray-50/70 opacity-75' 
+                            : 'bg-[#051D35]/[0.02] hover:bg-[#051D35]/[0.05]'
+                        }`}
+                      >
+                        {/* Unread Left Border / Indicator */}
+                        {!notification.read && (
+                          <div className="absolute left-0 top-0 bottom-0 w-1 bg-[#BE9662]" />
+                        )}
 
-                      <div className="flex items-start gap-3 min-w-0 pr-3">
-                        {/* Icon Box (Split Menu Style) */}
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${visuals.boxStyle}`}>
-                          {visuals.icon}
-                        </div>
+                        <div className="flex items-start gap-3 min-w-0 pr-3">
+                          {/* Icon Box (Split Menu Style) */}
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 mt-1 ${visuals.boxStyle}`}>
+                            {visuals.icon}
+                          </div>
 
-                        {/* Title, message & timestamp */}
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <h4 className={`text-xs font-semibold leading-tight truncate ${
-                              notification.read ? 'text-gray-800' : 'text-gray-900 font-bold'
+                          {/* Title, message & timestamp */}
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <h4 className={`font-title text-xs font-semibold leading-tight truncate ${
+                                notification.read ? 'text-gray-800' : 'text-gray-900'
+                              }`}>
+                                {notification.title}
+                              </h4>
+                              {!notification.read && (
+                                <span className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0" />
+                              )}
+                            </div>
+
+                            <p className={`text-[12px] leading-snug mt-1 ${
+                              notification.read ? 'text-gray-500' : 'text-gray-700'
                             }`}>
-                              {notification.title}
-                            </h4>
+                              {notification.message}
+                            </p>
+
+                            <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-2 font-normal">
+                              <Clock size={11} className="text-gray-400 shrink-0" />
+                              <span>{formatDate(notification.createdAt)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Right Badge & Quick Actions */}
+                        <div className="flex flex-col items-end gap-2 shrink-0 pt-1">
+                          <span className={`text-[10px] font-semibold px-2 py-1 rounded border shrink-0 ${visuals.badgeStyle}`}>
+                            {visuals.label}
+                          </span>
+
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                             {!notification.read && (
-                              <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662] shrink-0" />
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleMarkAsRead(notification);
+                                }}
+                                className="p-1 text-gray-400 hover:text-emerald-600 hover:bg-gray-100 rounded"
+                                title="Marchează citită"
+                              >
+                                <CheckCircle2 size={13} />
+                              </button>
                             )}
-                          </div>
-
-                          <p className={`text-[12px] leading-snug mt-1 ${
-                            notification.read ? 'text-gray-500' : 'text-gray-700'
-                          }`}>
-                            {notification.message}
-                          </p>
-
-                          <div className="flex items-center gap-1.5 text-[10px] text-gray-400 mt-1.5 font-medium">
-                            <Clock size={11} className="text-gray-400 shrink-0" />
-                            <span>{formatDate(notification.createdAt)}</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Right Badge & Quick Actions */}
-                      <div className="flex flex-col items-end gap-2 shrink-0 pt-0.5">
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border shrink-0 ${visuals.badgeStyle}`}>
-                          {visuals.label}
-                        </span>
-
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {!notification.read && (
                             <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleMarkAsRead(notification);
-                              }}
-                              className="p-1 text-gray-400 hover:text-emerald-600 hover:bg-gray-100 rounded"
-                              title="Marchează citită"
+                              onClick={(e) => handleDelete(e, notification.id)}
+                              className="p-1 text-gray-400 hover:text-rose-600 hover:bg-gray-100 rounded"
+                              title="Șterge notificarea"
                             >
-                              <CheckCircle2 size={13} />
+                              <Trash2 size={13} />
                             </button>
-                          )}
-                          <button
-                            onClick={(e) => handleDelete(e, notification.id)}
-                            className="p-1 text-gray-400 hover:text-rose-600 hover:bg-gray-100 rounded"
-                            title="Șterge notificarea"
-                          >
-                            <Trash2 size={13} />
-                          </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  );
-                })
+                    );
+                  }}
+                />
               ) : (
                 <div className="flex flex-col items-center justify-center py-20 px-6 text-center">
                   <div className="w-14 h-14 rounded-full bg-gray-50 border border-dashed border-gray-200 flex items-center justify-center mb-3 text-gray-300">
                     <Bell size={24} />
                   </div>
-                  <p className="text-xs font-bold text-gray-800">
+                  <p className="text-xs font-semibold text-gray-800">
                     Nicio notificare găsită
                   </p>
                   <p className="text-[11px] text-gray-400 mt-1 max-w-[240px]">
@@ -361,11 +371,11 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             </div>
 
             {/* 4. Fixed Action Buttons at Base (butoanele vor fi fixate la baza) */}
-            <div className="shrink-0 p-3.5 border-t border-gray-200 bg-white flex items-center gap-2.5">
+            <div className="shrink-0 p-4 border-t border-gray-200 bg-white flex items-center gap-3">
               <button
                 onClick={handleMarkAllAsRead}
                 disabled={counts.necitite === 0}
-                className={`flex-1 h-9 px-3.5 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer select-none ${
+                className={`flex-1 h-9 px-4 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer select-none ${
                   counts.necitite > 0
                     ? 'bg-[#051D35] hover:bg-[#0a2b4a] text-white shadow-xs'
                     : 'bg-gray-100 text-gray-400 cursor-not-allowed'
@@ -380,7 +390,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                   onClose();
                   openSettings();
                 }}
-                className="h-9 px-3.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors cursor-pointer select-none shrink-0"
+                className="h-9 px-4 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-semibold flex items-center justify-center gap-2 transition-colors cursor-pointer select-none shrink-0"
                 title="Configurare Alerte Push"
               >
                 <Settings size={14} />

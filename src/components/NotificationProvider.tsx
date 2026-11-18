@@ -109,10 +109,17 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             }))
           };
 
-          fetch('/api/notifications/sync-viewings', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(syncPayload)
+          user.getIdToken().then((idToken) => {
+            const pToken = localStorage.getItem('brokr_preview_token');
+            return fetch('/api/notifications/sync-viewings', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${idToken}`,
+                ...(pToken ? { 'x-preview-token': pToken } : {}),
+              },
+              body: JSON.stringify(syncPayload)
+            });
           })
           .then(res => res.json())
           .then(data => {
@@ -177,14 +184,21 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
         // Sync token to server-side cache
         if (auth.currentUser) {
-          fetch('/api/notifications/register-token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              token: token,
-              userId: auth.currentUser.uid,
-              email: auth.currentUser.email || ''
-            })
+          auth.currentUser.getIdToken().then((idToken) => {
+            const pToken = localStorage.getItem('brokr_preview_token');
+            return fetch('/api/notifications/register-token', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${idToken}`,
+                ...(pToken ? { 'x-preview-token': pToken } : {}),
+              },
+              body: JSON.stringify({
+                token: token,
+                userId: auth.currentUser!.uid,
+                email: auth.currentUser!.email || ''
+              })
+            });
           }).catch(err => console.warn('[PWA Notification] Failed to register token with server cache:', err));
         }
         
@@ -213,14 +227,21 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     const unsubAuth = auth.onAuthStateChanged((user) => {
       if (user) {
-        fetch('/api/notifications/register-token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            token: fcmToken,
-            userId: user.uid,
-            email: user.email || ''
-          })
+        user.getIdToken().then((idToken) => {
+          const pToken = localStorage.getItem('brokr_preview_token');
+          return fetch('/api/notifications/register-token', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${idToken}`,
+              ...(pToken ? { 'x-preview-token': pToken } : {}),
+            },
+            body: JSON.stringify({
+              token: fcmToken,
+              userId: user.uid,
+              email: user.email || ''
+            })
+          });
         }).catch(err => console.warn('[PWA Notification] Failed to register token with server cache:', err));
       }
     });
@@ -313,7 +334,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
       {children}
 
       {/* 1. Slide-in In-App Notifications Queue and Banner Layout */}
-      <div className="fixed bottom-5 right-5 z-[500] pointer-events-none flex flex-col gap-3 max-w-sm w-full font-sans">
+      <div className="fixed bottom-5 right-5 z-[500] pointer-events-none flex flex-col gap-4 max-w-sm w-full font-sans">
         <AnimatePresence>
           {inAppToasts.map((toast) => (
             <motion.div
@@ -321,15 +342,15 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
               initial={{ opacity: 0, y: 20, scale: 0.95 }}
               animate={{ opacity: 1, y: 0, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
-              className="pointer-events-auto bg-white border border-gray-200 text-gray-900 p-3.5 rounded-lg shadow-xl flex items-start gap-3 relative overflow-hidden"
+              className="pointer-events-auto bg-white border border-gray-200 text-gray-900 p-4 rounded-lg shadow-xl flex items-start gap-3 relative overflow-hidden"
             >
-              <div className="w-8 h-8 shrink-0 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 flex items-center justify-center text-[#BE9662] mt-0.5">
+              <div className="w-8 h-8 shrink-0 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 flex items-center justify-center text-[#BE9662] mt-1">
                 <Sparkles size={16} />
               </div>
               <div className="flex-1 min-w-0 pr-4">
-                <h4 className="text-[10px] font-bold uppercase tracking-wider text-[#BE9662]">Notificare Nouă</h4>
-                <p className="text-xs font-bold text-gray-900 mt-0.5 leading-snug">{toast.title}</p>
-                <p className="text-[11px] text-gray-500 mt-1 font-medium leading-relaxed">{toast.body}</p>
+                <h4 className="font-title text-[10px] font-semibold uppercase tracking-wider text-[#BE9662]">Notificare Nouă</h4>
+                <p className="text-xs font-semibold text-gray-900 mt-1 leading-snug">{toast.title}</p>
+                <p className="text-[11px] text-gray-500 mt-1 font-normal leading-relaxed">{toast.body}</p>
               </div>
               <button
                 onClick={() => setInAppToasts((prev) => prev.filter(t => t.id !== toast.id))}
@@ -360,14 +381,14 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 className="relative w-full max-w-lg rounded-lg bg-white p-5 shadow-2xl border border-gray-200 flex flex-col font-sans text-gray-900"
               >
                 {/* Header configuration */}
-                <div className="flex items-center justify-between pb-3.5 border-b border-gray-100 mb-4">
-                  <div className="flex items-center gap-2.5">
+                <div className="flex items-center justify-between pb-4 border-b border-gray-100 mb-4">
+                  <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 text-[#051D35] flex items-center justify-center">
                       <Bell size={16} className="text-[#BE9662]" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-gray-900">Setări Alerte Push</h3>
-                      <p className="text-[11px] text-gray-500 font-medium leading-none mt-0.5">Notificări native la nivel de sistem operativ (PWA)</p>
+                      <h3 className="font-title text-sm font-semibold text-gray-900">Setări Alerte Push</h3>
+                      <p className="text-[11px] text-gray-500 font-normal leading-none mt-1">Notificări native la nivel de sistem operativ (PWA)</p>
                     </div>
                   </div>
                   <button 
@@ -382,22 +403,22 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 <div className="space-y-4">
                   {/* Status checklist section */}
                   <div className="p-3 bg-gray-50 rounded-md space-y-2 border border-gray-200">
-                    <span className="block text-[10px] font-black uppercase text-gray-400 tracking-wider">Stare Conexiune Sistemă</span>
+                    <span className="block text-[10px] font-semibold uppercase text-gray-400 tracking-wider">Stare Conexiune Sistem</span>
                     
                     <div className="flex items-center justify-between text-xs">
                       <span className="font-semibold text-gray-600 flex items-center gap-1">Autentificare OS:</span>
                       {permission === 'granted' ? (
-                        <span className="font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md flex items-center gap-1">
+                        <span className="font-normal text-emerald-600 bg-emerald-50 px-2 py-1 rounded-md flex items-center gap-1 leading-none">
                           <Check size={12} strokeWidth={3} /> Permis
                         </span>
                       ) : permission === 'denied' ? (
-                        <span className="font-black text-rose-600 bg-rose-50 px-2 py-0.5 rounded-md flex items-center gap-1">
+                        <span className="font-normal text-rose-600 bg-rose-50 px-2 py-1 rounded-md flex items-center gap-1 leading-none">
                           Refuzat / Blocant
                         </span>
                       ) : (
                         <button
                           onClick={requestSystemPermission}
-                          className="px-3 py-1 font-bold text-[--color-brand-navy] bg-[--color-brand-gold-light] hover:bg-[--color-brand-gold-border] rounded-lg cursor-pointer transition-colors"
+                          className="px-3 py-1 font-semibold text-[--color-brand-navy] bg-[--color-brand-gold-light] hover:bg-[--color-brand-gold-border] rounded-lg cursor-pointer transition-colors"
                         >
                           Solicită Permisiune
                         </button>
@@ -407,22 +428,22 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                     <div className="flex items-center justify-between text-xs border-t border-gray-200/50 pt-2">
                       <span className="font-semibold text-gray-600 flex items-center gap-1">Sincronizare Push FCM:</span>
                       {fcmToken ? (
-                        <span className="font-black text-[--color-brand-navy] bg-[--color-brand-gold-light] border border-[--color-brand-gold-border] px-2 py-0.5 rounded-md flex items-center gap-1">
+                        <span className="font-normal text-[--color-brand-navy] bg-[--color-brand-gold-light] border border-[--color-brand-gold-border] px-2 py-1 rounded-md flex items-center gap-1 leading-none">
                           <Check size={12} strokeWidth={3} /> Sincronizat
                         </span>
                       ) : registrationError ? (
-                        <span className="font-black text-amber-600 bg-amber-50 px-2.5 py-1 rounded-md max-w-[200px] truncate leading-none text-[10px]" title={registrationError}>
+                        <span className="font-normal text-amber-600 bg-amber-50 px-3 py-1 rounded-md max-w-[200px] truncate leading-none text-[10px]" title={registrationError}>
                           Eroare SW
                         </span>
                       ) : (
-                        <span className="text-gray-400 font-medium italic">În curs de înregistrare...</span>
+                        <span className="text-gray-400 font-normal italic">În curs de înregistrare...</span>
                       )}
                     </div>
                   </div>
 
                   {/* Browser warnings/limitations warnings */}
                   {permission === 'denied' && (
-                    <div className="p-3.5 bg-rose-50 border border-rose-100 rounded-2xl flex gap-2.5 text-xs text-rose-800 leading-relaxed">
+                    <div className="p-4 bg-rose-50 border border-rose-100 rounded-2xl flex gap-3 text-xs text-rose-800 leading-relaxed">
                       <AlertTriangle size={18} className="shrink-0 text-rose-500" />
                       <div>
                         Ar trebui să resetați permisiunea de Notificări în bara de adrese a browserului (click pe iconița de lacăt / setări) pentru a primi native push alerts.
@@ -433,7 +454,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                   {/* VAPID/Iframe status warning */}
                   {!fcmToken && !registrationError && (
                     <div className="p-3 bg-[--color-brand-gold-light]/30 border border-[--color-brand-gold-border] rounded-xl flex gap-2 text-[11px] text-gray-700 leading-normal">
-                      <Info size={16} className="shrink-0 text-[--color-brand-gold] mt-0.5" />
+                      <Info size={16} className="shrink-0 text-[--color-brand-gold] mt-1" />
                       <div>
                         Notă: În interiorul iframe-urilor sandbox test-studio sau în modurile private, Service Workers pot fi blocați de securitatea browserului. Utilizați **Simulatorul Native** de mai jos pentru teste de validare.
                       </div>
@@ -441,76 +462,76 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                   )}
 
                   {/* Category toggles section */}
-                  <div className="space-y-2.5">
-                    <span className="block text-[10px] font-black uppercase text-gray-400 tracking-wider">Categorii Alerte Active</span>
+                  <div className="space-y-4">
+                    <span className="block text-[10px] font-semibold uppercase text-gray-400 tracking-wider">Categorii Alerte Active</span>
                     
                     {/* Category: Leads */}
-                    <div className={`flex items-center justify-between p-3.5 border rounded-2xl transition-all ${
+                    <div className={`flex items-center justify-between p-4 border rounded-2xl transition-all ${
                       preferences.leads ? 'border-orange-150 bg-orange-50/10' : 'border-gray-100 bg-white'
                     }`}>
                       <div>
-                        <span className="block text-xs font-black text-gray-900 leading-snug">Oportunități Agenție (New Leads)</span>
-                        <span className="block text-[10px] text-gray-400 mt-0.5">Notificare în timp real când un nou client solicită informații la un anunt publicos</span>
+                        <span className="block text-xs font-semibold text-gray-900 leading-snug">Oportunități Agenție (New Leads)</span>
+                        <span className="block text-[10px] text-gray-400 mt-1 font-normal">Notificare în timp real când un nou client solicită informații la un anunț public</span>
                       </div>
                       <button
                         onClick={() => togglePreference('leads')}
-                        className={`w-12 h-6 rounded-full p-0.5 transition-colors duration-200 cursor-pointer ${
-                          preferences.leads ? 'bg-[--color-accent] flex justify-end' : 'bg-gray-200 flex justify-start'
+                        className={`w-12 h-6 rounded-full p-1 transition-colors duration-200 cursor-pointer flex items-center ${
+                          preferences.leads ? 'bg-[--color-accent] justify-end' : 'bg-gray-200 justify-start'
                         }`}
                       >
-                        <motion.div layout className="w-5 h-5 rounded-full bg-white shadow" />
+                        <motion.div layout className="w-4 h-4 rounded-full bg-white shadow" />
                       </button>
                     </div>
 
                     {/* Category: Calendar */}
-                    <div className={`flex items-center justify-between p-3.5 border rounded-2xl transition-all ${
+                    <div className={`flex items-center justify-between p-4 border rounded-2xl transition-all ${
                       preferences.viewings ? 'border-orange-150 bg-orange-50/10' : 'border-gray-100 bg-white'
                     }`}>
                       <div>
-                        <span className="block text-xs font-black text-gray-900 leading-snug">Vizionări Imobiliare (Calendar)</span>
-                        <span className="block text-[10px] text-gray-400 mt-0.5">Alerte referitoare la mutări, reprogramări sau vizite noi de calendar imobiliar</span>
+                        <span className="block text-xs font-semibold text-gray-900 leading-snug">Vizionări Imobiliare (Calendar)</span>
+                        <span className="block text-[10px] text-gray-400 mt-1 font-normal">Alerte referitoare la mutări, reprogramări sau vizite noi de calendar imobiliar</span>
                       </div>
                       <button
                         onClick={() => togglePreference('viewings')}
-                        className={`w-12 h-6 rounded-full p-0.5 transition-colors duration-200 cursor-pointer ${
-                          preferences.viewings ? 'bg-[--color-accent] flex justify-end' : 'bg-gray-200 flex justify-start'
+                        className={`w-12 h-6 rounded-full p-1 transition-colors duration-200 cursor-pointer flex items-center ${
+                          preferences.viewings ? 'bg-[--color-accent] justify-end' : 'bg-gray-200 justify-start'
                         }`}
                       >
-                        <motion.div layout className="w-5 h-5 rounded-full bg-white shadow" />
+                        <motion.div layout className="w-4 h-4 rounded-full bg-white shadow" />
                       </button>
                     </div>
 
                     {/* Category: System */}
-                    <div className={`flex items-center justify-between p-3.5 border rounded-2xl transition-all ${
+                    <div className={`flex items-center justify-between p-4 border rounded-2xl transition-all ${
                       preferences.system ? 'border-orange-150 bg-orange-50/10' : 'border-gray-100 bg-white'
                     }`}>
                       <div>
-                        <span className="block text-xs font-black text-gray-900 leading-snug">Notificări Sistem & Raportări</span>
-                        <span className="block text-[10px] text-gray-400 mt-0.5">Finisări de extracție AI, diagnostic server sau notificări administrative</span>
+                        <span className="block text-xs font-semibold text-gray-900 leading-snug">Notificări Sistem & Raportări</span>
+                        <span className="block text-[10px] text-gray-400 mt-1 font-normal">Finisări de extracție AI, diagnostic server sau notificări administrative</span>
                       </div>
                       <button
                         onClick={() => togglePreference('system')}
-                        className={`w-12 h-6 rounded-full p-0.5 transition-colors duration-200 cursor-pointer ${
-                          preferences.system ? 'bg-[--color-accent] flex justify-end' : 'bg-gray-200 flex justify-start'
+                        className={`w-12 h-6 rounded-full p-1 transition-colors duration-200 cursor-pointer flex items-center ${
+                          preferences.system ? 'bg-[--color-accent] justify-end' : 'bg-gray-200 justify-start'
                         }`}
                       >
-                        <motion.div layout className="w-5 h-5 rounded-full bg-white shadow" />
+                        <motion.div layout className="w-4 h-4 rounded-full bg-white shadow" />
                       </button>
                     </div>
 
                     {/* Mute everything option */}
                     <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl mt-1">
-                      <div className="flex items-center gap-2 text-xs font-semibold text-gray-750">
+                      <div className="flex items-center gap-2 text-xs font-semibold text-gray-700">
                         {preferences.muteAll ? <VolumeX size={16} className="text-rose-500" /> : <Volume2 size={16} className="text-emerald-500" />}
                         <span>Dezactivează Sunete și Toast (Mute)</span>
                       </div>
                       <button
                         onClick={() => togglePreference('muteAll')}
-                        className={`w-10 h-5 rounded-full p-0.5 transition-colors duration-200 cursor-pointer ${
-                          preferences.muteAll ? 'bg-rose-500 flex justify-end' : 'bg-gray-200 flex justify-start'
+                        className={`w-10 h-5 rounded-full p-1 transition-colors duration-200 cursor-pointer flex items-center ${
+                          preferences.muteAll ? 'bg-rose-500 justify-end' : 'bg-gray-200 justify-start'
                         }`}
                       >
-                        <motion.div layout className="w-4 h-4 rounded-full bg-white shadow" />
+                        <motion.div layout className="w-3 h-3 rounded-full bg-white shadow" />
                       </button>
                     </div>
                   </div>
@@ -519,18 +540,18 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                   {fcmToken && (
                     <div className="p-3 bg-gray-50 border border-gray-100 rounded-xl space-y-2">
                       <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black uppercase text-gray-400 tracking-wider">Identificator Unic Dispozitiv Push (FCM Token)</span>
+                        <span className="text-[10px] font-semibold uppercase text-gray-400 tracking-wider">Identificator Unic Dispozitiv Push (FCM Token)</span>
                         <button
                           onClick={() => {
                             navigator.clipboard.writeText(fcmToken);
                             alert('Token copiat în clipboard!');
                           }}
-                          className="text-[10px] text-[--color-accent] hover:underline font-bold flex items-center gap-0.5 cursor-pointer"
+                          className="text-[10px] text-[--color-accent] hover:underline font-semibold flex items-center gap-1 cursor-pointer"
                         >
                           <Copy size={11} /> Copiază
                         </button>
                       </div>
-                      <div className="text-[10px] font-mono text-gray-500 break-all select-all leading-normal bg-white p-2 rounded-lg max-h-16 overflow-y-auto">
+                      <div className="text-[10px] font-sans tabular-nums font-normal text-gray-500 break-all select-all leading-normal bg-white p-2 rounded-lg max-h-16 overflow-y-auto">
                         {fcmToken}
                       </div>
                     </div>
@@ -539,32 +560,32 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                   {/* DELIGHTFUL ADDITION: Simulator sandbox Diagnostic Control block */}
                   <div className="pt-4 border-t border-gray-100 mt-6">
                     <div className="p-4 bg-orange-50/30 border border-orange-100 rounded-2xl">
-                      <div className="flex items-center gap-1.5 mb-1.5">
+                      <div className="flex items-center gap-2 mb-2">
                         <Sparkles size={14} className="text-[--color-accent]" />
-                        <span className="text-xs font-black uppercase tracking-wider text-orange-750">Banc de Test Diagnostic Push</span>
+                        <span className="text-xs font-semibold uppercase tracking-wider text-orange-700">Banc de Test Diagnostic Push</span>
                       </div>
-                      <p className="text-[11px] text-gray-500 leading-normal">
-                        Simulează alerte native OS în fundal. Apăsați pe buton, apoi **minimizați rapid browserul sau schimbați tabul** pentru a valida integrarea cu centrul de notificări al sistemului de operare:
+                      <p className="text-[11px] text-gray-500 font-normal leading-normal">
+                        Simulează alerte native OS în fundal. Apăsați pe buton, apoi minimizați rapid browserul sau schimbați tabul pentru a valida integrarea cu centrul de notificări al sistemului de operare:
                       </p>
 
-                      <div className="grid grid-cols-3 gap-2 mt-3">
+                      <div className="grid grid-cols-3 gap-4 mt-3">
                         <button
                           onClick={() => triggerTestPush('leads')}
-                          className="bg-white hover:bg-orange-55 border border-orange-100 hover:border-orange-200 text-orange-700 py-2 px-1 rounded-xl text-[10px] font-extrabold flex flex-col items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
+                          className="bg-white hover:bg-orange-50 border border-orange-100 hover:border-orange-200 text-orange-700 py-2 px-2 rounded-xl text-[10px] font-semibold flex flex-col items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
                         >
                           <CheckSquare size={14} />
                           Alerte Intrări
                         </button>
                         <button
                           onClick={() => triggerTestPush('viewings')}
-                          className="bg-white hover:bg-orange-55 border border-orange-100 hover:border-orange-200 text-orange-700 py-2 px-1 rounded-xl text-[10px] font-extrabold flex flex-col items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
+                          className="bg-white hover:bg-orange-50 border border-orange-100 hover:border-orange-200 text-orange-700 py-2 px-2 rounded-xl text-[10px] font-semibold flex flex-col items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
                         >
                           <Play size={14} />
                           Alerte Vizionări
                         </button>
                         <button
                           onClick={() => triggerTestPush('system')}
-                          className="bg-white hover:bg-orange-55 border border-orange-100 hover:border-orange-200 text-orange-700 py-2 px-1 rounded-xl text-[10px] font-extrabold flex flex-col items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
+                          className="bg-white hover:bg-orange-50 border border-orange-100 hover:border-orange-200 text-orange-700 py-2 px-2 rounded-xl text-[10px] font-semibold flex flex-col items-center justify-center gap-1 cursor-pointer shadow-sm active:scale-95 transition-all"
                         >
                           <Info size={14} />
                           Alerte Sistem
@@ -579,7 +600,7 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
                 <div className="mt-6 pt-4 border-t border-gray-100 flex justify-end">
                   <button
                     onClick={closeSettings}
-                    className="px-5 py-2.5 bg-[#051D35] border border-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-black uppercase tracking-wider rounded-xl cursor-pointer shadow transition-all"
+                    className="px-5 py-3 bg-[#051D35] border border-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold uppercase tracking-wider rounded-xl cursor-pointer shadow transition-all"
                   >
                     Salvez Setările
                   </button>

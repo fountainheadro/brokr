@@ -1,18 +1,5 @@
-import { 
-  collection, 
-  addDoc, 
-  updateDoc, 
-  doc, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  serverTimestamp, 
-  getDoc,
-  deleteDoc,
-  where
-} from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { entityIdService } from './entityIdService';
+import { crmApiClient } from '../core/crm/svc_crm-client';
 
 export type ContactType = 'Owner' | 'Renter' | 'Buyer' | 'Agent';
 
@@ -33,84 +20,30 @@ const CONTACTS_COLLECTION = 'contacts';
 
 export const contactsService = {
   addContact: async (contactData: Omit<Contact, 'id' | 'createdAt' | 'updatedAt'>) => {
-    try {
-      const contactId = contactData.contactId || (await entityIdService.getNextId('client'));
-      const now = serverTimestamp();
-      return await addDoc(collection(db, CONTACTS_COLLECTION), {
-        ...contactData,
-        contactId,
-        createdAt: now,
-        updatedAt: now
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, CONTACTS_COLLECTION);
-    }
+    const contactId = contactData.contactId || (await entityIdService.getNextId('client'));
+    return crmApiClient.create<Contact>(CONTACTS_COLLECTION, {
+      ...contactData,
+      contactId,
+    });
   },
 
   updateContact: async (contactId: string, data: Partial<Contact>) => {
-    const path = `${CONTACTS_COLLECTION}/${contactId}`;
-    try {
-      const contactRef = doc(db, CONTACTS_COLLECTION, contactId);
-      return await updateDoc(contactRef, {
-        ...data,
-        updatedAt: serverTimestamp()
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
-    }
+    await crmApiClient.update<Contact>(CONTACTS_COLLECTION, contactId, data);
   },
 
   subscribeToContacts: (callback: (contacts: Contact[]) => void) => {
-    const q = query(collection(db, CONTACTS_COLLECTION), orderBy('updatedAt', 'desc'));
-    return onSnapshot(q, (snapshot) => {
-      const contacts = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Contact[];
-      callback(contacts);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, CONTACTS_COLLECTION);
-    });
+    return crmApiClient.subscribe<Contact>(CONTACTS_COLLECTION, callback);
   },
 
   subscribeToPropertyContacts: (propertyId: string, callback: (contacts: Contact[]) => void) => {
-    const q = query(
-      collection(db, CONTACTS_COLLECTION), 
-      where('propertyId', '==', propertyId),
-      orderBy('updatedAt', 'desc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const contacts = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Contact[];
-      callback(contacts);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, CONTACTS_COLLECTION);
-    });
+    return crmApiClient.subscribe<Contact>(CONTACTS_COLLECTION, callback, { propertyId });
   },
 
   getContact: async (contactId: string) => {
-    const path = `${CONTACTS_COLLECTION}/${contactId}`;
-    try {
-      const contactRef = doc(db, CONTACTS_COLLECTION, contactId);
-      const contactSnap = await getDoc(contactRef);
-      if (contactSnap.exists()) {
-        return { id: contactSnap.id, ...contactSnap.data() } as Contact;
-      }
-      return null;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-    }
+    return crmApiClient.getById<Contact>(CONTACTS_COLLECTION, contactId);
   },
 
   deleteContact: async (contactId: string) => {
-    const path = `${CONTACTS_COLLECTION}/${contactId}`;
-    try {
-      const contactRef = doc(db, CONTACTS_COLLECTION, contactId);
-      return await deleteDoc(contactRef);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-    }
-  }
+    await crmApiClient.remove(CONTACTS_COLLECTION, contactId);
+  },
 };

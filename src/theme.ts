@@ -8,72 +8,27 @@
  * fără hardcoding în componente individuale!
  */
 
+import { designTokens } from "../design/tokens";
+
 export const THEME = {
-  // Brand Colors
-  colors: {
-    // Primary - Brand Navy (#051D35)
-    brandNavy: "#051D35",
-    brandNavyHover: "#0a2b4a",
-    brandNavyLight: "rgba(5, 29, 53, 0.06)",
-    brandNavyBorder: "rgba(5, 29, 53, 0.15)",
-
-    // Accent - Brand Gold / Bronze (#BE9662)
-    brandGold: "#BE9662",
-    brandGoldHover: "#a8824f",
-    brandGoldLight: "rgba(190, 150, 98, 0.12)",
-    brandGoldBorder: "rgba(190, 150, 98, 0.28)",
-
-    // Neutral Text Colors
-    textMain: "#051D35",
-    textSecondary: "#4b5563",
-    textMuted: "#6b7280",
-    textPlaceholder: "#9ca3af",
-
-    // Backgrounds
-    bgApp: "#f9fafb",
-    bgCard: "#ffffff",
-    bgHeader: "#ffffff",
-    bgSidebar: "#ffffff",
-    bgMuted: "#f3f4f6",
-
-    // Borders
-    border: "#e5e7eb",
-    borderHover: "#d1d5db",
-
-    // Status Colors
-    status: {
-      success: "#10b981",
-      successLight: "rgba(16, 185, 129, 0.10)",
-      warning: "#f59e0b",
-      warningLight: "rgba(245, 158, 11, 0.10)",
-      danger: "#ef4444",
-      dangerLight: "rgba(239, 68, 68, 0.10)",
-      info: "#BE9662", // Unified with brand gold
-      infoLight: "rgba(190, 150, 98, 0.12)"
-    }
-  },
-
-  // Typography
-  fonts: {
-    sans: '"Neue Montreal", "PP Neue Montreal", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace'
-  },
-
-  // Border Radii
+  colors: designTokens.colors,
+  fonts: designTokens.typography.fonts,
   radii: {
-    standard: "6px",
-    badge: "4px",
-    modal: "12px",
-    card: "8px",
-    pill: "9999px"
+    standard: designTokens.radius.standard,
+    badge: designTokens.radius.badge,
+    modal: designTokens.radius.modal,
+    card: designTokens.radius.card,
+    pill: designTokens.radius.pill,
   },
-
-  // Layout Spacing
   spacing: {
-    edge: "16px",
-    headerHeight: "50px",
-    componentHeight: "36px"
-  }
+    edge: designTokens.spacing.layout.pageEdgePadding,
+    headerHeight: designTokens.spacing.layout.headerHeight,
+    componentHeight: designTokens.spacing.layout.componentHeight,
+    cardPadding: designTokens.spacing.layout.cardPadding,
+    sectionPadding: designTokens.spacing.layout.sectionPadding,
+    siblingGap: designTokens.spacing.layout.siblingGap,
+    fieldRowGap: designTokens.spacing.layout.fieldRowGap,
+  },
 } as const;
 
 /**
@@ -148,5 +103,11 @@ export const applyTheme = () => {
 
   // Fonts
   root.style.setProperty('--font-sans', THEME.fonts.sans);
+  root.style.setProperty('--font-title', THEME.fonts.title);
   root.style.setProperty('--font-mono', THEME.fonts.mono);
+
+  // Spacing (4px multiples & 16px canonical gap)
+  root.style.setProperty('--spacing-edge', THEME.spacing.edge);
+  root.style.setProperty('--spacing-gap', THEME.spacing.siblingGap);
+  root.style.setProperty('--spacing-card', THEME.spacing.cardPadding);
 };

@@ -1,11 +1,16 @@
-import { Express } from 'express';
-import axios from 'axios';
-import fs from 'fs';
-import path from 'path';
+import { Express } from "express";
+import axios from "axios";
+import fs from "fs";
+import path from "path";
+import { GcpAuthService } from "../src/core/gcp/svc_gcp-auth";
+import { logger } from "../src/core/logger/logger";
+import { requireTenantContext } from "./middleware/mw_tenant-context";
 
-// Local database schema for persisting background notification state
+export const FCM_MESSAGING_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
+
 interface CachedViewing {
   id: string;
+  tenantId: string;
   date: string;
   hour: string;
   agentId?: string;
@@ -15,49 +20,55 @@ interface CachedViewing {
 
 interface CachedToken {
   token: string;
+  tenantId: string;
   userId: string;
   email?: string;
   updatedAt: number;
 }
 
 interface NotificationCache {
-  viewings: { [viewingId: string]: CachedViewing };
-  tokens: { [token: string]: CachedToken };
+  viewings: { [partitionedKey: string]: CachedViewing };
+  tokens: { [partitionedKey: string]: CachedToken };
 }
 
-const CACHE_FILE_PATH = path.join('/tmp', 'brokr-background-cache.json');
+const CACHE_FILE_PATH = path.join("/tmp", "brokr-background-cache.json");
 
-// In-memory shadow copy of synced database structures
 const localCache: NotificationCache = {
   viewings: {},
-  tokens: {}
+  tokens: {},
 };
 
-// Safely load local persistent file cache on server boot
 function loadPersistentCache() {
   try {
     if (fs.existsSync(CACHE_FILE_PATH)) {
-      const raw = fs.readFileSync(CACHE_FILE_PATH, 'utf8');
+      const raw = fs.readFileSync(CACHE_FILE_PATH, "utf8");
       const parsed = JSON.parse(raw);
       if (parsed.viewings) localCache.viewings = parsed.viewings;
       if (parsed.tokens) localCache.tokens = parsed.tokens;
-      console.log(`[Notification Background] Persistent cache loaded. Viewings: ${Object.keys(localCache.viewings).length}, Tokens: ${Object.keys(localCache.tokens).length}`);
+      logger.info(
+        `Persistent cache loaded. Viewings: ${Object.keys(localCache.viewings).length}, Tokens: ${Object.keys(localCache.tokens).length}`,
+        { module: "background-notifications" }
+      );
     }
   } catch (err: any) {
-    console.warn('[Notification Background] Failed loading background-cache file:', err.message);
+    logger.warn("Failed loading background-cache file", {
+      module: "background-notifications",
+      meta: { reason: err?.message },
+    });
   }
 }
 
-// Safely persist local cache to filesystem
 function savePersistentCache() {
   try {
-    fs.writeFileSync(CACHE_FILE_PATH, JSON.stringify(localCache, null, 2), 'utf8');
+    fs.writeFileSync(CACHE_FILE_PATH, JSON.stringify(localCache, null, 2), "utf8");
   } catch (err: any) {
-    console.warn('[Notification Background] Failed to write background-cache file:', err.message);
+    logger.warn("Failed writing background-cache file", {
+      module: "background-notifications",
+      meta: { reason: err?.message },
+    });
   }
 }
 
-// Read firebase config safely
 interface FirebaseConfig {
   projectId: string;
   appId: string;
@@ -70,166 +81,213 @@ interface FirebaseConfig {
 
 function loadFirebaseConfig(): FirebaseConfig | null {
   try {
-    const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
     if (fs.existsSync(configPath)) {
-      const configRaw = fs.readFileSync(configPath, 'utf8');
+      const configRaw = fs.readFileSync(configPath, "utf8");
       return JSON.parse(configRaw);
     }
   } catch (err: any) {
-    console.error('[Notification Background] Failed to load firebase-applet-config.json:', err.message);
+    logger.error("Failed to load firebase-applet-config.json", err, {
+      module: "background-notifications",
+    });
   }
   return null;
 }
 
-// Fetch GCP OAuth access token from Cloud Run metadata server (used for dispatching background FCM pushes securely)
-async function getGCPServiceToken(): Promise<string | null> {
-  try {
-    const res = await axios.get('http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token', {
-      headers: {
-        'Metadata-Flavor': 'Google'
-      },
-      params: {
-        scopes: 'https://www.googleapis.com/auth/firebase.messaging'
-      },
-      timeout: 3000
-    });
-    return res.data.access_token;
-  } catch (err: any) {
-    // Graceful catchment in local development/sandbox environments
-    return null;
-  }
+/**
+ * Resolves a GCP OAuth2 access token for FCM v1 dispatch using the unified ADC strategy
+ * (Service Account JSON -> Local ADC authorized_user -> Cloud Run Metadata ONLY when USE_GCP_METADATA_AUTH=true).
+ */
+export async function getFcmServiceAccessToken(): Promise<string | null> {
+  return GcpAuthService.getAccessToken(FCM_MESSAGING_SCOPE);
 }
 
-// Send standard FCM v1 push notification to target device tokens
-async function sendFCMPushNotification(projectId: string, accessToken: string | null, tokens: string[], title: string, body: string, urlPath: string) {
+async function sendFCMPushNotification(
+  projectId: string,
+  accessToken: string | null,
+  tokens: string[],
+  title: string,
+  body: string,
+  urlPath: string
+) {
   if (!accessToken) {
-    console.log(`[FCM Server Helper] (SIMULATION MODE - Local setup active / No metadata auth)
-    • Unregistered OS Push Target Tokens: ${JSON.stringify(tokens)}
-    • Title: "${title}"
-    • Description: "${body}"
-    • Target Route: "${urlPath}"`);
+    logger.info(
+      `FCM dispatch skipped (SIMULATION MODE - no ADC/metadata credentials active). Targets: ${tokens.length}, route: ${urlPath}`,
+      {
+        module: "background-notifications",
+        action: "fcm_simulation",
+      }
+    );
     return;
   }
 
-  // Dispatch FCM v1 messages securely over Google API
-  for (const token of tokens) {
+  for (const deviceToken of tokens) {
     try {
       const payload = {
         message: {
-          token: token,
+          token: deviceToken,
           notification: {
-            title: title,
-            body: body
+            title,
+            body,
           },
           data: {
-            title: title,
-            body: body,
-            clickAction: urlPath
-          }
-        }
+            title,
+            body,
+            clickAction: urlPath,
+          },
+        },
       };
 
-      console.log(`[FCM Server Helper] Dispatching FCM push to token suffix ${token.substring(token.length - 15)}...`);
+      const tokenSuffix =
+        deviceToken.length > 8 ? `***${deviceToken.slice(-6)}` : "***";
+      logger.info(`Dispatching FCM push to device token ${tokenSuffix}`, {
+        module: "background-notifications",
+        action: "fcm_send",
+      });
+
       await axios.post(
-        `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`,
+        `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/messages:send`,
         payload,
         {
           headers: {
-            'Authorization': `Bearer ${accessToken}`,
-            'Content-Type': 'application/json'
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            ...GcpAuthService.getQuotaProjectHeaders(),
           },
-          timeout: 10000
+          timeout: 10000,
         }
       );
-      console.log(`[FCM Server Helper] FCM push delivered successfully.`);
-    } catch (apiErr: any) {
-      console.warn(`[FCM Server Helper] Delivery failed for ${token.substring(0, 15)} (service account lacks FCM write permission):`, apiErr.response?.data || apiErr.message);
+
+      logger.info("FCM push delivered successfully", {
+        module: "background-notifications",
+        action: "fcm_send_success",
+      });
+    } catch (apiErr: unknown) {
+      const safeErr = GcpAuthService.sanitizeGcpHttpError(
+        apiErr,
+        "Firebase Cloud Messaging",
+        "messages:send"
+      );
+      logger.warn("FCM push delivery failed", {
+        module: "background-notifications",
+        action: "fcm_send_error",
+        statusCode: safeErr.statusCode,
+        reason: safeErr.message,
+      });
     }
   }
 }
 
 export function registerNotificationRoutes(app: Express) {
-  // Load persistent database file on boot
   loadPersistentCache();
 
-  // Route to synchronize user viewings directly from authenticated client session
-  app.post('/api/notifications/sync-viewings', (req, res) => {
+  app.post("/api/notifications/sync-viewings", ...requireTenantContext, (req, res) => {
     try {
+      const ctx = req.tenantContext!;
       const { userId, viewings } = req.body;
       if (!userId || !Array.isArray(viewings)) {
-        return res.status(400).json({ error: 'Missing userId or viewings array' });
+        return res.status(400).json({ error: "Missing userId or viewings array" });
+      }
+      if (req.authUser!.uid !== userId) {
+        return res.status(403).json({ error: "Forbidden: userId mismatch" });
       }
 
-      console.log(`[Notification Background] Synchronizing ${viewings.length} viewings for user: ${userId}`);
+      logger.info(
+        `Synchronizing ${viewings.length} viewings for user ${userId}`,
+        { module: "background-notifications", tenantId: ctx.tenantId, userId }
+      );
 
-      // 1. Remove previously cached viewings for this user to sync deletions/updates correctly
-      for (const viewingId of Object.keys(localCache.viewings)) {
-        const cached = localCache.viewings[viewingId];
-        if (cached.agentId === userId || cached.id === userId) {
-          delete localCache.viewings[viewingId];
+      for (const key of Object.keys(localCache.viewings)) {
+        const cached = localCache.viewings[key];
+        const cachedTenant = cached.tenantId || "ten_brokr_default";
+        if (cachedTenant === ctx.tenantId && (cached.agentId === userId || cached.id === userId)) {
+          delete localCache.viewings[key];
         }
       }
 
-      // 2. Add or update current viewings
       viewings.forEach((v: any) => {
         if (v.id && v.date && v.hour) {
-          localCache.viewings[v.id] = {
+          const partKey = `${ctx.tenantId}::${v.id}`;
+          localCache.viewings[partKey] = {
             id: v.id,
+            tenantId: ctx.tenantId,
             date: v.date,
             hour: v.hour,
-            agentId: v.agentId || userId,
-            contactName: v.contactName || 'clientul',
-            syncedAt: Date.now()
+            agentId: userId,
+            contactName: v.contactName || "clientul",
+            syncedAt: Date.now(),
           };
         }
       });
 
       savePersistentCache();
-      return res.json({ success: true, count: viewings.length });
+      return res.json({ success: true, count: viewings.length, tenantId: ctx.tenantId });
     } catch (err: any) {
-      console.error('[Notification Background] Failed syncing viewings route:', err.message);
-      return res.status(500).json({ error: err.message });
+      logger.error("Failed syncing viewings route", err, {
+        module: "background-notifications",
+      });
+      return res.status(500).json({ error: err?.message || "Eroare internă" });
     }
   });
 
-  // Route to register dynamic client FCM token with the background process mapping
-  app.post('/api/notifications/register-token', (req, res) => {
+  app.post("/api/notifications/register-token", ...requireTenantContext, (req, res) => {
     try {
+      const ctx = req.tenantContext!;
       const { token, userId, email } = req.body;
       if (!token || !userId) {
-        return res.status(400).json({ error: 'Missing token or userId' });
+        return res.status(400).json({ error: "Missing token or userId" });
+      }
+      if (req.authUser!.uid !== userId) {
+        return res.status(403).json({ error: "Forbidden: userId mismatch" });
       }
 
-      console.log(`[Notification Background] Mapping token suffix ${token.substring(token.length - 8)} to UID: ${userId}`);
-
-      localCache.tokens[token] = {
-        token,
+      const tokenSuffix = String(token).length > 6 ? `***${String(token).slice(-6)}` : "***";
+      logger.info(`Mapping FCM device ${tokenSuffix} for user ${userId}`, {
+        module: "background-notifications",
+        tenantId: ctx.tenantId,
         userId,
-        email,
-        updatedAt: Date.now()
+      });
+
+      const partKey = `${ctx.tenantId}::${token}`;
+      localCache.tokens[partKey] = {
+        token,
+        tenantId: ctx.tenantId,
+        userId,
+        email: req.authUser!.email || email,
+        updatedAt: Date.now(),
       };
 
       savePersistentCache();
-      return res.json({ success: true });
+      return res.json({ success: true, tenantId: ctx.tenantId });
     } catch (err: any) {
-      console.error('[Notification Background] Failed registering token route:', err.message);
-      return res.status(500).json({ error: err.message });
+      logger.error("Failed registering FCM token route", err, {
+        module: "background-notifications",
+      });
+      return res.status(500).json({ error: err?.message || "Eroare internă" });
     }
   });
+}
+
+export function getTenantPartitionedNotificationSnapshot(tenantId: string) {
+  const viewings = Object.values(localCache.viewings).filter((v) => v.tenantId === tenantId);
+  const tokens = Object.values(localCache.tokens).filter((t) => t.tenantId === tenantId);
+  return { viewings, tokens };
 }
 
 export function setupBackgroundNotifications() {
   const config = loadFirebaseConfig();
   if (!config) {
-    console.warn('[Notification Background] No Firebase configuration found. Background server notifications will not trigger.');
+    logger.warn("No Firebase configuration found. Background server notifications will not trigger.", {
+      module: "background-notifications",
+    });
     return;
   }
 
   const { projectId } = config;
+  logger.info(`Initializing tenant-partitioned background listener for Project: ${projectId}`, {
+    module: "background-notifications",
+  });
 
-  console.log(`[Notification Background] Initializing memory cache-based background listener for Project: ${projectId}`);
-
-  // Set of sent keys to prevent duplicate alerting at the same threshold
   const sentNotifications = new Set<string>();
 
   const runCheckTick = async () => {
@@ -242,87 +300,81 @@ export function setupBackgroundNotifications() {
         return;
       }
 
-      // Clear memory of historical sent keys once a day to keep memory footprints safe
       if (now.getHours() === 0 && now.getMinutes() === 0) {
         sentNotifications.clear();
       }
 
-      // Retrieve Cloud Run metadata account token if present (for FCM dispatch)
-      const fcmAccessToken = await getGCPServiceToken();
+      const fcmAccessToken = await getFcmServiceAccessToken();
 
-      allViewings.forEach(viewing => {
+      allViewings.forEach((viewing) => {
         const viewingId = viewing.id;
+        const viewingTenant = viewing.tenantId || "ten_brokr_default";
         if (!viewingId || !viewing.date || !viewing.hour) return;
 
-        // Parse date and hour like '2026-05-27' and '11:30' into absolute timestamp
         const viewingDateTime = new Date(`${viewing.date}T${viewing.hour}:00`);
         if (isNaN(viewingDateTime.getTime())) return;
 
-        // Compute relative offset distance in whole minutes
         const diffMs = viewingDateTime.getTime() - now.getTime();
         const diffMinutes = Math.round(diffMs / (60 * 1000));
 
-        // Support the following intervals/thresholds (3 hours, 2 ore, 1 oră)
+        const targetTokens = allTokens
+          .filter(
+            (t) =>
+              (t.tenantId || "ten_brokr_default") === viewingTenant &&
+              (!viewing.agentId || t.userId === viewing.agentId)
+          )
+          .map((t) => t.token);
+
+        if (targetTokens.length === 0) return;
+
         const thresholds = [
-          { minutes: 180, label: '3 ore' },
-          { minutes: 120, label: '2 ore' },
-          { minutes: 60, label: '1 oră' }
+          { minutes: 180, label: "3 ore" },
+          { minutes: 120, label: "2 ore" },
+          { minutes: 60, label: "1 oră" },
         ];
 
-        thresholds.forEach(threshold => {
-          const notificationKey = `${viewingId}-${threshold.minutes}`;
+        thresholds.forEach((threshold) => {
+          const notificationKey = `${viewingTenant}::${viewingId}-${threshold.minutes}`;
 
-          // If current clock is reaching this threshold slot (within 1-2 minutes window)
           if (diffMinutes <= threshold.minutes && diffMinutes > threshold.minutes - 2) {
             if (!sentNotifications.has(notificationKey)) {
-              // Extract tokens targeting the scheduled agent, or fallback to all tokens if agentId is missing
-              const targetTokens = allTokens
-                .filter(t => !viewing.agentId || t.userId === viewing.agentId)
-                .map(t => t.token);
-
-              if (targetTokens.length > 0) {
-                sendFCMPushNotification(
-                  projectId,
-                  fcmAccessToken,
-                  targetTokens,
-                  'Vizionare Programată (Brokr)',
-                  `Vizionarea cu ${viewing.contactName || 'clientul'} este peste ${threshold.label}.`,
-                  '/calendar'
-                );
-              }
+              void sendFCMPushNotification(
+                projectId,
+                fcmAccessToken,
+                targetTokens,
+                "Vizionare Programată (Brokr)",
+                `Vizionarea cu ${viewing.contactName || "clientul"} este peste ${threshold.label}.`,
+                "/calendar"
+              );
               sentNotifications.add(notificationKey);
             }
           }
         });
 
-        // Current start check (0 minutes)
-        const nowKey = `${viewingId}-now`;
+        const nowKey = `${viewingTenant}::${viewingId}-now`;
         if (diffMinutes <= 0 && diffMinutes > -5) {
           if (!sentNotifications.has(nowKey)) {
-            const targetTokens = allTokens
-              .filter(t => !viewing.agentId || t.userId === viewing.agentId)
-              .map(t => t.token);
-
-            if (targetTokens.length > 0) {
-              sendFCMPushNotification(
-                projectId,
-                fcmAccessToken,
-                targetTokens,
-                'Vizionare Programată (Brokr)',
-                `Vizionarea cu ${viewing.contactName || 'clientul'} începe ACUM!`,
-                '/calendar'
-              );
-            }
+            void sendFCMPushNotification(
+              projectId,
+              fcmAccessToken,
+              targetTokens,
+              "Vizionare Programată (Brokr)",
+              `Vizionarea cu ${viewing.contactName || "clientul"} începe ACUM!`,
+              "/calendar"
+            );
             sentNotifications.add(nowKey);
           }
         }
       });
     } catch (err: any) {
-      console.error('[Notification Background] Error in background cache check tick loop:', err.message);
+      logger.error("Error in background notification tick loop", err, {
+        module: "background-notifications",
+      });
     }
   };
 
-  // Run check tick immediately and schedule recurrence cycle
-  runCheckTick();
-  setInterval(runCheckTick, 45000); // Polling interval
+  void runCheckTick();
+  setInterval(() => {
+    void runCheckTick();
+  }, 45000);
 }

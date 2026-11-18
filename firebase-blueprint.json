@@ -54,9 +54,29 @@
       },
       "required": ["propertyId", "contactId", "contactName", "date", "hour", "createdAt", "updatedAt"]
     },
-    "Personal": {
+    "Staff": {
       "title": "Agency Staff Member",
       "description": "An agent, broker, manager, or staff member in the agency",
+      "type": "object",
+      "properties": {
+        "staffId": { "type": "string", "description": "Sequential ID formatted as S1, S2, S1026" },
+        "personalId": { "type": "string", "description": "Legacy alias for staffId" },
+        "tenantId": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string" },
+        "phone": { "type": "string" },
+        "email": { "type": "string" },
+        "status": { "type": "string", "enum": ["Activ", "Inactiv", "active", "inactive"] },
+        "zone": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "role", "phone", "status", "createdAt", "updatedAt"]
+    },
+    "Personal": {
+      "title": "Legacy Agency Staff Member",
+      "description": "Legacy staff member record (migrated to Staff)",
       "type": "object",
       "properties": {
         "personalId": { "type": "string", "description": "Sequential ID formatted as S1, S2, S1026" },
@@ -132,36 +152,118 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["clientName", "date", "hour", "createdAt", "updatedAt"]
+    },
+    "Tenant": {
+      "title": "Agency Tenant",
+      "description": "Independent real-estate agency tenant with custom branding, quotas and configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "subdomain": { "type": "string" },
+        "customDomain": { "type": "string" },
+        "name": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "trial", "active", "suspended", "cancelled"] },
+        "planId": { "type": "string" },
+        "branding": { "type": "object" },
+        "enabledModules": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "subdomain", "name", "status", "createdAt", "updatedAt"]
+    },
+    "TenantUser": {
+      "title": "Agency Tenant Member",
+      "description": "User membership record linking a user identity to an agency tenant with an RBAC role",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "userId": { "type": "string" },
+        "email": { "type": "string" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["agency_owner", "agency_admin", "manager", "agent", "assistant"] },
+        "status": { "type": "string", "enum": ["invited", "active", "suspended", "revoked"] },
+        "permissions": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "userId", "email", "role", "status", "createdAt", "updatedAt"]
+    },
+    "AutomationConfig": {
+      "title": "Agency Automation Rule Config",
+      "description": "Agency-scoped configuration for external ad title formatting rules, category priorities, and character bounds",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "titleRule": { "type": "object" },
+        "version": { "type": "number" },
+        "updatedBy": { "type": "string" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "titleRule", "updatedAt"]
     }
   },
   "firestore": {
+    "tenants/{tenantId}": {
+      "schema": { "$ref": "Tenant" },
+      "description": "Root agency tenant document"
+    },
+    "tenants/{tenantId}/users/{userId}": {
+      "schema": { "$ref": "TenantUser" },
+      "description": "Tenant membership records defining roles and permissions"
+    },
+    "tenants/{tenantId}/automation/{ruleId}": {
+      "schema": { "$ref": "AutomationConfig" },
+      "description": "Agency-isolated automation rules for external ad extraction"
+    },
+    "tenants/{tenantId}/staff/{staffId}": {
+      "schema": { "$ref": "Staff" },
+      "description": "Agency-isolated staff members"
+    },
+    "tenants/{tenantId}/leads/{leadId}": {
+      "schema": { "$ref": "Lead" },
+      "description": "Agency-isolated real estate leads"
+    },
+    "tenants/{tenantId}/contacts/{contactId}": {
+      "schema": { "$ref": "Contact" },
+      "description": "Agency-isolated contacts"
+    },
+    "tenants/{tenantId}/documents/{documentId}": {
+      "schema": { "$ref": "Document" },
+      "description": "Agency-isolated documents"
+    },
+    "tenants/{tenantId}/activities/{activityId}": {
+      "schema": { "$ref": "Activity" },
+      "description": "Agency-isolated scheduled activities and viewings"
+    },
     "leads": {
       "schema": { "$ref": "Lead" },
-      "description": "Collection of real estate leads at various stages"
+      "description": "Legacy collection of real estate leads (preserved for backward compatibility)"
     },
     "contacts": {
       "schema": { "$ref": "Contact" },
-      "description": "Collection of property contacts / clients (Owners, Renters, Buyers)"
+      "description": "Legacy collection of property contacts (preserved for backward compatibility)"
     },
     "personal": {
       "schema": { "$ref": "Personal" },
-      "description": "Collection of agency staff and team members"
+      "description": "Legacy collection of agency staff (preserved for backward compatibility)"
     },
     "documents": {
       "schema": { "$ref": "Document" },
-      "description": "Collection of agency and property documents"
+      "description": "Legacy collection of agency and property documents"
     },
     "activities": {
       "schema": { "$ref": "Activity" },
-      "description": "Collection of agency activities (viewings, meetings, tasks)"
+      "description": "Legacy collection of agency activities"
     },
     "tours": {
       "schema": { "$ref": "Tour" },
-      "description": "Collection of scheduled tours / viewings"
+      "description": "Legacy collection of scheduled tours"
     },
     "viewings": {
       "schema": { "$ref": "Viewing" },
-      "description": "Collection of scheduled property viewings"
+      "description": "Legacy collection of scheduled property viewings"
     }
   }
 }

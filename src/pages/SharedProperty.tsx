@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
-import { leadsService, Lead } from "../services/leadsService";
+import { Lead } from "../services/leadsService";
 import { PropertyDetailView } from "../components/PropertyDetailView";
 import { Loader2, AlertCircle } from "lucide-react";
 
@@ -24,26 +24,19 @@ export const SharedProperty: React.FC = () => {
       setError(null);
 
       try {
-        const docLead = await leadsService.getLead(id);
-        if (docLead && isMounted) {
-          const sanitizedLead: Lead = {
-            ...docLead,
-            ownerName: "",
-            ownerPhone: ""
-          };
-          setLead(sanitizedLead);
-          setLoading(false);
-          return;
-        }
-
-        const res = await fetch(`/api/public-property/${encodeURIComponent(id)}`);
+        // Always load exclusively from the hardened, tokenized public endpoint
+        // so private source URLs, exact addresses, owner PII, and raw image URLs never enter the browser.
+        const res = await fetch(`/api/public-property/${encodeURIComponent(id)}`, {
+          cache: "no-store",
+        });
         if (res.ok) {
           const serverLead = await res.json();
           if (isMounted) {
             const sanitizedLead: Lead = {
               ...serverLead,
               ownerName: "",
-              ownerPhone: ""
+              ownerPhone: "",
+              url: "",
             };
             setLead(sanitizedLead);
             setLoading(false);
@@ -56,26 +49,7 @@ export const SharedProperty: React.FC = () => {
           setLoading(false);
         }
       } catch (err: any) {
-        console.warn("[SharedProperty] Client fetch error, trying server fallback:", err);
-        try {
-          const res = await fetch(`/api/public-property/${encodeURIComponent(id)}`);
-          if (res.ok) {
-            const serverLead = await res.json();
-            if (isMounted) {
-              const sanitizedLead: Lead = {
-                ...serverLead,
-                ownerName: "",
-                ownerPhone: ""
-              };
-              setLead(sanitizedLead);
-              setLoading(false);
-              return;
-            }
-          }
-        } catch (serverErr) {
-          console.error("[SharedProperty] Server fallback also failed:", serverErr);
-        }
-
+        console.error("[SharedProperty] Failed to load public property:", err);
         if (isMounted) {
           setError("Nu s-au putut încărca datele proprietății.");
           setLoading(false);
@@ -91,9 +65,14 @@ export const SharedProperty: React.FC = () => {
   }, [id]);
 
   useEffect(() => {
-    // Enable full document and root scrolling on the public share page
+    // Enable full document and root scrolling + anti-indexing on the public share page
     document.documentElement.classList.add("public-share-active");
     document.body.classList.add("public-share-active");
+
+    const robotsMeta = document.createElement("meta");
+    robotsMeta.name = "robots";
+    robotsMeta.content = "noindex, noarchive, noimageindex, nosnippet";
+    document.head.appendChild(robotsMeta);
 
     const rootEl = document.getElementById("root");
     if (rootEl) {
@@ -105,6 +84,9 @@ export const SharedProperty: React.FC = () => {
     return () => {
       document.documentElement.classList.remove("public-share-active");
       document.body.classList.remove("public-share-active");
+      if (robotsMeta.parentNode) {
+        robotsMeta.parentNode.removeChild(robotsMeta);
+      }
       if (rootEl) {
         rootEl.style.overflow = "";
         rootEl.style.height = "";
@@ -126,8 +108,8 @@ export const SharedProperty: React.FC = () => {
     return (
       <div className="fixed inset-0 overflow-y-auto bg-gray-50 flex flex-col items-center justify-center p-6 text-center">
         <Loader2 className="w-9 h-9 text-[#BE9662] animate-spin mb-3" />
-        <h2 className="text-sm font-semibold text-gray-800">Se încarcă proprietatea...</h2>
-        <p className="text-[11px] text-gray-400 mt-1 uppercase tracking-wider font-mono">brokr. crm</p>
+        <h2 className="font-title text-sm font-semibold text-gray-800">Se încarcă proprietatea...</h2>
+        <p className="text-[11px] text-gray-400 mt-1 uppercase tracking-wider">brokr. crm</p>
       </div>
     );
   }
@@ -138,7 +120,7 @@ export const SharedProperty: React.FC = () => {
         <div className="w-14 h-14 rounded-2xl bg-red-50 text-red-500 flex items-center justify-center mb-3 border border-red-100">
           <AlertCircle size={28} />
         </div>
-        <h2 className="text-base font-bold text-gray-900 mb-1">Proprietatea nu este disponibilă</h2>
+        <h2 className="font-title text-base font-semibold text-gray-900 mb-1">Proprietatea nu este disponibilă</h2>
         <p className="text-xs text-gray-500 max-w-md mb-5 leading-relaxed">
           {error || "Proprietatea căutată nu a fost găsită sau linkul a expirat."}
         </p>

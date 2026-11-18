@@ -2,7 +2,6 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import { 
   Plus, 
   Bell, 
-  Calendar, 
   ChevronDown, 
   Building2, 
   ClipboardList, 
@@ -40,7 +39,6 @@ interface HeaderProps {
   onAddDocumentClick?: () => void;
   onAddTourClick?: () => void;
   onAddActivityClick?: () => void;
-  onCalendarClick?: () => void;
   onNotificationsClick: () => void;
   onExtractionRulesClick?: () => void;
   onSelectLead?: (lead: Lead) => void;
@@ -64,7 +62,6 @@ export const Header: React.FC<HeaderProps> = ({
   onAddDocumentClick,
   onAddTourClick,
   onAddActivityClick,
-  onCalendarClick,
   onNotificationsClick,
   onSelectLead,
   onSelectContact,
@@ -77,7 +74,6 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const isCalendar = location.pathname === '/calendar';
 
   // User Profile state
   const [currentUser, setCurrentUser] = useState<any>(auth.currentUser);
@@ -332,11 +328,13 @@ export const Header: React.FC<HeaderProps> = ({
 
   const handleSelectActivity = (activity: Activity) => {
     setIsSearchOpen(false);
-    navigate('/calendar');
+    if (location.pathname !== '/') navigate('/');
     if (onSelectActivity) {
       onSelectActivity(activity);
     } else if (onSelectTour) {
       onSelectTour(activity as any);
+    } else {
+      navigate('/?calendar=true');
     }
   };
 
@@ -345,7 +343,7 @@ export const Header: React.FC<HeaderProps> = ({
   const handleAddActivityAction = onAddActivityClick || onAddTourClick;
 
   return (
-    <header className="shrink-0 bg-white border-b border-gray-200 shadow-none relative z-[100] h-[50px]">
+    <header className="shrink-0 bg-white border-b border-gray-200 shadow-none relative z-[100] h-12">
       <div className="h-full flex justify-between items-stretch">
         {/* Center section: Global Search Bar */}
         <div className="group flex-1 h-full min-w-0 relative flex items-center bg-white hover:bg-gray-50/60 focus-within:bg-gray-50 transition-colors" ref={searchContainerRef}>
@@ -362,10 +360,10 @@ export const Header: React.FC<HeaderProps> = ({
               }
             }}
             placeholder="Caută proprietati, cereri, contacte, personal, documente sau vizionări..."
-            className="w-full h-full pl-11 pr-10 text-xs leading-[50px] text-gray-900 placeholder:text-gray-400 bg-transparent border-0 focus:outline-none focus:ring-0 font-sans cursor-text"
+            className="w-full h-full pl-11 pr-10 text-xs leading-[48px] text-gray-900 placeholder:text-gray-400 bg-transparent border-0 focus:outline-none focus:ring-0 font-sans cursor-text"
           />
           {localQuery && (
-            <div className="absolute inset-y-0 right-3.5 flex items-center">
+            <div className="absolute inset-y-0 right-3 flex items-center">
               <button
                 type="button"
                 onClick={() => handleQueryChange("")}
@@ -389,8 +387,8 @@ export const Header: React.FC<HeaderProps> = ({
                   {/* 1. Proprietati (#P... / #L...) */}
                   {matchedProperties.length > 0 && (
                     <div>
-                      <div className="px-4 py-1.5 bg-gray-50/90 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-b border-gray-100 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
+                      <div className="px-4 py-2 bg-gray-50/90 text-[10px] font-semibold uppercase tracking-wider text-gray-500 border-b border-gray-100 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
                           <Building2 size={12} className="text-gray-400" />
                           Proprietati ({matchedProperties.length})
                         </span>
@@ -400,29 +398,29 @@ export const Header: React.FC<HeaderProps> = ({
                           <div
                             key={lead.id}
                             onClick={() => handleSelectProperty(lead)}
-                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-gray-50/80 transition-colors cursor-pointer text-left select-none"
+                            className="w-full px-4 py-2 flex items-center justify-between hover:bg-gray-50/80 transition-colors cursor-pointer text-left select-none"
                           >
-                            <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                            <div className="flex items-center gap-3 min-w-0 pr-3">
                               <div className="w-7 h-7 rounded-md bg-[#BE9662]/10 border border-[#BE9662]/20 text-[#BE9662] flex items-center justify-center shrink-0">
                                 <Building2 size={14} />
                               </div>
                               <div className="min-w-0">
-                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
                                   <span className="truncate">{lead.title || "Proprietate fără titlu"}</span>
                                   {lead.propertyId && (
-                                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0">
+                                    <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0">
                                       #{lead.propertyId}
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
+                                <div className="text-[11px] text-gray-500 font-normal truncate flex items-center gap-2 mt-1">
                                   <span>{lead.zone || "Zonă nespecificată"}</span>
                                   <span>•</span>
-                                  <span className="font-mono font-medium text-gray-700">{lead.price}</span>
+                                  <span className="font-sans tabular-nums font-normal text-gray-700">{lead.price}</span>
                                 </div>
                               </div>
                             </div>
-                            <span className="text-[10px] font-medium px-2 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-600 shrink-0">
+                            <span className="text-[10px] font-normal px-2 py-1 rounded border border-gray-200 bg-gray-50 text-gray-600 shrink-0">
                               {lead.status}
                             </span>
                           </div>
@@ -434,8 +432,8 @@ export const Header: React.FC<HeaderProps> = ({
                   {/* 2. Cereri (#R...) */}
                   {matchedCereri.length > 0 && (
                     <div>
-                      <div className="px-4 py-1.5 bg-amber-50/50 text-[10px] font-bold uppercase tracking-wider text-amber-800 border-b border-amber-100/60 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
+                      <div className="px-4 py-2 bg-amber-50/50 text-[10px] font-semibold uppercase tracking-wider text-amber-800 border-b border-amber-100/60 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
                           <ClipboardList size={12} className="text-amber-600" />
                           Cereri ({matchedCereri.length})
                         </span>
@@ -445,29 +443,29 @@ export const Header: React.FC<HeaderProps> = ({
                           <div
                             key={cerere.id}
                             onClick={() => handleSelectProperty(cerere)}
-                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-amber-50/30 transition-colors cursor-pointer text-left select-none"
+                            className="w-full px-4 py-2 flex items-center justify-between hover:bg-amber-50/30 transition-colors cursor-pointer text-left select-none"
                           >
-                            <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                            <div className="flex items-center gap-3 min-w-0 pr-3">
                               <div className="w-7 h-7 rounded-md bg-amber-100/60 border border-amber-200 text-amber-700 flex items-center justify-center shrink-0">
                                 <ClipboardList size={14} />
                               </div>
                               <div className="min-w-0">
-                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
                                   <span className="truncate">{cerere.title || "Cerere fără titlu"}</span>
                                   {cerere.propertyId && (
-                                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-amber-100 text-amber-800 border border-amber-200 shrink-0">
+                                    <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-amber-100 text-amber-800 border border-amber-200 shrink-0">
                                       #{cerere.propertyId}
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
+                                <div className="text-[11px] text-gray-500 font-normal truncate flex items-center gap-2 mt-1">
                                   <span>Client: {cerere.ownerName || "Nespecificat"}</span>
                                   <span>•</span>
                                   <span>Buget: {cerere.price}</span>
                                 </div>
                               </div>
                             </div>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700 shrink-0">
+                            <span className="text-[10px] font-normal px-2 py-1 rounded border border-amber-200 bg-amber-50 text-amber-700 shrink-0">
                               {cerere.status}
                             </span>
                           </div>
@@ -479,8 +477,8 @@ export const Header: React.FC<HeaderProps> = ({
                   {/* 3. Lead-uri (#L...) */}
                   {matchedLeads.length > 0 && (
                     <div>
-                      <div className="px-4 py-1.5 bg-emerald-50/50 text-[10px] font-bold uppercase tracking-wider text-emerald-800 border-b border-emerald-100/60 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
+                      <div className="px-4 py-2 bg-emerald-50/50 text-[10px] font-semibold uppercase tracking-wider text-emerald-800 border-b border-emerald-100/60 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
                           <Inbox size={12} className="text-emerald-600" />
                           Lead-uri ({matchedLeads.length})
                         </span>
@@ -490,29 +488,29 @@ export const Header: React.FC<HeaderProps> = ({
                           <div
                             key={lead.id}
                             onClick={() => handleSelectProperty(lead)}
-                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-emerald-50/30 transition-colors cursor-pointer text-left select-none"
+                            className="w-full px-4 py-2 flex items-center justify-between hover:bg-emerald-50/30 transition-colors cursor-pointer text-left select-none"
                           >
-                            <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                            <div className="flex items-center gap-3 min-w-0 pr-3">
                               <div className="w-7 h-7 rounded-md bg-emerald-100/60 border border-emerald-200 text-emerald-700 flex items-center justify-center shrink-0">
                                 <Inbox size={14} />
                               </div>
                               <div className="min-w-0">
-                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
                                   <span className="truncate">{lead.title || "Lead fără titlu"}</span>
                                   {lead.propertyId && (
-                                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0">
+                                    <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0">
                                       #{lead.propertyId}
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
+                                <div className="text-[11px] text-gray-500 font-normal truncate flex items-center gap-2 mt-1">
                                   <span>{lead.zone || "Zonă nespecificată"}</span>
                                   <span>•</span>
                                   <span>{lead.price}</span>
                                 </div>
                               </div>
                             </div>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
+                            <span className="text-[10px] font-normal px-2 py-1 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
                               {lead.status}
                             </span>
                           </div>
@@ -524,8 +522,8 @@ export const Header: React.FC<HeaderProps> = ({
                   {/* 3. Contacte (#C...) */}
                   {matchedContacts.length > 0 && (
                     <div>
-                      <div className="px-4 py-1.5 bg-emerald-50/40 text-[10px] font-bold uppercase tracking-wider text-emerald-800 border-b border-emerald-100/60 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
+                      <div className="px-4 py-2 bg-emerald-50/40 text-[10px] font-semibold uppercase tracking-wider text-emerald-800 border-b border-emerald-100/60 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
                           <Users size={12} className="text-emerald-600" />
                           Contacte ({matchedContacts.length})
                         </span>
@@ -535,27 +533,27 @@ export const Header: React.FC<HeaderProps> = ({
                           <div
                             key={contact.id || idx}
                             onClick={() => handleSelectContact(contact)}
-                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-emerald-50/30 transition-colors cursor-pointer text-left select-none"
+                            className="w-full px-4 py-2 flex items-center justify-between hover:bg-emerald-50/30 transition-colors cursor-pointer text-left select-none"
                           >
-                            <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                            <div className="flex items-center gap-3 min-w-0 pr-3">
                               <div className="w-7 h-7 rounded-md bg-emerald-50 border border-emerald-100 text-emerald-600 flex items-center justify-center shrink-0">
                                 <Users size={14} />
                               </div>
                               <div className="min-w-0">
-                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
                                   <span className="truncate">{contact.firstName} {contact.lastName}</span>
                                   {contact.contactId && (
-                                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0">
+                                    <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-emerald-100 text-emerald-800 border border-emerald-200 shrink-0">
                                       #{contact.contactId}
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
-                                  <span className="font-mono">{contact.phone}</span>
+                                <div className="text-[11px] text-gray-500 font-normal truncate flex items-center gap-2 mt-1">
+                                  <span className="font-sans tabular-nums">{contact.phone}</span>
                                 </div>
                               </div>
                             </div>
-                            <span className="text-[10px] font-medium px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
+                            <span className="text-[10px] font-normal px-2 py-1 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
                               {contact.type}
                             </span>
                           </div>
@@ -567,8 +565,8 @@ export const Header: React.FC<HeaderProps> = ({
                   {/* 4. Personal (#S...) */}
                   {matchedPersonal.length > 0 && (
                     <div>
-                      <div className="px-4 py-1.5 bg-[#BE9662]/10 text-[10px] font-bold uppercase tracking-wider text-[#051D35] border-b border-[#BE9662]/20 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
+                      <div className="px-4 py-2 bg-[#BE9662]/10 text-[10px] font-semibold uppercase tracking-wider text-[#051D35] border-b border-[#BE9662]/20 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
                           <UserCheck size={12} className="text-[#BE9662]" />
                           Personal & Echipă ({matchedPersonal.length})
                         </span>
@@ -578,29 +576,29 @@ export const Header: React.FC<HeaderProps> = ({
                           <div
                             key={member.id || idx}
                             onClick={() => handleSelectPersonal(member)}
-                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-[#BE9662]/5 transition-colors cursor-pointer text-left select-none"
+                            className="w-full px-4 py-2 flex items-center justify-between hover:bg-[#BE9662]/5 transition-colors cursor-pointer text-left select-none"
                           >
-                            <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                            <div className="flex items-center gap-3 min-w-0 pr-3">
                               <div className="w-7 h-7 rounded-md bg-[#BE9662]/15 border border-[#BE9662]/30 text-[#BE9662] flex items-center justify-center shrink-0">
                                 <UserCheck size={14} />
                               </div>
                               <div className="min-w-0">
-                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
                                   <span className="truncate">{member.name}</span>
                                   {member.personalId && (
-                                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#BE9662]/15 text-[#051D35] border border-[#BE9662]/30 shrink-0">
+                                    <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-[#BE9662]/15 text-[#051D35] border border-[#BE9662]/30 shrink-0">
                                       #{member.personalId}
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
-                                  <span className="font-medium text-gray-700">{member.role}</span>
+                                <div className="text-[11px] text-gray-500 font-normal truncate flex items-center gap-2 mt-1">
+                                  <span className="font-normal text-gray-700">{member.role}</span>
                                   <span>•</span>
-                                  <span className="font-mono">{member.phone}</span>
+                                  <span className="font-sans tabular-nums">{member.phone}</span>
                                 </div>
                               </div>
                             </div>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
+                            <span className="text-[10px] font-normal px-2 py-1 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
                               {member.status}
                             </span>
                           </div>
@@ -612,8 +610,8 @@ export const Header: React.FC<HeaderProps> = ({
                   {/* 5. Documente (#D...) */}
                   {matchedDocuments.length > 0 && (
                     <div>
-                      <div className="px-4 py-1.5 bg-blue-50/50 text-[10px] font-bold uppercase tracking-wider text-blue-800 border-b border-blue-100/60 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
+                      <div className="px-4 py-2 bg-blue-50/50 text-[10px] font-semibold uppercase tracking-wider text-blue-800 border-b border-blue-100/60 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
                           <FileText size={12} className="text-blue-600" />
                           Documente ({matchedDocuments.length})
                         </span>
@@ -623,23 +621,23 @@ export const Header: React.FC<HeaderProps> = ({
                           <div
                             key={doc.id || idx}
                             onClick={() => handleSelectDocument(doc)}
-                            className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-blue-50/30 transition-colors cursor-pointer text-left select-none"
+                            className="w-full px-4 py-2 flex items-center justify-between hover:bg-blue-50/30 transition-colors cursor-pointer text-left select-none"
                           >
-                            <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                            <div className="flex items-center gap-3 min-w-0 pr-3">
                               <div className="w-7 h-7 rounded-md bg-blue-100/60 border border-blue-200 text-blue-700 flex items-center justify-center shrink-0">
                                 <FileText size={14} />
                               </div>
                               <div className="min-w-0">
-                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
                                   <span className="truncate">{doc.title}</span>
                                   {doc.documentId && (
-                                    <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-blue-100 text-blue-800 border border-blue-200 shrink-0">
+                                    <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-blue-100 text-blue-800 border border-blue-200 shrink-0">
                                       #{doc.documentId}
                                     </span>
                                   )}
                                 </div>
-                                <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
-                                  <span className="font-medium text-gray-700">{doc.type}</span>
+                                <div className="text-[11px] text-gray-500 font-normal truncate flex items-center gap-2 mt-1">
+                                  <span className="font-normal text-gray-700">{doc.type}</span>
                                   {doc.propertyId && (
                                     <>
                                       <span>•</span>
@@ -649,7 +647,7 @@ export const Header: React.FC<HeaderProps> = ({
                                 </div>
                               </div>
                             </div>
-                            <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 shrink-0">
+                            <span className="text-[10px] font-normal px-2 py-1 rounded border border-blue-200 bg-blue-50 text-blue-700 shrink-0">
                               Document
                             </span>
                           </div>
@@ -661,8 +659,8 @@ export const Header: React.FC<HeaderProps> = ({
                   {/* 6. Activități (#A...) */}
                   {matchedActivities.length > 0 && (
                     <div>
-                      <div className="px-4 py-1.5 bg-[#051D35]/5 text-[10px] font-bold uppercase tracking-wider text-[#051D35] border-b border-gray-100 flex items-center justify-between">
-                        <span className="flex items-center gap-1.5">
+                      <div className="px-4 py-2 bg-[#051D35]/5 text-[10px] font-semibold uppercase tracking-wider text-[#051D35] border-b border-gray-100 flex items-center justify-between">
+                        <span className="flex items-center gap-2">
                           <Compass size={12} className="text-[#BE9662]" />
                           Activități ({matchedActivities.length})
                         </span>
@@ -674,22 +672,22 @@ export const Header: React.FC<HeaderProps> = ({
                             <div
                               key={act.id || idx}
                               onClick={() => handleSelectActivity(act)}
-                              className="w-full px-4 py-2.5 flex items-center justify-between hover:bg-[#051D35]/5 transition-colors cursor-pointer text-left select-none"
+                              className="w-full px-4 py-2 flex items-center justify-between hover:bg-[#051D35]/5 transition-colors cursor-pointer text-left select-none"
                             >
-                              <div className="flex items-center gap-2.5 min-w-0 pr-3">
+                              <div className="flex items-center gap-3 min-w-0 pr-3">
                                 <div className="w-7 h-7 rounded-md bg-[#BE9662]/15 border border-[#BE9662]/30 text-[#BE9662] flex items-center justify-center shrink-0">
                                   <Compass size={14} />
                                 </div>
                                 <div className="min-w-0">
-                                  <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                  <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
                                     <span className="truncate">{act.clientName}</span>
                                     {displayId && (
-                                      <span className="text-[10px] font-mono px-1 py-0.2 rounded bg-[#BE9662]/15 text-[#051D35] border border-[#BE9662]/30 shrink-0">
+                                      <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-[#BE9662]/15 text-[#051D35] border border-[#BE9662]/30 shrink-0">
                                         #{displayId}
                                       </span>
                                     )}
                                   </div>
-                                  <div className="text-[11px] text-gray-500 truncate flex items-center gap-2 mt-0.5">
+                                  <div className="text-[11px] text-gray-500 font-normal truncate flex items-center gap-2 mt-1">
                                     <span>{act.date} {act.hour}</span>
                                     {act.propertyId && (
                                       <>
@@ -700,7 +698,7 @@ export const Header: React.FC<HeaderProps> = ({
                                   </div>
                                 </div>
                               </div>
-                              <span className="text-[10px] font-semibold px-2 py-0.5 rounded border border-[#BE9662]/30 bg-[#BE9662]/10 text-[#051D35] shrink-0">
+                              <span className="text-[10px] font-normal px-2 py-1 rounded border border-[#BE9662]/30 bg-[#BE9662]/10 text-[#051D35] shrink-0">
                                 {act.type || "Activitate"}
                               </span>
                             </div>
@@ -717,28 +715,14 @@ export const Header: React.FC<HeaderProps> = ({
    
         {/* Right actions */}
         <div className="flex items-stretch h-full shrink-0">
-          {/* Calendar */}
-          <button 
-            type="button"
-            onClick={onCalendarClick || (() => navigate('/calendar'))}
-            className={`h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 transition-colors cursor-pointer select-none focus:outline-none shrink-0 ${
-              isCalendar 
-                ? 'bg-gray-100 text-gray-900 font-semibold' 
-                : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900'
-            }`}
-            title="Calendar Activități"
-          >
-            <Calendar size={16} className="shrink-0 block" />
-          </button>
-
           {/* Alerte */}
           <button 
             type="button"
             onClick={onNotificationsClick}
-            className="h-full w-[50px] aspect-square flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 text-gray-600 hover:text-[#051D35] transition-colors relative cursor-pointer select-none shrink-0 focus:outline-none"
+            className="h-full w-12 aspect-square flex items-center justify-center border-l border-gray-200 hover:bg-gray-50 text-gray-600 hover:text-[#051D35] transition-colors relative cursor-pointer select-none shrink-0 focus:outline-none"
             title="Alerte și Notificări"
           >
-            <div className="w-2 h-2 bg-[#BE9662] rounded-full absolute top-[13px] right-[13px] border border-white" />
+            <div className="w-2 h-2 bg-[#BE9662] rounded-full absolute top-3 right-3 border border-white" />
             <Bell size={16} className="shrink-0 block" />
           </button>
   
@@ -748,7 +732,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={() => setIsProfileModalOpen(true)}
-              className="h-full px-3.5 flex items-center gap-2.5 hover:bg-gray-50 transition-colors text-left focus:outline-none cursor-pointer group"
+              className="h-full px-4 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left focus:outline-none cursor-pointer group"
               title="Deschide Profilul Meu"
             >
               {/* Profile Picture */}
@@ -760,7 +744,7 @@ export const Header: React.FC<HeaderProps> = ({
                     className="w-full h-full object-cover" 
                   />
                 ) : (
-                  <span className="text-xs font-bold text-[#051D35]">
+                  <span className="text-xs font-semibold text-[#051D35]">
                     {userName.charAt(0).toUpperCase()}
                   </span>
                 )}
@@ -771,7 +755,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="text-[13px] font-semibold tracking-tight text-gray-900 group-hover:text-[#051D35] leading-tight truncate max-w-[130px]">
                   {userName}
                 </span>
-                <span className="text-[10px] text-gray-500 font-medium leading-tight truncate mt-0.5">
+                <span className="text-[10px] text-gray-500 font-normal leading-tight truncate mt-1">
                   {userRole}
                 </span>
               </div>
@@ -784,7 +768,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={() => setIsProfileDrawerOpen(true)}
-              className="h-full px-2.5 flex items-center justify-center hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors focus:outline-none cursor-pointer"
+              className="h-full px-3 flex items-center justify-center hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors focus:outline-none cursor-pointer"
               title="Meniu profil & statistici"
             >
               <ChevronDown size={14} className="shrink-0 transition-transform duration-200" />

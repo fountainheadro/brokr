@@ -1,17 +1,4 @@
-import { 
-  collection, 
-  addDoc, 
-  updateDoc, 
-  doc, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  serverTimestamp, 
-  getDoc,
-  deleteDoc,
-  where
-} from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { crmApiClient } from '../core/crm/svc_crm-client';
 
 export interface Viewing {
   id?: string;
@@ -40,59 +27,19 @@ const cleanUndefined = (obj: any): any => {
 
 export const viewingsService = {
   addViewing: async (viewingData: Omit<Viewing, 'id' | 'createdAt' | 'updatedAt'>) => {
-    try {
-      const now = serverTimestamp();
-      const sanitized = cleanUndefined(viewingData);
-      return await addDoc(collection(db, VIEWINGS_COLLECTION), {
-        ...sanitized,
-        createdAt: now,
-        updatedAt: now
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, VIEWINGS_COLLECTION);
-    }
+    const sanitized = cleanUndefined(viewingData);
+    return crmApiClient.create<Viewing>(VIEWINGS_COLLECTION, sanitized);
   },
 
   subscribeToPropertyViewings: (propertyId: string, callback: (viewings: Viewing[]) => void) => {
-    const q = query(
-      collection(db, VIEWINGS_COLLECTION), 
-      where('propertyId', '==', propertyId),
-      orderBy('date', 'asc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const viewings = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Viewing[];
-      callback(viewings);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, VIEWINGS_COLLECTION);
-    });
+    return crmApiClient.subscribe<Viewing>(VIEWINGS_COLLECTION, callback, { propertyId });
   },
 
   subscribeToAllViewings: (callback: (viewings: Viewing[]) => void) => {
-    const q = query(
-      collection(db, VIEWINGS_COLLECTION), 
-      orderBy('date', 'asc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const viewings = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data()
-      })) as Viewing[];
-      callback(viewings);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, VIEWINGS_COLLECTION);
-    });
+    return crmApiClient.subscribe<Viewing>(VIEWINGS_COLLECTION, callback);
   },
 
   deleteViewing: async (viewingId: string) => {
-    const path = `${VIEWINGS_COLLECTION}/${viewingId}`;
-    try {
-      const viewingRef = doc(db, VIEWINGS_COLLECTION, viewingId);
-      return await deleteDoc(viewingRef);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-    }
-  }
+    await crmApiClient.remove(VIEWINGS_COLLECTION, viewingId);
+  },
 };

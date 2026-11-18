@@ -82,10 +82,10 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
             transition={{ type: "spring", damping: 25, stiffness: 200 }}
             className="fixed bottom-0 left-0 right-0 max-w-xl mx-auto bg-white rounded-t-[16px] z-[301] border-x border-t border-gray-100 shadow-2xl overflow-hidden max-h-[95vh] flex flex-col"
           >
-            <div className="w-12 h-1.5 bg-gray-100 rounded-full mx-auto my-3 shrink-0" />
+            <div className="w-12 h-1 bg-gray-100 rounded-full mx-auto my-3 shrink-0" />
             
             <div className="p-5 flex items-center justify-between bg-white border-b border-gray-100 shrink-0">
-              <h2 className="text-[16px] font-bold text-gray-900 tracking-tight">Programare Vizionare</h2>
+              <h2 className="font-title text-[16px] font-semibold text-gray-900 tracking-tight">Programare Vizionare</h2>
               <button 
                 onClick={onClose}
                 className="w-10 h-10 flex items-center justify-center bg-white rounded-full text-gray-400 hover:text-gray-900 transition-colors border border-gray-100 shadow-sm"
@@ -97,17 +97,17 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
             <div className="p-8 pb-12 overflow-y-auto">
               {error && (
                 <div className="bg-red-50 border border-red-100 rounded-[16px] p-4 mb-6 flex items-start gap-3">
-                  <AlertCircle size={18} className="text-red-500 shrink-0 mt-0.5" />
-                  <p className="text-[13px] text-red-600 font-bold">{error}</p>
+                  <AlertCircle size={18} className="text-red-500 shrink-0 mt-1" />
+                  <p className="text-[13px] text-red-600 font-normal">{error}</p>
                 </div>
               )}
 
               <form onSubmit={handleSubmit} className="space-y-8">
                 <div>
-                  <label className="block text-[12px] font-bold text-gray-400 uppercase tracking-widest mb-4 ml-1">
+                  <label className="block text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-4 ml-1">
                     Selectează Clientul
                   </label>
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     {potentialRenters.length > 0 ? (
                       potentialRenters.map((contact, idx) => (
                         <button
@@ -129,8 +129,8 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
                               <User size={18} />
                             </div>
                             <div>
-                              <p className="text-[15px] font-bold text-gray-900">{contact.firstName} {contact.lastName}</p>
-                              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">{contact.type}</p>
+                              <p className="text-[15px] font-normal text-gray-900">{contact.firstName} {contact.lastName}</p>
+                              <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{contact.type}</p>
                             </div>
                           </div>
                           {selectedContactId === contact.id && (
@@ -143,7 +143,7 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
                     ) : (
                       <div className="p-12 text-center bg-gray-50/50 rounded-[16px] border border-dashed border-gray-200">
                         <User size={32} className="text-gray-200 mx-auto mb-3" />
-                        <p className="text-[14px] text-gray-400 font-bold tracking-wider">Niciun client alocat</p>
+                        <p className="text-[14px] text-gray-400 font-normal tracking-wider">Niciun client alocat</p>
                       </div>
                     )}
                   </div>
@@ -151,10 +151,10 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
 
                 {availableAgents.length > 0 && (
                   <div>
-                    <label className="block text-[12px] font-bold text-gray-400 uppercase tracking-widest mb-4 ml-1">
+                    <label className="block text-[12px] font-semibold text-gray-400 uppercase tracking-widest mb-4 ml-1">
                       Asistent (Agent/Coleg)
                     </label>
-                    <div className="space-y-3">
+                    <div className="space-y-4">
                       {availableAgents.map((agent, idx) => (
                         <button
                           key={agent.id || `${agent.firstName}-${agent.lastName}-${agent.phone}-${idx}`}
@@ -175,8 +175,8 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
                               <User size={18} />
                             </div>
                             <div>
-                              <p className="text-[15px] font-bold text-gray-900">{agent.firstName} {agent.lastName}</p>
-                              <p className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">{agent.phone}</p>
+                              <p className="text-[15px] font-normal text-gray-900">{agent.firstName} {agent.lastName}</p>
+                              <p className="text-[11px] font-normal text-gray-400 uppercase tracking-wider">{agent.phone}</p>
                             </div>
                           </div>
                           {selectedAgentId === agent.id && (
@@ -191,12 +191,12 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
                 )}
 
                 <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="block text-[12px] font-bold text-[--color-text-placeholder] tracking-wider uppercase ml-1">
+                  <div className="space-y-1">
+                    <label className="block text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider uppercase ml-1">
                       Data
                     </label>
                     <div className="relative group">
-                      <Calendar size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-[--color-brand-gold] pb-0.5 pointer-events-none transition-colors" />
+                      <Calendar size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-[--color-brand-gold] pointer-events-none transition-colors" />
                       <input
                         type="date"
                         value={date}
@@ -206,12 +206,12 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
                       />
                     </div>
                   </div>
-                  <div className="space-y-1.5">
-                    <label className="block text-[12px] font-bold text-[--color-text-placeholder] tracking-wider uppercase ml-1">
+                  <div className="space-y-1">
+                    <label className="block text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider uppercase ml-1">
                       Ora
                     </label>
                     <div className="relative group">
-                      <Clock size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-[--color-brand-gold] pb-0.5 pointer-events-none transition-colors" />
+                      <Clock size={18} className="absolute left-5 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-[--color-brand-gold] pointer-events-none transition-colors" />
                       <input
                         type="time"
                         value={hour}
@@ -227,7 +227,7 @@ export const AddViewingModal: React.FC<AddViewingModalProps> = ({ isOpen, onClos
                   whileTap={{ scale: 0.98 }}
                   type="submit"
                   disabled={isSubmitting || !selectedContactId || !date || !hour}
-                  className="w-full h-16 btn-brand-primary text-white rounded-full font-bold text-[16px] flex items-center justify-center gap-3 shadow-lg disabled:opacity-50 mt-4 cursor-pointer"
+                  className="w-full h-16 btn-brand-primary text-white rounded-full font-semibold text-[16px] flex items-center justify-center gap-3 shadow-lg disabled:opacity-50 mt-4 cursor-pointer"
                 >
                   {isSubmitting ? (
                     <Loader2 size={24} className="animate-spin" />

@@ -1,6 +1,8 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import axios from "axios";
 import { PROMPT_INSTRUCTIONS } from "../src/services/promptConfig";
+import { safeAxiosGet } from "./security/sec_url-validator";
+import { TitleAutomationRule } from "../src/core/automation/typ_title-automation";
+import { buildTitleFromAutomationRule } from "../src/utils/titleAutomationEngine";
 
 // Ensure Gemini is initialized with server-side environment variable
 const ai = new GoogleGenAI({ 
@@ -46,7 +48,7 @@ async function fileToGenerativePart(url: string) {
     }
 
     console.log(`[Server Gemini] Fetching image directly from backend: ${cleanUrl}`);
-    const response = await axios.get(cleanUrl, {
+    const response = await safeAxiosGet(cleanUrl, {
       responseType: "arraybuffer",
       timeout: 12000,
       headers: {
@@ -90,7 +92,11 @@ export interface BasicLeadData {
   categoria: string;
 }
 
-export async function serverExtractBasicData(content: string, title: string): Promise<BasicLeadData> {
+export async function serverExtractBasicData(
+  content: string,
+  title: string,
+  titleAutomationRule?: TitleAutomationRule | null
+): Promise<BasicLeadData> {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY environment variable is missing on server");
   }
@@ -165,10 +171,30 @@ export async function serverExtractBasicData(content: string, title: string): Pr
     parsed.transactionType = "Inchiriere";
   }
 
+  if (titleAutomationRule && titleAutomationRule.enabled) {
+    const formattedTitle = buildTitleFromAutomationRule(titleAutomationRule, {
+      transactionType: parsed.transactionType === "Inchiriere" ? "Închiriere" : "Vânzare",
+      categoria: parsed.categoria,
+      zona: parsed.zone,
+      rawTitle: title,
+      rawText: `${title}\n${content}`,
+    });
+    if (formattedTitle) {
+      parsed.title = formattedTitle;
+    }
+  }
+
   return parsed;
 }
 
-export async function serverExtractData(content: string, title: string, imageUrls: string[] = [], propertyId?: string, propertyUrl?: string) {
+export async function serverExtractData(
+  content: string,
+  title: string,
+  imageUrls: string[] = [],
+  propertyId?: string,
+  propertyUrl?: string,
+  titleAutomationRule?: TitleAutomationRule | null
+) {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY environment variable is missing on server");
   }
@@ -512,7 +538,7 @@ Condiții suplimentare:
   `;
 
   const response = await ai.models.generateContent({
-    model: "gemini-3.8-flash",
+    model: "gemini-4-hydrogen",
     contents: {
       parts: [
         ...validImageParts,
@@ -956,6 +982,40 @@ Condiții suplimentare:
 
       if (extractedLevels && /^\d+$/.test(extractedLevels.trim())) {
         parsed.crmData.caracteristici.alteDetalii.niveluriConstructie = extractedLevels.trim();
+      }
+
+      if (titleAutomationRule && titleAutomationRule.enabled) {
+        const prevTitle = String(parsed.crmData?.descriere?.titlu || "").trim();
+        const formattedTitle = buildTitleFromAutomationRule(titleAutomationRule, {
+          transactionType: parsed.crmData?.detaliiGenerale?.tranzactie,
+          categoria: parsed.crmData?.detaliiGenerale?.categoria,
+          camere: parsed.crmData?.caracteristici?.detalii?.camere,
+          suprafataUtila: parsed.crmData?.caracteristici?.suprafete?.utila,
+          suprafataConstruita: parsed.crmData?.caracteristici?.suprafete?.construita,
+          etaj: parsed.crmData?.caracteristici?.detalii?.etaj,
+          etajeTotal: parsed.crmData?.caracteristici?.alteDetalii?.niveluriConstructie,
+          zona: Array.isArray(parsed.crmData?.detaliiGenerale?.localizare?.zona)
+            ? parsed.crmData.detaliiGenerale.localizare.zona[0]
+            : "",
+          oras: parsed.crmData?.detaliiGenerale?.localizare?.oras,
+          mobilat: parsed.crmData?.utilitati?.dotari?.mobilat,
+          parcare: Number(parsed.crmData?.caracteristici?.detalii?.parcari || 0) > 0,
+          propertyId,
+          rawTitle: title,
+          rawText: `${title}\n${content}`,
+        });
+        if (formattedTitle) {
+          if (!parsed.crmData.descriere) parsed.crmData.descriere = {};
+          parsed.crmData.descriere.titlu = formattedTitle;
+          if (prevTitle) {
+            if (typeof parsed.crmData.descriere.continut === "string") {
+              parsed.crmData.descriere.continut = parsed.crmData.descriere.continut.replace(prevTitle, formattedTitle);
+            }
+            if (typeof parsed.markdownMarketing === "string") {
+              parsed.markdownMarketing = parsed.markdownMarketing.replace(prevTitle, formattedTitle);
+            }
+          }
+        }
       }
     }
     return parsed;

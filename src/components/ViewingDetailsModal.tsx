@@ -5,6 +5,7 @@ import { Viewing } from "../services/viewingsService";
 import { leadsService, Lead } from "../services/leadsService";
 import { contactsService, Contact } from "../services/contactsService";
 import { toast } from "react-hot-toast";
+import { getThumbnailImageUrl } from "../utils/imageUtils";
 
 interface ViewingDetailsModalProps {
   isOpen: boolean;
@@ -133,7 +134,7 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
         transition={{ type: "spring", damping: 25, stiffness: 200 }}
         className="fixed bottom-0 left-0 right-0 max-w-2xl mx-auto bg-white rounded-t-[32px] z-[401] border-x border-t border-gray-100 shadow-2xl overflow-hidden max-h-[90vh] flex flex-col"
       >
-        <div className="w-12 h-1.5 bg-gray-100 rounded-full mx-auto my-4 shrink-0" />
+        <div className="w-12 h-1 bg-gray-100 rounded-full mx-auto my-4 shrink-0" />
         
         <div className="p-6 flex items-center justify-between bg-white shrink-0">
           <div className="flex items-center gap-3">
@@ -141,8 +142,8 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
               <Clock size={20} />
             </div>
             <div>
-              <h2 className="text-[18px] font-black text-gray-900 leading-tight">Detalii Vizionare</h2>
-              <p className="text-[13px] text-gray-400 font-bold uppercase tracking-wider">{viewing.date} • {viewing.hour}</p>
+              <h2 className="font-title text-[18px] font-semibold text-gray-900 leading-tight">Detalii Vizionare</h2>
+              <p className="text-[13px] text-gray-400 font-semibold uppercase tracking-wider">{viewing.date} • {viewing.hour}</p>
             </div>
           </div>
           <button 
@@ -153,11 +154,11 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-8 pb-12">
+        <div className="flex-1 overflow-y-auto p-6 space-y-4 pb-12">
           {loading ? (
             <div className="flex flex-col items-center justify-center py-20 gap-4">
               <Loader2 size={40} className="animate-spin text-[--color-accent]" />
-              <p className="text-gray-400 font-bold text-[14px]">Se încarcă detaliile...</p>
+              <p className="text-gray-400 font-semibold text-[14px]">Se încarcă detaliile...</p>
             </div>
           ) : (
             <>
@@ -165,18 +166,18 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
               <div className="bg-gray-50/50 rounded-[16px] border border-gray-100 overflow-hidden">
                 <div className="aspect-[16/9] w-full relative bg-gray-100">
                   {displayImage ? (
-                    <img src={displayImage} alt="Property" className="w-full h-full object-cover" />
+                    <img src={getThumbnailImageUrl(displayImage, 900)} alt="Property" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                   ) : (
                     <div className="w-full h-full flex items-center justify-center text-gray-300">
                       <ExternalLink size={40} />
                     </div>
                   )}
-                  <div className="absolute top-4 right-4 px-3 py-1.5 bg-white/90 backdrop-blur shadow-sm rounded-full text-[14px] font-black text-gray-900">
+                  <div className="absolute top-4 right-4 px-3 py-2 bg-white/90 backdrop-blur shadow-sm rounded-full text-[14px] font-normal text-gray-900">
                     {lead?.price || 'Pret Nespecificat'}
                   </div>
                 </div>
                 <div className="p-5">
-                  <h3 className="text-[18px] font-black text-gray-900 mb-2 leading-tight">
+                  <h3 className="font-title text-[18px] font-semibold text-gray-900 mb-2 leading-tight">
                     {lead?.title || 'Proprietate Nespecificată'}
                   </h3>
                   {(() => {
@@ -185,14 +186,14 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                     if (!fullAddress) return null;
                     return (
                       <div className="flex items-start gap-2 text-gray-500 mb-4 cursor-pointer hover:text-[--color-accent] transition-colors" onClick={openInMaps}>
-                        <MapPin size={16} className="mt-0.5 shrink-0" />
-                        <span className="text-[13px] font-medium leading-relaxed">{fullAddress}</span>
+                        <MapPin size={16} className="mt-1 shrink-0" />
+                        <span className="text-[13px] font-normal leading-relaxed">{fullAddress}</span>
                       </div>
                     );
                   })()}
                   <button 
                     onClick={openInMaps}
-                    className="w-full h-11 bg-white border border-gray-200 rounded-xl text-[13px] font-bold text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+                    className="w-full h-11 bg-white border border-gray-200 rounded-xl text-[13px] font-semibold text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
                   >
                     <ExternalLink size={14} />
                     Deschide în Google Maps
@@ -209,8 +210,8 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                       <User size={20} />
                     </div>
                     <div>
-                      <p className="text-[11px] font-black text-[--color-brand-gold] uppercase tracking-widest">Client (Chiriaș/Cumpărător)</p>
-                      <h4 className="text-[16px] font-black text-gray-900">{renter?.firstName} {renter?.lastName || viewing.contactName}</h4>
+                      <p className="text-[11px] font-semibold text-[--color-brand-gold] uppercase tracking-widest">Client (Chiriaș/Cumpărător)</p>
+                      <h4 className="font-title text-[16px] font-semibold text-gray-900">{renter?.firstName} {renter?.lastName || viewing.contactName}</h4>
                     </div>
                   </div>
                   
@@ -218,22 +219,22 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                     <div className="flex items-center justify-between p-3 bg-[--color-brand-gold-light]/30 rounded-xl border border-[--color-brand-gold-border]">
                       <div className="flex items-center gap-2">
                         <Euro size={16} className="text-[--color-brand-gold]" />
-                        <span className="text-[12px] font-bold text-gray-500">Comision Client</span>
+                        <span className="text-[12px] font-semibold text-gray-500">Comision Client</span>
                       </div>
-                      <span className="text-[14px] font-black text-gray-900">
+                      <span className="text-[14px] font-normal text-gray-900">
                         {renter?.commissionValue || 
                          lead?.extractedData?.crmData?.pret?.comisioane?.comisionCumparatorValoare || 
                          (lead?.extractedData?.crmData?.pret?.comisioane?.comisionCumparatorProcent ? `${lead.extractedData.crmData.pret.comisioane.comisionCumparatorProcent}%` : 'Nespecificat')}
                       </span>
                     </div>
                     
-                    <div className="flex gap-2">
+                    <div className="flex gap-4">
                       <a 
                         href={`tel:${renter?.phone || ""}`}
                         className="flex-1 h-11 bg-gray-50 rounded-xl flex items-center justify-center gap-2 text-gray-700 hover:bg-gray-100 transition-colors"
                       >
                         <Phone size={14} />
-                        <span className="text-[12px] font-bold">Apel</span>
+                        <span className="text-[12px] font-semibold">Apel</span>
                       </a>
                       <a 
                         href={renter?.phone ? getWhatsAppLink(renter.phone) : "#"}
@@ -242,7 +243,7 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                         className="flex-1 h-11 bg-green-500 text-white rounded-xl flex items-center justify-center gap-2 hover:bg-green-600 transition-colors"
                       >
                         <MessageSquare size={14} />
-                        <span className="text-[12px] font-bold">WhatsApp</span>
+                        <span className="text-[12px] font-semibold">WhatsApp</span>
                       </a>
                     </div>
                   </div>
@@ -255,8 +256,8 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                       <User size={20} />
                     </div>
                     <div>
-                      <p className="text-[11px] font-black text-amber-400 uppercase tracking-widest">Proprietar</p>
-                      <h4 className="text-[16px] font-black text-gray-900">{owner ? `${owner.firstName} ${owner.lastName}` : (lead?.ownerName || 'Nespecificat')}</h4>
+                      <p className="text-[11px] font-semibold text-amber-500 uppercase tracking-widest">Proprietar</p>
+                      <h4 className="font-title text-[16px] font-semibold text-gray-900">{owner ? `${owner.firstName} ${owner.lastName}` : (lead?.ownerName || 'Nespecificat')}</h4>
                     </div>
                   </div>
 
@@ -264,22 +265,22 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                     <div className="flex items-center justify-between p-3 bg-amber-50/30 rounded-xl border border-amber-50">
                       <div className="flex items-center gap-2">
                         <Euro size={16} className="text-amber-500" />
-                        <span className="text-[12px] font-bold text-gray-500">Comision Proprietar</span>
+                        <span className="text-[12px] font-semibold text-gray-500">Comision Proprietar</span>
                       </div>
-                      <span className="text-[14px] font-black text-gray-900">
+                      <span className="text-[14px] font-normal text-gray-900">
                         {owner?.commissionValue || 
                          lead?.extractedData?.crmData?.pret?.comisioane?.comisionProprietarValoare || 
                          (lead?.extractedData?.crmData?.pret?.comisioane?.comisionProprietarProcent ? `${lead.extractedData.crmData.pret.comisioane.comisionProprietarProcent}%` : 'Nespecificat')}
                       </span>
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex gap-4">
                       <a 
                         href={`tel:${owner?.phone || lead?.ownerPhone || ""}`}
                         className="flex-1 h-11 bg-gray-50 rounded-xl flex items-center justify-center gap-2 text-gray-700 hover:bg-gray-100 transition-colors"
                       >
                         <Phone size={14} />
-                        <span className="text-[12px] font-bold">Apel</span>
+                        <span className="text-[12px] font-semibold">Apel</span>
                       </a>
                       <a 
                         href={(owner?.phone || lead?.ownerPhone) ? getWhatsAppLink(owner?.phone || lead!.ownerPhone) : "#"}
@@ -288,7 +289,7 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                         className="flex-1 h-11 bg-green-500 text-white rounded-xl flex items-center justify-center gap-2 hover:bg-green-600 transition-colors"
                       >
                         <MessageSquare size={14} />
-                        <span className="text-[12px] font-bold">WhatsApp</span>
+                        <span className="text-[12px] font-semibold">WhatsApp</span>
                       </a>
                     </div>
                   </div>
@@ -302,18 +303,18 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                         <User size={20} />
                       </div>
                       <div>
-                        <p className="text-[11px] font-black text-[#BE9662] uppercase tracking-widest">Agent Asistent (Coleg)</p>
-                        <h4 className="text-[16px] font-black text-gray-900">{agent ? `${agent.firstName} ${agent.lastName}` : viewing.agentName}</h4>
+                        <p className="text-[11px] font-semibold text-[#BE9662] uppercase tracking-widest">Agent Asistent (Coleg)</p>
+                        <h4 className="font-title text-[16px] font-semibold text-gray-900">{agent ? `${agent.firstName} ${agent.lastName}` : viewing.agentName}</h4>
                       </div>
                     </div>
 
-                    <div className="flex gap-2">
+                    <div className="flex gap-4">
                       <a 
                         href={`tel:${agent?.phone || ""}`}
                         className="flex-1 h-11 bg-gray-50 rounded-xl flex items-center justify-center gap-2 text-gray-700 hover:bg-gray-100 transition-colors"
                       >
                         <Phone size={14} />
-                        <span className="text-[12px] font-bold">Apel</span>
+                        <span className="text-[12px] font-semibold">Apel</span>
                       </a>
                       <a 
                         href={agent?.phone ? getWhatsAppLink(agent.phone) : "#"}
@@ -322,7 +323,7 @@ export const ViewingDetailsModal: React.FC<ViewingDetailsModalProps> = ({ isOpen
                         className="flex-1 h-11 bg-green-500 text-white rounded-xl flex items-center justify-center gap-2 hover:bg-green-600 transition-colors"
                       >
                         <MessageSquare size={14} />
-                        <span className="text-[12px] font-bold">WhatsApp</span>
+                        <span className="text-[12px] font-semibold">WhatsApp</span>
                       </a>
                     </div>
                   </div>

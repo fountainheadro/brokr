@@ -39,7 +39,7 @@ export const AICallButtons: React.FC = () => {
   };
 
   return (
-    <div className="flex items-center gap-1.5" id="ai-call-header-buttons">
+    <div className="flex items-center gap-2" id="ai-call-header-buttons">
       {/* 1. AI Call Button */}
       <motion.button
         whileTap={{ scale: 0.95 }}

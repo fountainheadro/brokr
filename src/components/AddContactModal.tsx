@@ -84,19 +84,19 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50">
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-600">
                 <UserPlus size={18} />
               </div>
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">Adaugă Client Nou</h3>
-                <p className="text-[11px] text-gray-500">Înregistrează un client nou cu ID automat (#C...)</p>
+                <h3 className="font-title text-sm font-semibold text-gray-900">Adaugă Client Nou</h3>
+                <p className="text-[11px] text-gray-500 font-normal">Înregistrează un client nou cu ID automat (#C...)</p>
               </div>
             </div>
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
+              className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors"
             >
               <X size={16} />
             </button>
@@ -106,20 +106,20 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
           <form onSubmit={handleSubmit} className="p-5">
             <fieldset disabled={loading} className="border-0 p-0 m-0 min-w-0 space-y-4">
             {/* First Name & Last Name */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                   Prenume *
                 </label>
                 <div className="relative">
-                  <User size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
                     required
                     placeholder="ex. Andrei"
                     value={firstName}
                     onChange={(e) => setFirstName(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full h-9 pl-8 pr-3 py-2 text-xs font-normal border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
@@ -133,7 +133,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
                   placeholder="ex. Ionescu"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                  className="w-full h-9 px-3 py-2 text-xs font-normal border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                 />
               </div>
             </div>
@@ -149,7 +149,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
                     key={t}
                     type="button"
                     onClick={() => setType(t)}
-                    className={`py-1.5 text-center rounded-md text-xs font-medium transition-all ${
+                    className={`py-2 text-center rounded-md text-xs font-medium transition-all ${
                       type === t 
                         ? "bg-white text-gray-900 shadow-sm border border-gray-200/80 font-semibold" 
                         : "text-gray-500 hover:text-gray-900"
@@ -167,32 +167,32 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
                 Număr Telefon *
               </label>
               <div className="relative">
-                <Phone size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                <Phone size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="tel"
                   required
                   placeholder="07xxxxxxxx"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                  className="w-full h-9 pl-8 pr-3 py-2 text-xs font-normal border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                 />
               </div>
             </div>
 
             {/* Commission & Property ID */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                   Comision Estimativ
                 </label>
                 <div className="relative">
-                  <Euro size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  <Euro size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
                     placeholder="ex. 2% sau 1000€"
                     value={commissionValue}
                     onChange={(e) => setCommissionValue(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full h-9 pl-8 pr-3 py-2 text-xs font-normal border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
@@ -202,21 +202,21 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
                   ID Proprietate *
                 </label>
                 <div className="relative">
-                  <Home size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  <Home size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
                     required
                     placeholder="ex. P17246 sau ID"
                     value={propertyId}
                     onChange={(e) => setPropertyId(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full h-9 pl-8 pr-3 py-2 text-xs font-normal border border-gray-200 rounded-lg focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100">
               <button
                 type="button"
                 onClick={onClose}
@@ -228,7 +228,7 @@ export const AddContactModal: React.FC<AddContactModalProps> = ({ isOpen, onClos
               <button
                 type="submit"
                 disabled={loading}
-                className="px-4 py-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-lg transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                className="px-4 py-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-lg transition-colors flex items-center gap-2 disabled:opacity-50"
               >
                 {loading && <Loader2 size={13} className="animate-spin" />}
                 <span>Salvează Contact</span>

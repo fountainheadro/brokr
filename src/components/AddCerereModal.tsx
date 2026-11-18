@@ -27,6 +27,8 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
   const [showZoneDropdown, setShowZoneDropdown] = useState(false);
   const [minBudget, setMinBudget] = useState("");
   const [maxBudget, setMaxBudget] = useState("");
+  const [mobilare, setMobilare] = useState("");
+  const [parcare, setParcare] = useState("");
   const [animal, setAnimal] = useState<"Fara" | "Caine" | "Pisica" | "Altceva">("Fara");
   const [cetatenie, setCetatenie] = useState("Romania");
   const [requirements, setRequirements] = useState("");
@@ -84,6 +86,8 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
         categoria,
         status: "Noua",
         leadType: leadRole,
+        ...(mobilare ? { mobilare } : {}),
+        ...(parcare ? { parcare } : {}),
         notes: notesContent.trim() ? `Cerințe cerere: ${notesContent.trim()}` : ""
       });
 
@@ -99,6 +103,8 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
       setZoneList([]);
       setMinBudget("");
       setMaxBudget("");
+      setMobilare("");
+      setParcare("");
       setAnimal("Fara");
       setCetatenie("Romania");
       setRequirements("");
@@ -133,18 +139,18 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50 shrink-0">
-            <div className="flex items-center gap-2.5">
+            <div className="flex items-center gap-3">
               <div className="w-8 h-8 rounded-lg bg-[#BE9662]/10 border border-[#BE9662]/20 flex items-center justify-center text-[#BE9662]">
                 <ClipboardList size={18} />
               </div>
               <div>
-                <h3 className="text-sm font-semibold text-gray-900">Adaugă Cerere Nouă</h3>
-                <p className="text-[11px] text-gray-500">Înregistrează o cerere de căutare cumpărător sau chiriaș</p>
+                <h3 className="font-title text-sm font-semibold text-gray-900">Adaugă Cerere Nouă</h3>
+                <p className="text-[11px] text-gray-500 font-normal">Înregistrează o cerere de căutare cumpărător sau chiriaș</p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+              className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
             >
               <X size={16} />
             </button>
@@ -152,54 +158,22 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="p-5 overflow-y-auto text-xs flex-1">
-            <fieldset disabled={loading} className="border-0 p-0 m-0 min-w-0 space-y-3.5 flex-1 flex flex-col">
-            {/* Row 1: Tip & Categorie */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                  Tip
-                </label>
-                <select
-                  value={leadRole}
-                  onChange={(e) => setLeadRole(e.target.value as any)}
-                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer font-medium"
-                >
-                  <option value="Chirias">Chiriaș</option>
-                  <option value="Cumparator">Cumpărător</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
-                  Categorie
-                </label>
-                <select
-                  value={categoria}
-                  onChange={(e) => setCategoria(e.target.value)}
-                  className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
-                >
-                  {CATEGORIA_OPTIONS.map((cat) => (
-                    <option key={cat} value={cat}>{cat}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-
-            {/* Row 2: Nume Client & Telefon */}
-            <div className="grid grid-cols-2 gap-3">
+            <fieldset disabled={loading} className="border-0 p-0 m-0 min-w-0 space-y-4 flex-1 flex flex-col">
+            {/* Row 1: Nume Client & Telefon */}
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                   Nume Client *
                 </label>
                 <div className="relative">
-                  <User size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
                     required
                     value={clientName}
                     onChange={(e) => setClientName(e.target.value)}
                     placeholder="ex. Radu Popescu"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full h-8 pl-8 pr-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
@@ -209,14 +183,14 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                   Telefon *
                 </label>
                 <div className="relative">
-                  <Phone size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  <Phone size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="tel"
                     required
                     value={clientPhone}
                     onChange={(e) => setClientPhone(e.target.value)}
                     placeholder="07xxxxxxxx"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full h-8 pl-8 pr-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
@@ -224,7 +198,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
 
             {/* Row 3: Cetatenie & Animale de companie (Only for Închiriere) */}
             {transactionType === "Închiriere" && (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                     Cetățenie
@@ -232,7 +206,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                   <select
                     value={cetatenie}
                     onChange={(e) => setCetatenie(e.target.value)}
-                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                    className="w-full h-8 px-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
                   >
                     {CETATENIE_OPTIONS.map((c) => (
                       <option key={c} value={c}>{c}</option>
@@ -247,7 +221,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                   <select
                     value={animal}
                     onChange={(e) => setAnimal(e.target.value as any)}
-                    className="w-full h-8 px-2.5 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                    className="w-full h-8 px-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
                   >
                     <option value="Fara">Fără</option>
                     <option value="Caine">Câine</option>
@@ -258,20 +232,20 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               </div>
             )}
 
-            {/* Row 4: Buget Minim & Buget Maxim */}
-            <div className="grid grid-cols-2 gap-3">
+            {/* Buget Minim & Buget Maxim */}
+            <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-[11px] font-semibold text-gray-700 mb-1">
                   Buget Minim (€)
                 </label>
                 <div className="relative">
-                  <Euro size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  <Euro size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
                     value={minBudget}
                     onChange={(e) => setMinBudget(e.target.value)}
                     placeholder="ex. 400"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full h-8 pl-8 pr-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
               </div>
@@ -281,15 +255,85 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                   Buget Maxim (€)
                 </label>
                 <div className="relative">
-                  <Euro size={14} className="absolute left-3 top-2.5 text-gray-400" />
+                  <Euro size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   <input
                     type="text"
                     value={maxBudget}
                     onChange={(e) => setMaxBudget(e.target.value)}
                     placeholder="ex. 700"
-                    className="w-full h-8 pl-8 pr-3 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                    className="w-full h-8 pl-8 pr-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                   />
                 </div>
+              </div>
+            </div>
+
+            {/* Tip & Categorie */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Tip
+                </label>
+                <select
+                  value={leadRole}
+                  onChange={(e) => setLeadRole(e.target.value as any)}
+                  className="w-full h-8 px-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                >
+                  <option value="Chirias">Chiriaș</option>
+                  <option value="Cumparator">Cumpărător</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Categorie
+                </label>
+                <select
+                  value={categoria}
+                  onChange={(e) => setCategoria(e.target.value)}
+                  className="w-full h-8 px-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                >
+                  {CATEGORIA_OPTIONS.map((cat) => (
+                    <option key={cat} value={cat}>{cat}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Mobilare & Parcare */}
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Mobilare
+                </label>
+                <select
+                  value={mobilare}
+                  onChange={(e) => setMobilare(e.target.value)}
+                  className="w-full h-8 px-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                >
+                  <option value="">Selectează...</option>
+                  <option value="Fără">Fără</option>
+                  <option value="Parțială">Parțială</option>
+                  <option value="Completă">Completă</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-gray-700 mb-1">
+                  Parcare
+                </label>
+                <select
+                  value={parcare}
+                  onChange={(e) => setParcare(e.target.value)}
+                  className="w-full h-8 px-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white cursor-pointer"
+                >
+                  <option value="">Selectează...</option>
+                  <option value="Fără">Fără</option>
+                  <option value="1 loc">1 loc</option>
+                  <option value="2 locuri">2 locuri</option>
+                  <option value="3 locuri">3 locuri</option>
+                  <option value="4 locuri">4 locuri</option>
+                  <option value="5 locuri">5 locuri</option>
+                </select>
               </div>
             </div>
 
@@ -300,7 +344,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               </label>
               <div className="min-h-[32px] h-auto border border-gray-200 rounded-md p-1 bg-white focus-within:border-[#BE9662] focus-within:ring-1 focus-within:ring-[#BE9662] flex flex-wrap gap-1 items-center">
                 {zoneList.map((z) => (
-                  <span key={z} className="inline-flex items-center gap-1 bg-gray-100 text-gray-800 px-2 py-0.5 rounded text-[11px] font-medium border border-gray-200">
+                  <span key={z} className="inline-flex items-center gap-1 bg-gray-100 text-gray-800 px-2 py-1 rounded text-[11px] font-normal border border-gray-200">
                     {z}
                     <button
                       type="button"
@@ -321,7 +365,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                     }}
                     onFocus={() => setShowZoneDropdown(true)}
                     placeholder="Caută zonă..."
-                    className="w-full h-6 px-2 text-xs border-0 focus:outline-none focus:ring-0 bg-transparent"
+                    className="w-full h-6 px-2 text-xs font-normal border-0 focus:outline-none focus:ring-0 bg-transparent"
                   />
                 </div>
               </div>
@@ -333,7 +377,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                     <div
                       key={z}
                       onClick={() => handleSelectZone(z)}
-                      className="px-3 py-1.5 text-xs text-gray-800 hover:bg-gray-100 cursor-pointer"
+                      className="px-3 py-2 text-xs font-normal text-gray-800 hover:bg-gray-100 cursor-pointer"
                     >
                       {z}
                     </div>
@@ -352,11 +396,11 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
                 value={requirements}
                 onChange={(e) => setRequirements(e.target.value)}
                 placeholder="ex. Minim 60mp, decomandat, loc parcare, bloc după 2015..."
-                className="w-full px-3 py-2 text-xs border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] resize-none"
+                className="w-full px-3 py-2 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] resize-none"
               />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-gray-100 shrink-0">
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-gray-100 shrink-0">
               <button
                 type="button"
                 onClick={onClose}
@@ -367,7 +411,7 @@ export const AddCerereModal: React.FC<AddCerereModalProps> = ({ isOpen, onClose,
               <button
                 type="submit"
                 disabled={loading}
-                className="h-8 px-4 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
+                className="h-8 px-4 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors flex items-center gap-2 disabled:opacity-50 cursor-pointer shadow-xs"
               >
                 {loading ? (
                   <>

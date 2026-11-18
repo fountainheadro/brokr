@@ -83,10 +83,10 @@ export const AICallModal: React.FC = () => {
                   <Sparkles size={24} className="animate-pulse" />
                 </div>
                 <div>
-                  <h3 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                    Voce AI de test <span className="text-xs bg-orange-100 text-[--color-accent] font-black uppercase tracking-widest px-2 py-0.5 rounded-full">BETA</span>
+                  <h3 className="font-title text-xl font-semibold text-gray-900 flex items-center gap-2">
+                    Voce AI de test <span className="text-xs bg-orange-100 text-[--color-accent] font-normal uppercase tracking-widest px-2 py-1 rounded-full leading-none">BETA</span>
                   </h3>
-                  <p className="text-xs text-gray-500 font-medium font-mono leading-none">Powered by Gemini 3.1 Live API & Twilio</p>
+                  <p className="text-xs text-gray-500 font-normal font-sans leading-none mt-1">Powered by Gemini 3.1 Live API & Twilio</p>
                 </div>
               </div>
 
@@ -101,10 +101,10 @@ export const AICallModal: React.FC = () => {
             </div>
 
             {/* Modal Toggle Tabs */}
-            <div className="flex border-b border-gray-100 mb-6 gap-2 bg-gray-50 p-1.5 rounded-2xl shrink-0">
+            <div className="flex border-b border-gray-100 mb-6 gap-2 bg-gray-50 p-2 rounded-2xl shrink-0">
               <button
                 onClick={() => AICallStore.setTab("call")}
-                className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                className={`flex-1 py-3 text-sm font-semibold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer ${
                   activeTab === "call"
                     ? "bg-white text-gray-950 shadow-sm"
                     : "text-gray-500 hover:text-gray-800"
@@ -115,7 +115,7 @@ export const AICallModal: React.FC = () => {
               </button>
               <button
                 onClick={() => AICallStore.setTab("notes")}
-                className={`flex-1 py-3 text-sm font-bold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer relative ${
+                className={`flex-1 py-3 text-sm font-semibold rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer relative ${
                   activeTab === "notes"
                     ? "bg-white text-gray-950 shadow-sm"
                     : "text-gray-500 hover:text-gray-800"
@@ -140,7 +140,7 @@ export const AICallModal: React.FC = () => {
                   <div className="flex-1 flex flex-col justify-between h-full">
                     <form onSubmit={handleStartCall} className="space-y-4">
                       <div>
-                        <label className="block text-[12px] font-bold text-[--color-text-placeholder] tracking-wider mb-2 uppercase">Numărul de Telefon</label>
+                        <label className="block text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider mb-2 uppercase">Numărul de Telefon</label>
                         <div className="relative">
                           <input
                             type="tel"
@@ -148,39 +148,39 @@ export const AICallModal: React.FC = () => {
                             value={phoneNumber}
                             onChange={(e) => setPhoneNumber(e.target.value)}
                             disabled={status === "calling" || status === "connected"}
-                            className="input-base w-full pr-12 font-roboto text-base font-normal text-[#333333] placeholder-gray-400"
+                            className="input-base w-full pr-12 font-sans text-base font-normal text-[#333333] placeholder-gray-400"
                             required
                           />
                           <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
                             <Phone size={18} />
                           </div>
                         </div>
-                        <p className="text-[11px] text-gray-400 mt-1">Numărul va fi format folosind standardul internațional (ex. +40722123456).</p>
+                        <p className="text-[11px] text-gray-400 mt-1 font-normal">Numărul va fi format folosind standardul internațional (ex. +40722123456).</p>
                       </div>
 
                       <div>
-                        <label className="block text-[12px] font-bold text-[--color-text-placeholder] tracking-wider mb-2 uppercase">Instrucțiuni / Scopul discuției pentru AI</label>
+                        <label className="block text-[12px] font-semibold text-[--color-text-placeholder] tracking-wider mb-2 uppercase">Instrucțiuni / Scopul discuției pentru AI</label>
                         <textarea
                           rows={6}
                           placeholder="Ex: Întreabă dacă este de acord să programeze o vizionare vineri la ora 14..."
                           value={promptInstructions}
                           onChange={(e) => setPromptInstructions(e.target.value)}
                           disabled={status === "calling" || status === "connected"}
-                          className="input-base w-full min-h-[140px] font-roboto text-base font-normal text-[#333333] placeholder-gray-400 p-4 leading-relaxed resize-none"
+                          className="input-base w-full min-h-[140px] font-sans text-base font-normal text-[#333333] placeholder-gray-400 p-4 leading-relaxed resize-none"
                           required
                         />
                       </div>
 
                       {/* Quick Testing Autocomplete presets */}
                       <div>
-                        <span className="block text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-2">Sugestii rapide Scenarii:</span>
-                        <div className="flex flex-col gap-1.5">
+                        <span className="block text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-2">Sugestii rapide Scenarii:</span>
+                        <div className="flex flex-col gap-2">
                           <button
                             type="button"
                             onClick={() => {
                               setPromptInstructions("Află dacă apartamentul proprietate personală mai este valabil de vânzare, dacă are centrală proprie, balcon închis și care este ultimul preț discutat la tranzacție.");
                             }}
-                            className="text-left text-xs text-gray-500 hover:text-[--color-accent] font-medium bg-gray-50 hover:bg-orange-50/50 p-2 rounded-lg transition-colors border border-gray-100"
+                            className="text-left text-xs text-gray-500 hover:text-[--color-accent] font-normal bg-gray-50 hover:bg-orange-50/50 p-2 rounded-lg transition-colors border border-gray-100"
                           >
                             💡 Scenariu Apartament standard (Centrală / Balcon / Preț)
                           </button>
@@ -189,7 +189,7 @@ export const AICallModal: React.FC = () => {
                             onClick={() => {
                               setPromptInstructions("Contactează proprietarul spațiului de birouri comercial. Obține costul chiriei lunar plus detalii utilități și află dacă există locuri de parcare proprii.");
                             }}
-                            className="text-left text-xs text-gray-500 hover:text-[--color-accent] font-medium bg-gray-50 hover:bg-orange-50/50 p-2 rounded-lg transition-colors border border-gray-100"
+                            className="text-left text-xs text-gray-500 hover:text-[--color-accent] font-normal bg-gray-50 hover:bg-orange-50/50 p-2 rounded-lg transition-colors border border-gray-100"
                           >
                             💡 Scenariu Birou / Spațiu Comercial (Chirieri / Parcare)
                           </button>
@@ -203,7 +203,7 @@ export const AICallModal: React.FC = () => {
                         <button
                           onClick={handleStartCall}
                           disabled={!phoneNumber}
-                          className="w-full bg-black text-white hover:bg-orange-600 font-bold px-6 py-4 rounded-xl flex items-center justify-center gap-3 cursor-pointer shadow-lg active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-base"
+                          className="w-full bg-black text-white hover:bg-orange-600 font-semibold px-6 py-4 rounded-xl flex items-center justify-center gap-3 cursor-pointer shadow-lg active:scale-95 transition-all disabled:opacity-50 disabled:cursor-not-allowed text-base"
                         >
                           <Play size={18} fill="currentColor" />
                           Lansează Apel Inteligent AI
@@ -211,7 +211,7 @@ export const AICallModal: React.FC = () => {
                       ) : (
                         <button
                           onClick={handleEndCall}
-                          className="w-full bg-red-505 bg-red-500 text-white hover:bg-red-600 font-bold px-6 py-4 rounded-xl flex items-center justify-center gap-3 cursor-pointer shadow-lg active:scale-95 transition-all text-base animate-pulse"
+                          className="w-full bg-red-500 text-white hover:bg-red-600 font-semibold px-6 py-4 rounded-xl flex items-center justify-center gap-3 cursor-pointer shadow-lg active:scale-95 transition-all text-base animate-pulse"
                         >
                           <PhoneOff size={18} />
                           Închide Conexiunea Manual
@@ -223,12 +223,12 @@ export const AICallModal: React.FC = () => {
                   /* Audio transcript interactive visualizer list */
                   <div className="flex-1 flex flex-col justify-between h-full">
                     <div className="flex items-center justify-between mb-3 shrink-0">
-                      <span className="text-xs font-black uppercase text-gray-400 tracking-wider">Conversație Transcrisă Live</span>
-                      <div className="flex items-center gap-1.5">
-                        <span className={`h-2.5 w-2.5 rounded-full ${
-                          status === "connected" ? "bg-green-500 animate-ping" : status === "calling" ? "bg-amber-400 animate-pulse" : "bg-gray-350 bg-gray-400"
+                      <span className="font-title text-xs font-semibold uppercase text-gray-400 tracking-wider">Conversație Transcrisă Live</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`h-2 w-2 rounded-full ${
+                          status === "connected" ? "bg-green-500 animate-ping" : status === "calling" ? "bg-amber-400 animate-pulse" : "bg-gray-400"
                         }`} />
-                        <span className="text-[11px] font-black uppercase tracking-widest text-gray-500">
+                        <span className="text-[11px] font-normal uppercase tracking-widest text-gray-500">
                           {status === "connected" ? "Conectat" : status === "calling" ? "Se sună..." : "Apel încheiat"}
                         </span>
                       </div>
@@ -239,7 +239,7 @@ export const AICallModal: React.FC = () => {
                       {transcript.length === 0 ? (
                         <div className="h-full flex flex-col items-center justify-center text-center opacity-40 py-10">
                           <Phone size={32} className="text-gray-400 mb-2 animate-bounce" />
-                          <p className="text-xs font-bold text-gray-500 uppercase tracking-widest leading-relaxed">
+                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-widest leading-relaxed">
                             {status === "calling" ? "Se stabilește legătura VoIP..." : "Așteptare audio..."}
                           </p>
                         </div>
@@ -255,16 +255,16 @@ export const AICallModal: React.FC = () => {
                                 : "items-center"
                             }`}
                           >
-                            <span className="text-[9px] text-gray-400 uppercase font-black font-mono px-1">
+                            <span className="text-[9px] text-gray-400 uppercase font-semibold font-sans px-1">
                               {item.speaker === "assistant" ? "Asistent Brokr" : item.speaker === "user" ? "Client" : "Sistem"} &bull; {item.timestamp}
                             </span>
                             <div
-                              className={`max-w-[85%] mt-1 px-3.5 py-2.5 rounded-2xl text-xs font-medium leading-relaxed ${
+                              className={`max-w-[85%] mt-1 px-4 py-3 rounded-2xl text-xs font-normal leading-relaxed ${
                                 item.speaker === "assistant"
                                   ? "bg-white border border-gray-100 text-gray-900 rounded-tl-none"
                                   : item.speaker === "user"
                                   ? "bg-[#051D35] text-white rounded-tr-none"
-                                  : "bg-orange-50 text-[--color-accent] text-[11px] font-bold border border-orange-100 rounded-lg text-center font-mono py-1"
+                                  : "bg-orange-50 text-[--color-accent] text-[11px] font-normal border border-orange-100 rounded-lg text-center font-sans py-1"
                               }`}
                             >
                               {item.text}
@@ -280,22 +280,22 @@ export const AICallModal: React.FC = () => {
                       {status === "connected" || status === "calling" ? (
                         <button
                           onClick={handleEndCall}
-                          className="w-full bg-red-500 text-white hover:bg-red-600 font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all text-sm"
+                          className="w-full bg-red-500 text-white hover:bg-red-600 font-semibold py-3 rounded-xl flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all text-sm"
                         >
                           <PhoneOff size={16} />
                           Închide Apel
                         </button>
                       ) : (
-                        <div className="flex w-full gap-2">
+                        <div className="flex w-full gap-4">
                           <button
                             onClick={() => AICallStore.setTab("call")}
-                            className="flex-1 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-bold py-3.5 rounded-xl text-sm transition-all"
+                            className="flex-1 bg-white border border-gray-200 hover:bg-gray-50 text-gray-700 font-semibold py-3 rounded-xl text-sm transition-all"
                           >
                             Apel Nou
                           </button>
                           <button
                             onClick={handleResetCall}
-                            className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-bold py-3.5 rounded-xl text-sm transition-all flex items-center justify-center gap-1"
+                            className="flex-1 bg-gray-100 hover:bg-gray-200 text-gray-600 font-semibold py-3 rounded-xl text-sm transition-all flex items-center justify-center gap-1"
                           >
                             <RefreshCw size={14} /> Resetare
                           </button>
@@ -309,17 +309,17 @@ export const AICallModal: React.FC = () => {
               {/* Right Workspace Panel: Live extracted structured notes data cards */}
               <div className="md:col-span-6 flex flex-col space-y-4 overflow-y-auto max-h-[500px] pr-2 custom-scrollbar">
                 <div className="flex items-center justify-between shrink-0 mb-1">
-                  <span className="text-xs font-black uppercase text-gray-400 tracking-wider">Notițe Structurate Structurate CRM</span>
-                  <span className="text-[10px] bg-[#BE9662]/10 text-[#BE9662] font-black tracking-widest uppercase px-2 py-0.5 rounded-md">Live Sync</span>
+                  <span className="font-title text-xs font-semibold uppercase text-gray-400 tracking-wider">Notițe Structurate CRM</span>
+                  <span className="text-[10px] bg-[#BE9662]/10 text-[#BE9662] font-normal tracking-widest uppercase px-2 py-1 rounded-md leading-none">Live Sync</span>
                 </div>
 
                 {/* 1. Live Summary sentence card */}
                 <div className="bg-gradient-to-br from-orange-50/10 to-[#BE9662]/10 border border-gray-100 hover:border-orange-100 p-4 rounded-2xl shadow-sm transition-all">
                   <div className="flex items-center gap-2 mb-2 text-orange-600">
                     <Sparkles size={16} className="animate-spin text-[--color-accent]" />
-                    <span className="text-xs font-black uppercase tracking-wider">Pe scurt (Copilot AI)</span>
+                    <span className="font-title text-xs font-semibold uppercase tracking-wider">Pe scurt (Copilot AI)</span>
                   </div>
-                  <p className="text-[13px] text-gray-900 leading-relaxed font-semibold">
+                  <p className="text-[13px] text-gray-900 leading-relaxed font-normal">
                     {notes.live_summary || "Se ascultă convorbirea..."}
                   </p>
                 </div>
@@ -331,22 +331,22 @@ export const AICallModal: React.FC = () => {
                       {getSentimentIcon(notes.sentiment)}
                     </div>
                     <div>
-                      <span className="block text-[10px] uppercase font-black tracking-wider text-gray-400">Atitudinea Clientului</span>
-                      <span className="text-xs font-bold text-gray-800">{notes.sentiment}</span>
+                      <span className="block text-[10px] uppercase font-semibold tracking-wider text-gray-400">Atitudinea Clientului</span>
+                      <span className="text-xs font-normal text-gray-800">{notes.sentiment}</span>
                     </div>
                   </div>
                 )}
 
                 {/* 3. Extracted key important points checklist */}
                 <div className="bg-white border border-gray-100 p-4 rounded-2xl shadow-sm">
-                  <span className="block text-xs font-black uppercase tracking-widest text-gray-400 mb-3">Aspecte Agreiate</span>
+                  <span className="font-title block text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">Aspecte Agreiate</span>
                   {notes.important_points.length === 0 ? (
-                    <p className="text-xs text-gray-400 italic">Niciun aspect extras momentan.</p>
+                    <p className="text-xs text-gray-400 italic font-normal">Niciun aspect extras momentan.</p>
                   ) : (
                     <ul className="space-y-2">
                       {notes.important_points.map((pt, i) => (
-                        <li key={i} className="flex gap-2.5 text-xs text-gray-700 leading-normal">
-                          <CheckCircle className="text-[--color-accent] shrink-0 mt-0.5" size={14} />
+                        <li key={i} className="flex gap-3 text-xs font-normal text-gray-700 leading-normal">
+                          <CheckCircle className="text-[--color-accent] shrink-0 mt-1" size={14} />
                           <span>{pt}</span>
                         </li>
                       ))}
@@ -357,34 +357,34 @@ export const AICallModal: React.FC = () => {
                 {/* 4. Extracted contact details values */}
                 {Object.keys(notes.contact_details || {}).length > 0 && (
                   <div className="bg-white border border-gray-100 p-4 rounded-2xl shadow-sm space-y-2">
-                    <span className="block text-xs font-black uppercase tracking-widest text-gray-400">Date Contact Extrase</span>
+                    <span className="font-title block text-xs font-semibold uppercase tracking-widest text-gray-400">Date Contact Extrase</span>
                     
-                    <div className="grid grid-cols-2 gap-2 mt-2">
+                    <div className="grid grid-cols-2 gap-4 mt-2">
                       {notes.contact_details.names && notes.contact_details.names.length > 0 && (
-                        <div className="p-2.5 bg-gray-50 rounded-xl">
-                          <span className="block text-[9px] uppercase font-bold text-gray-400">Nume</span>
-                          <span className="text-xs font-bold text-gray-800">{notes.contact_details.names.join(", ")}</span>
+                        <div className="p-3 bg-gray-50 rounded-xl">
+                          <span className="block text-[9px] uppercase font-semibold text-gray-400">Nume</span>
+                          <span className="text-xs font-normal text-gray-800">{notes.contact_details.names.join(", ")}</span>
                         </div>
                       )}
                       
                       {notes.contact_details.phones && notes.contact_details.phones.length > 0 && (
-                        <div className="p-2.5 bg-gray-50 rounded-xl">
-                          <span className="block text-[9px] uppercase font-bold text-gray-400">Telefon</span>
-                          <span className="text-xs font-bold text-gray-850 font-mono tracking-tighter">{notes.contact_details.phones.join(", ")}</span>
+                        <div className="p-3 bg-gray-50 rounded-xl">
+                          <span className="block text-[9px] uppercase font-semibold text-gray-400">Telefon</span>
+                          <span className="text-xs font-normal text-gray-800 font-sans tabular-nums">{notes.contact_details.phones.join(", ")}</span>
                         </div>
                       )}
 
                       {notes.contact_details.emails && notes.contact_details.emails.length > 0 && (
-                        <div className="p-2.5 bg-gray-50 rounded-xl col-span-2">
-                          <span className="block text-[9px] uppercase font-bold text-gray-400">E-mail</span>
-                          <span className="text-xs font-bold text-gray-800 font-mono">{notes.contact_details.emails.join(", ")}</span>
+                        <div className="p-3 bg-gray-50 rounded-xl col-span-2">
+                          <span className="block text-[9px] uppercase font-semibold text-gray-400">E-mail</span>
+                          <span className="text-xs font-normal text-gray-800 font-sans">{notes.contact_details.emails.join(", ")}</span>
                         </div>
                       )}
 
                       {notes.contact_details.company_names && notes.contact_details.company_names.length > 0 && (
-                        <div className="p-2.5 bg-gray-50 rounded-xl col-span-2">
-                          <span className="block text-[9px] uppercase font-bold text-gray-400">Companie</span>
-                          <span className="text-xs font-bold text-gray-800">{notes.contact_details.company_names.join(", ")}</span>
+                        <div className="p-3 bg-gray-50 rounded-xl col-span-2">
+                          <span className="block text-[9px] uppercase font-semibold text-gray-400">Companie</span>
+                          <span className="text-xs font-normal text-gray-800">{notes.contact_details.company_names.join(", ")}</span>
                         </div>
                       )}
                     </div>
@@ -393,15 +393,15 @@ export const AICallModal: React.FC = () => {
 
                 {/* 5. Live follow up list with checkmark indicators */}
                 <div className="bg-white border border-gray-100 p-4 rounded-2xl shadow-sm">
-                  <span className="block text-xs font-black uppercase tracking-widest text-gray-400 mb-3">Sarcini Următoare (Follow-Up)</span>
+                  <span className="font-title block text-xs font-semibold uppercase tracking-widest text-gray-400 mb-3">Sarcini Următoare (Follow-Up)</span>
                   {notes.follow_up_actions.length === 0 ? (
-                    <p className="text-xs text-gray-400 italic">Se ascultă acțiunile specifice de urmat...</p>
+                    <p className="text-xs text-gray-400 italic font-normal">Se ascultă acțiunile specifice de urmat...</p>
                   ) : (
                     <ul className="space-y-2">
                       {notes.follow_up_actions.map((act, i) => (
-                        <li key={i} className="flex gap-2.5 text-xs text-gray-700 leading-normal">
-                          <div className="w-4 h-4 rounded border border-orange-200 bg-orange-50/30 flex items-center justify-center shrink-0 mt-0.5">
-                            <span className="text-[10px] font-bold text-[--color-accent] leading-none">✓</span>
+                        <li key={i} className="flex gap-3 text-xs font-normal text-gray-700 leading-normal">
+                          <div className="w-4 h-4 rounded border border-orange-200 bg-orange-50/30 flex items-center justify-center shrink-0 mt-1">
+                            <span className="text-[10px] font-normal text-[--color-accent] leading-none">✓</span>
                           </div>
                           <span>{act}</span>
                         </li>

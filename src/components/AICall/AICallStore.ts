@@ -1,3 +1,5 @@
+import { getApiAuthHeaders } from "../../lib/apiAuth";
+
 // AI Phone Call State Store (Pub-Sub pattern) for React updates
 export type CallStatus = "idle" | "calling" | "connected" | "ended" | "failed";
 
@@ -68,9 +70,18 @@ function connectWebSocket(callSid: string) {
   console.log(`[AICallStore] Connecting to websocket server: ${wsUrl}`);
   socket = new WebSocket(wsUrl);
 
-  socket.onopen = () => {
+  socket.onopen = async () => {
     console.log(`[AICallStore] WS Connection opened. Subscribing to call: ${callSid}`);
-    socket?.send(JSON.stringify({ type: "subscribe", callSid }));
+    let authToken = "";
+    try {
+      const hdrs = await getApiAuthHeaders();
+      if (hdrs.Authorization && hdrs.Authorization.startsWith("Bearer ")) {
+        authToken = hdrs.Authorization.substring(7).trim();
+      }
+    } catch {
+      // Ignored; backend closes unauthenticated sockets
+    }
+    socket?.send(JSON.stringify({ type: "subscribe", callSid, authToken }));
     if (reconnectInterval) {
       clearInterval(reconnectInterval);
       reconnectInterval = null;
@@ -164,9 +175,10 @@ export const AICallStore = {
       emit();
 
       console.log(`[AICallStore] Starting call to ${phoneNumber}`);
+      const headers = await getApiAuthHeaders({ "Content-Type": "application/json" });
       const response = await fetch("/api/ai-call/dial", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({ phoneNumber, prompt })
       });
 

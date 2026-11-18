@@ -1,18 +1,5 @@
-import { 
-  collection, 
-  addDoc, 
-  updateDoc, 
-  doc, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  serverTimestamp, 
-  getDoc,
-  deleteDoc,
-  where 
-} from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { entityIdService } from './entityIdService';
+import { crmApiClient } from '../core/crm/svc_crm-client';
 
 export type DocumentType = 
   | 'Contract'
@@ -45,84 +32,30 @@ const DOCUMENTS_COLLECTION = 'documents';
 
 export const documentService = {
   addDocument: async (data: Omit<DocumentItem, 'id' | 'createdAt' | 'updatedAt'>) => {
-    try {
-      const documentId = data.documentId || (await entityIdService.getNextId('document'));
-      const now = serverTimestamp();
-      return await addDoc(collection(db, DOCUMENTS_COLLECTION), {
-        ...data,
-        documentId,
-        createdAt: now,
-        updatedAt: now
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, DOCUMENTS_COLLECTION);
-    }
+    const documentId = data.documentId || (await entityIdService.getNextId('document'));
+    return crmApiClient.create<DocumentItem>(DOCUMENTS_COLLECTION, {
+      ...data,
+      documentId,
+    });
   },
 
   updateDocument: async (id: string, data: Partial<DocumentItem>) => {
-    const path = `${DOCUMENTS_COLLECTION}/${id}`;
-    try {
-      const docRef = doc(db, DOCUMENTS_COLLECTION, id);
-      return await updateDoc(docRef, {
-        ...data,
-        updatedAt: serverTimestamp()
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
-    }
+    await crmApiClient.update<DocumentItem>(DOCUMENTS_COLLECTION, id, data);
   },
 
   deleteDocument: async (id: string) => {
-    const path = `${DOCUMENTS_COLLECTION}/${id}`;
-    try {
-      const docRef = doc(db, DOCUMENTS_COLLECTION, id);
-      return await deleteDoc(docRef);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-    }
+    await crmApiClient.remove(DOCUMENTS_COLLECTION, id);
   },
 
   getDocument: async (id: string) => {
-    const path = `${DOCUMENTS_COLLECTION}/${id}`;
-    try {
-      const docRef = doc(db, DOCUMENTS_COLLECTION, id);
-      const snap = await getDoc(docRef);
-      if (snap.exists()) {
-        return { id: snap.id, ...snap.data() } as DocumentItem;
-      }
-      return null;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-    }
+    return crmApiClient.getById<DocumentItem>(DOCUMENTS_COLLECTION, id);
   },
 
   subscribeToDocuments: (callback: (docs: DocumentItem[]) => void) => {
-    const q = query(collection(db, DOCUMENTS_COLLECTION), orderBy('updatedAt', 'desc'));
-    return onSnapshot(q, (snapshot) => {
-      const documents = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-      })) as DocumentItem[];
-      callback(documents);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, DOCUMENTS_COLLECTION);
-    });
+    return crmApiClient.subscribe<DocumentItem>(DOCUMENTS_COLLECTION, callback);
   },
 
   subscribeToPropertyDocuments: (propertyId: string, callback: (docs: DocumentItem[]) => void) => {
-    const q = query(
-      collection(db, DOCUMENTS_COLLECTION),
-      where('propertyId', '==', propertyId),
-      orderBy('updatedAt', 'desc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const documents = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-      })) as DocumentItem[];
-      callback(documents);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, DOCUMENTS_COLLECTION);
-    });
-  }
+    return crmApiClient.subscribe<DocumentItem>(DOCUMENTS_COLLECTION, callback, { propertyId });
+  },
 };

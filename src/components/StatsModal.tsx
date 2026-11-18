@@ -75,19 +75,19 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, onClose, onOpenP
           className="relative w-full max-w-xl bg-white rounded-lg border border-gray-200 shadow-2xl overflow-hidden flex flex-col z-[401]"
         >
           {/* Header */}
-          <div className="h-[52px] px-5 border-b border-gray-200 flex items-center justify-between shrink-0 bg-white">
-            <div className="flex items-center gap-2.5">
+          <div className="h-12 px-5 border-b border-gray-200 flex items-center justify-between shrink-0 bg-white">
+            <div className="flex items-center gap-3">
               <div className="w-7 h-7 rounded-md bg-[#051D35]/5 border border-[#051D35]/15 flex items-center justify-center text-[#BE9662]">
                 <BarChart3 size={15} />
               </div>
               <div>
-                <h2 className="text-xs font-bold text-gray-900 tracking-tight">Statisticile Mele & Performanță</h2>
-                <p className="text-[10px] text-gray-500 font-medium">Activitate broker: {userName}</p>
+                <h2 className="font-title text-xs font-semibold text-gray-900 tracking-tight">Statisticile Mele & Performanță</h2>
+                <p className="text-[10px] text-gray-500 font-normal">Activitate broker: {userName}</p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+              className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
               title="Închide"
             >
               <X size={15} />
@@ -95,32 +95,32 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, onClose, onOpenP
           </div>
 
           {/* Body */}
-          <div className="p-6 overflow-y-auto space-y-6">
+          <div className="p-6 overflow-y-auto space-y-4">
             {/* Top Scoreboard */}
-            <div className="p-4 rounded-lg bg-[#051D35] text-white flex items-center justify-between">
+            <div className="p-4 rounded-lg bg-[#051D35] text-white flex items-center justify-between gap-4">
               <div>
-                <div className="flex items-center gap-1.5 text-xs text-[#BE9662] font-semibold">
+                <div className="flex items-center gap-2 text-xs text-[#BE9662] font-semibold">
                   <Award size={14} />
                   Top Performer Luna Curentă
                 </div>
-                <h3 className="text-xl font-bold tracking-tight text-white mt-1">{leads.length} Tranzacții & Portofoliu</h3>
-                <p className="text-[11px] text-gray-300 mt-0.5">Activitate sincronizată în timp real din baza de date</p>
+                <h3 className="font-title text-xl font-semibold tracking-tight text-white mt-1">{leads.length} Tranzacții & Portofoliu</h3>
+                <p className="text-[11px] text-gray-300 font-normal mt-1">Activitate sincronizată în timp real din baza de date</p>
               </div>
               <div className="text-right">
-                <span className="text-2xl font-mono font-bold text-[#BE9662]">{conversionRate}%</span>
-                <p className="text-[10px] text-gray-300">Rată Finalizare</p>
+                <span className="text-2xl font-sans tabular-nums font-normal text-[#BE9662]">{conversionRate}%</span>
+                <p className="text-[10px] text-gray-300 font-semibold">Rată Finalizare</p>
               </div>
             </div>
 
             {/* Metrics Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
               <div className="p-3 bg-gray-50 rounded-lg border border-gray-200">
                 <div className="flex items-center justify-between text-gray-500 mb-1">
                   <span className="text-[10px] font-semibold uppercase">Proprietăți</span>
                   <Building2 size={13} className="text-[#BE9662]" />
                 </div>
-                <div className="text-lg font-bold font-mono text-gray-900">{propertiesCount}</div>
-                <span className="text-[9px] text-emerald-600 font-medium flex items-center gap-0.5 mt-1">
+                <div className="text-lg font-normal font-sans tabular-nums text-gray-900">{propertiesCount}</div>
+                <span className="text-[9px] text-emerald-600 font-normal flex items-center gap-1 mt-1">
                   <ArrowUpRight size={10} /> Active în portofoliu
                 </span>
               </div>
@@ -130,8 +130,8 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, onClose, onOpenP
                   <span className="text-[10px] font-semibold uppercase">Cereri</span>
                   <ClipboardList size={13} className="text-amber-600" />
                 </div>
-                <div className="text-lg font-bold font-mono text-gray-900">{cereriCount}</div>
-                <span className="text-[9px] text-amber-600 font-medium flex items-center gap-0.5 mt-1">
+                <div className="text-lg font-normal font-sans tabular-nums text-gray-900">{cereriCount}</div>
+                <span className="text-[9px] text-amber-600 font-normal flex items-center gap-1 mt-1">
                   <ArrowUpRight size={10} /> În căutare activă
                 </span>
               </div>
@@ -141,8 +141,8 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, onClose, onOpenP
                   <span className="text-[10px] font-semibold uppercase">Clienți</span>
                   <Users size={13} className="text-emerald-600" />
                 </div>
-                <div className="text-lg font-bold font-mono text-gray-900">{contactsCount}</div>
-                <span className="text-[9px] text-emerald-600 font-medium flex items-center gap-0.5 mt-1">
+                <div className="text-lg font-normal font-sans tabular-nums text-gray-900">{contactsCount}</div>
+                <span className="text-[9px] text-emerald-600 font-normal flex items-center gap-1 mt-1">
                   <ArrowUpRight size={10} /> Contacte salvate
                 </span>
               </div>
@@ -152,8 +152,8 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, onClose, onOpenP
                   <span className="text-[10px] font-semibold uppercase">Vizionări</span>
                   <Calendar size={13} className="text-blue-600" />
                 </div>
-                <div className="text-lg font-bold font-mono text-gray-900">{viewingsCount}</div>
-                <span className="text-[9px] text-blue-600 font-medium flex items-center gap-0.5 mt-1">
+                <div className="text-lg font-normal font-sans tabular-nums text-gray-900">{viewingsCount}</div>
+                <span className="text-[9px] text-blue-600 font-normal flex items-center gap-1 mt-1">
                   <ArrowUpRight size={10} /> Programate / Rulate
                 </span>
               </div>
@@ -161,26 +161,26 @@ export const StatsModal: React.FC<StatsModalProps> = ({ isOpen, onClose, onOpenP
 
             {/* Performance breakdown list */}
             <div className="space-y-2">
-              <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Indicatori de Calitate</h4>
+              <h4 className="font-title text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Indicatori de Calitate</h4>
               <div className="p-3 bg-white rounded-lg border border-gray-200 divide-y divide-gray-100 text-xs">
                 <div className="py-2 flex items-center justify-between">
-                  <span className="text-gray-600 font-medium">Timp mediu de răspuns la lead-uri noi</span>
-                  <span className="font-semibold text-gray-900 font-mono">14 minute</span>
+                  <span className="text-gray-600 font-semibold">Timp mediu de răspuns la lead-uri noi</span>
+                  <span className="font-normal text-gray-900 font-sans tabular-nums">14 minute</span>
                 </div>
                 <div className="py-2 flex items-center justify-between">
-                  <span className="text-gray-600 font-medium">Acuratețe extracție automată URL</span>
-                  <span className="font-semibold text-emerald-600 font-mono">99.2%</span>
+                  <span className="text-gray-600 font-semibold">Acuratețe extracție automată URL</span>
+                  <span className="font-normal text-emerald-600 font-sans tabular-nums">99.2%</span>
                 </div>
                 <div className="py-2 flex items-center justify-between">
-                  <span className="text-gray-600 font-medium">Vizionări finalizate cu succes</span>
-                  <span className="font-semibold text-gray-900 font-mono">{completedViewings} vizionări</span>
+                  <span className="text-gray-600 font-semibold">Vizionări finalizate cu succes</span>
+                  <span className="font-normal text-gray-900 font-sans tabular-nums">{completedViewings} vizionări</span>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Footer */}
-          <div className="h-[56px] px-5 bg-gray-50 border-t border-gray-200 flex items-center justify-between shrink-0">
+          <div className="h-14 px-5 bg-gray-50 border-t border-gray-200 flex items-center justify-between shrink-0">
             {onOpenProfile ? (
               <button
                 type="button"

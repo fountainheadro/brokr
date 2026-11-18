@@ -63,19 +63,19 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
           className="relative w-full max-w-lg bg-white rounded-lg border border-gray-200 shadow-2xl overflow-hidden flex flex-col z-[401]"
         >
           {/* Header */}
-          <div className="h-[52px] px-5 border-b border-gray-200 flex items-center justify-between shrink-0 bg-white">
-            <div className="flex items-center gap-2.5">
+          <div className="h-12 px-5 border-b border-gray-200 flex items-center justify-between shrink-0 bg-white">
+            <div className="flex items-center gap-3">
               <div className="w-7 h-7 rounded-md bg-[#051D35]/5 border border-[#051D35]/15 flex items-center justify-center text-[#BE9662]">
                 <User size={15} />
               </div>
               <div>
-                <h2 className="text-xs font-bold text-gray-900 tracking-tight">Profil Utilizator</h2>
-                <p className="text-[10px] text-gray-500 font-medium">Informații de identificare și detalii cont</p>
+                <h2 className="font-title text-xs font-semibold text-gray-900 tracking-tight">Profil Utilizator</h2>
+                <p className="text-[10px] text-gray-500 font-normal">Informații de identificare și detalii cont</p>
               </div>
             </div>
             <button
               onClick={onClose}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+              className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
               title="Închide"
             >
               <X size={15} />
@@ -90,24 +90,24 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
                 {userPhoto ? (
                   <img src={userPhoto} alt={userName} className="w-full h-full object-cover" />
                 ) : (
-                  <span className="text-xl font-bold text-[#051D35]">
+                  <span className="font-title text-xl font-semibold text-[#051D35]">
                     {userName.charAt(0).toUpperCase()}
                   </span>
                 )}
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-bold text-gray-900 truncate">{userName}</h3>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                  <h3 className="font-title text-sm font-semibold text-gray-900 truncate">{userName}</h3>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
                     <CheckCircle2 size={11} /> Activ
                   </span>
                 </div>
-                <p className="text-xs text-gray-500 truncate mt-0.5">{userEmail}</p>
+                <p className="text-xs font-normal text-gray-500 truncate mt-1">{userEmail}</p>
                 <div className="flex items-center gap-2 mt-2">
-                  <span className="text-[10px] font-semibold text-[#051D35] bg-[#BE9662]/15 px-2 py-0.5 rounded border border-[#BE9662]/30">
+                  <span className="text-[10px] font-semibold text-[#051D35] bg-[#BE9662]/15 px-2 py-1 rounded border border-[#BE9662]/30">
                     {userRole}
                   </span>
-                  <span className="text-[10px] font-medium text-gray-500">
+                  <span className="text-[10px] font-normal text-gray-500">
                     {agencyName}
                   </span>
                 </div>
@@ -115,60 +115,48 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
             </div>
 
             {/* Info Grid */}
-            <div className="space-y-3">
-              <h4 className="text-[11px] font-bold text-gray-400 uppercase tracking-wider">Date Profesionale</h4>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 bg-white rounded-md border border-gray-200">
-                  <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-medium mb-1">
-                    <ShieldCheck size={12} className="text-[#BE9662]" />
-                    Nivel Acces
-                  </div>
-                  <div className="text-xs font-semibold text-gray-900">Administrator / Senior</div>
+            <div className="space-y-4">
+              <h4 className="font-title text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Date Profesionale</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[11px] text-gray-500 font-semibold mb-1">Nivel Acces</span>
+                  <div className="text-[13px] font-normal text-gray-900">Administrator / Senior</div>
                 </div>
 
-                <div className="p-3 bg-white rounded-md border border-gray-200">
-                  <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-medium mb-1">
-                    <Building2 size={12} className="text-[#BE9662]" />
-                    Sediu / Agenție
-                  </div>
-                  <div className="text-xs font-semibold text-gray-900">{agencyName}</div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[11px] text-gray-500 font-semibold mb-1">Sediu / Agenție</span>
+                  <div className="text-[13px] font-normal text-gray-900">{agencyName}</div>
                 </div>
 
-                <div className="p-3 bg-white rounded-md border border-gray-200">
-                  <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-medium mb-1">
-                    <Phone size={12} className="text-[#BE9662]" />
-                    Telefon Contact
-                  </div>
-                  <div className="text-xs font-semibold text-gray-900 font-mono">0722 000 000</div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[11px] text-gray-500 font-semibold mb-1">Telefon Contact</span>
+                  <div className="text-[13px] font-normal text-gray-900 tabular-nums">0722 000 000</div>
                 </div>
 
-                <div className="p-3 bg-white rounded-md border border-gray-200">
-                  <div className="flex items-center gap-1.5 text-[10px] text-gray-500 font-medium mb-1">
-                    <Calendar size={12} className="text-[#BE9662]" />
-                    Membru Din
-                  </div>
-                  <div className="text-xs font-semibold text-gray-900">{creationTime}</div>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[11px] text-gray-500 font-semibold mb-1">Membru Din</span>
+                  <div className="text-[13px] font-normal text-gray-900">{creationTime}</div>
                 </div>
               </div>
             </div>
 
             {/* System Details */}
-            <div className="p-3 bg-gray-50 rounded-md border border-gray-200 text-[11px] text-gray-600 space-y-1">
+            <div className="pt-4 border-t border-gray-100 text-[11px] text-gray-600 space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-gray-500">ID Utilizator:</span>
-                <span className="font-mono text-gray-800 font-medium truncate max-w-[220px]">
+                <span className="text-gray-500 font-semibold">ID Utilizator:</span>
+                <span className="text-gray-800 font-normal truncate max-w-[220px] tabular-nums">
                   {currentUser?.uid || 'local-admin-uid'}
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-gray-500">Furnizor Autentificare:</span>
-                <span className="font-medium text-gray-800">Google OAuth 2.0</span>
+                <span className="text-gray-500 font-semibold">Furnizor Autentificare:</span>
+                <span className="font-normal text-gray-800">Google OAuth 2.0</span>
               </div>
             </div>
           </div>
 
           {/* Footer */}
-          <div className="h-[56px] px-5 bg-gray-50 border-t border-gray-200 flex items-center justify-between shrink-0">
+          <div className="h-14 px-5 bg-gray-50 border-t border-gray-200 flex items-center justify-between shrink-0">
             {onOpenStats ? (
               <button
                 type="button"
@@ -186,7 +174,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
               <button
                 type="button"
                 onClick={handleLogout}
-                className="h-8 px-3.5 rounded-md border border-red-200 bg-white hover:bg-red-50 text-red-600 text-xs font-semibold transition-colors flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                className="h-8 px-4 rounded-md border border-red-200 bg-white hover:bg-red-50 text-red-600 text-xs font-semibold transition-colors flex items-center gap-2 shadow-2xs cursor-pointer"
               >
                 <LogOut size={13} />
                 Deconectare

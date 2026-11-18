@@ -1,15 +1,6 @@
-import { 
-  collection, 
-  setDoc, 
-  doc, 
-  getDocs, 
-  query, 
-  where, 
-  deleteDoc, 
-  serverTimestamp 
-} from 'firebase/firestore';
-import { getToken, onMessage } from 'firebase/messaging';
-import { db, auth, getFCM, handleFirestoreError, OperationType } from '../lib/firebase';
+import { getToken } from 'firebase/messaging';
+import { auth, getFCM } from '../lib/firebase';
+import { crmApiClient } from '../core/crm/svc_crm-client';
 
 // Notification Categories supported by the application
 export interface NotificationPreferences {
@@ -25,8 +16,6 @@ const DEFAULT_PREFERENCES: NotificationPreferences = {
   system: true,
   muteAll: false
 };
-
-const TOKENS_COLLECTION = 'fcm_tokens';
 
 export const nativeNotificationService = {
   // Retrieve saved categories preferences from localStorage
@@ -73,7 +62,7 @@ export const nativeNotificationService = {
     return permission;
   },
 
-  // Register the FCM token with Firestore for deep-routing background pushes
+  // Register the FCM token with tenant-scoped backend API for background pushes
   async registerFCMToken(): Promise<string | null> {
     try {
       const messaging = await getFCM();
@@ -82,14 +71,11 @@ export const nativeNotificationService = {
         return null;
       }
 
-      // Read custom VAPID key if set in Vite environment, otherwise default is optional but recommended
       const vapidKey = (import.meta as any).env?.VITE_FIREBASE_VAPID_KEY || undefined;
-      
       console.log('[NotificationService] Fetching FCM device token...', vapidKey ? 'Using custom VAPID Key' : 'Using default Key configuration');
-      
-      // Register with Service Worker and fetch the push FCM token
-      const token = await getToken(messaging, { 
-        vapidKey: vapidKey 
+
+      const token = await getToken(messaging, {
+        vapidKey: vapidKey
       });
 
       if (token) {
@@ -106,38 +92,30 @@ export const nativeNotificationService = {
     }
   },
 
-  // Save the registration token to Firestore associated with the current online user UID
+  // Save the registration token scoped strictly to verified (tenantId, userId)
   async saveTokenToFirestore(token: string) {
     if (!auth.currentUser) return;
-    
-    const userId = auth.currentUser.uid;
-    const userEmail = auth.currentUser.email || '';
-    const tokenRef = doc(db, TOKENS_COLLECTION, token);
 
     try {
-      await setDoc(tokenRef, {
-        token: token,
-        userId: userId,
-        email: userEmail,
+      await crmApiClient.upsertFcmToken({
+        token,
         devicePlatform: navigator.platform || 'Unknown',
         userAgent: navigator.userAgent || 'UnknownBrowser',
-        updatedAt: serverTimestamp()
       });
-      console.log('[NotificationService] FCM Token registered in Firestore for UID:', userId);
+      console.log('[NotificationService] FCM Token registered in tenant-scoped store for UID:', auth.currentUser.uid);
     } catch (error) {
-      // Gracefully handle or log Firestore write errors
-      console.error('[NotificationService] Failed to save token in Firestore:', error);
+      console.error('[NotificationService] Failed to save token in tenant store:', error);
     }
   },
 
-  // Unregister/remove the FCM token from Firestore when logging out
+  // Unregister/remove the FCM token from tenant-scoped store when logging out
   async removeTokenFromFirestore(token: string) {
+    if (!auth.currentUser) return;
     try {
-      const tokenRef = doc(db, TOKENS_COLLECTION, token);
-      await deleteDoc(tokenRef);
-      console.log('[NotificationService] FCM Token deleted from database.');
+      await crmApiClient.deleteFcmToken(token);
+      console.log('[NotificationService] FCM Token deleted from tenant store.');
     } catch (error) {
-      console.error('[NotificationService] Failed to remove token from database:', error);
+      console.error('[NotificationService] Failed to remove token from tenant store:', error);
     }
   },
 
@@ -159,7 +137,6 @@ export const nativeNotificationService = {
           data: { urlPath }
         };
 
-        // Try to trigger via service worker registration first (crucial for iframe context, PWAs on Android, and iOS Safari)
         if ('serviceWorker' in navigator) {
           navigator.serviceWorker.ready.then((registration) => {
             registration.showNotification(title, options).catch((err) => {
@@ -188,7 +165,6 @@ export const nativeNotificationService = {
       notification.onclick = (e) => {
         e.preventDefault();
         window.focus();
-        // Route or navigate the application using standard navigation/reload
         window.location.hash = `#${urlPath}`;
         notification.close();
       };
@@ -200,16 +176,14 @@ export const nativeNotificationService = {
   // Simulate a background native operating system notification after a short delayed timer
   simulateNotification(title: string, body: string, category: keyof NotificationPreferences, delaySeconds: number = 3, urlPath: string = '/') {
     const prefs = this.getPreferences();
-    // Validate if the user has enabled notifications for this category
     if (!prefs[category]) {
       console.log(`[NotificationService] Simulated notification blocked: category "${category}" is disabled in user preferences.`);
       return;
     }
 
     console.log(`[NotificationService] Scheduling simulated OS notification in ${delaySeconds}s...`);
-    
+
     setTimeout(() => {
-      // Trigger native notification
       this.showNativeOSNotification(`[Simulare] ${title}`, body, urlPath);
     }, delaySeconds * 1000);
   }

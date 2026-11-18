@@ -9,35 +9,136 @@ service cloud.firestore {
 
     // --- Helpers ---
     function isSignedIn() {
-      return request.auth != null;
+      return request.auth != null && request.auth.token.email_verified == true;
     }
 
-    function isAdmin() {
+    function isPlatformAdmin() {
       return isSignedIn() && (
         request.auth.token.email == 'fountainheadro@gmail.com' ||
         request.auth.token.email == 'adrianmariusmp@gmail.com' ||
-        request.auth.token.email == 'adrian@cautlocuinta.ro'
+        request.auth.token.email == 'adrian@cautlocuinta.ro' ||
+        exists(/databases/$(database)/documents/platform_admins/$(request.auth.uid))
       );
     }
 
-    // --- Collection Routes ---
+    // Tenant Isolation Helpers
+    function isTenantMember(tenantId) {
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid));
+    }
 
+    function isTenantActive(tenantId) {
+      return exists(/databases/$(database)/documents/tenants/$(tenantId)) &&
+        get(/databases/$(database)/documents/tenants/$(tenantId)).data.status in ['active', 'trial'];
+    }
+
+    function getTenantMembership(tenantId) {
+      return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)).data;
+    }
+
+    function isTenantAdmin(tenantId) {
+      return isTenantMember(tenantId) &&
+        getTenantMembership(tenantId).status == 'active' &&
+        getTenantMembership(tenantId).role in ['agency_owner', 'agency_admin'];
+    }
+
+    // --- Multi-Tenant Data Boundaries ---
+
+    // 1. Root Tenant Document: Read allowed for active members or platform admin.
+    // Tenant users cannot modify status, plan_id, or tenant id.
+    match /tenants/{tenantId} {
+      allow read: if isPlatformAdmin() || (isTenantMember(tenantId) && isTenantActive(tenantId));
+      allow create: if isPlatformAdmin();
+      allow update: if isPlatformAdmin() || (
+        isTenantAdmin(tenantId) &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'status', 'plan_id', 'planId'])
+      );
+      allow delete: if isPlatformAdmin();
+
+      // 2. Tenant Members Subcollection:
+      // Users can NEVER modify their own role or status (prevents self-escalation).
+      match /users/{userId} {
+        allow read: if isPlatformAdmin() || (isTenantMember(tenantId) && isTenantActive(tenantId));
+        allow create: if isPlatformAdmin() || isTenantAdmin(tenantId);
+        allow update: if isPlatformAdmin() || (
+          isTenantAdmin(tenantId) &&
+          request.auth.uid != userId &&
+          (request.resource.data.tenant_id == tenantId || request.resource.data.tenantId == tenantId)
+        );
+        allow delete: if isPlatformAdmin() || (isTenantAdmin(tenantId) && request.auth.uid != userId);
+      }
+
+      // 3. Tenant-Scoped Operational Collections (/staff, /leads, /contacts, /documents, /activities, etc.):
+      match /{collection}/{docId} {
+        allow read, write: if isPlatformAdmin() || (
+          isTenantMember(tenantId) &&
+          isTenantActive(tenantId) &&
+          getTenantMembership(tenantId).status == 'active'
+        );
+      }
+    }
+
+    // --- Server-Managed Persistent State Collections (Client SDK Read/Write Denied) ---
+    match /platform_admins/{adminUid} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /preview_sessions/{sessionId} {
+      allow read, write: if false;
+    }
+
+    match /billing_events/{eventId} {
+      allow read, write: if false;
+    }
+
+    match /billing_tenant_state/{tenantId} {
+      allow read, write: if false;
+    }
+
+    match /subscriptions/{tenantId} {
+      allow read, write: if false;
+    }
+
+    match /tenant_usage/{usageId} {
+      allow read, write: if false;
+    }
+
+    match /ai_reservations/{reservationId} {
+      allow read, write: if false;
+    }
+
+    match /ai_jobs/{jobId} {
+      allow read, write: if false;
+    }
+
+    match /ai_conversations/{conversationId} {
+      allow read, write: if false;
+    }
+
+    // --- Legacy / Root Collection Routes (Authenticated CRM Only; Migration In Progress) ---
     match /leads/{leadId} {
-      allow read: if true;
+      allow read: if isSignedIn();
       allow create, update: if isSignedIn();
-      allow delete: if isAdmin();
+      allow delete: if isPlatformAdmin();
     }
 
     match /contacts/{contactId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn();
-      allow delete: if isAdmin();
+      allow delete: if isPlatformAdmin();
     }
 
     match /personal/{personalId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn();
-      allow delete: if isAdmin();
+      allow delete: if isPlatformAdmin();
+    }
+
+    match /staff/{staffId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isPlatformAdmin();
     }
 
     match /counters/{counterId} {
@@ -47,7 +148,7 @@ service cloud.firestore {
     match /documents/{documentId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn();
-      allow delete: if isAdmin();
+      allow delete: if isPlatformAdmin();
     }
 
     match /tours/{tourId} {
@@ -67,7 +168,25 @@ service cloud.firestore {
     }
 
     match /fcm_tokens/{tokenId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSignedIn() && (
+        resource == null ||
+        resource.data.user_id == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        isPlatformAdmin()
+      );
+      allow create: if isSignedIn() && (
+        request.resource.data.user_id == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid
+      );
+      allow update: if isSignedIn() && (
+        (resource.data.user_id == request.auth.uid && request.resource.data.user_id == request.auth.uid) ||
+        (resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid)
+      );
+      allow delete: if isSignedIn() && (
+        resource.data.user_id == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        isPlatformAdmin()
+      );
     }
   }
 }

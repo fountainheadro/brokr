@@ -1,18 +1,5 @@
-import { 
-  collection, 
-  addDoc, 
-  updateDoc, 
-  doc, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  serverTimestamp, 
-  getDoc,
-  deleteDoc,
-  where 
-} from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { entityIdService } from './entityIdService';
+import { crmApiClient } from '../core/crm/svc_crm-client';
 
 export type ActivityType = 
   | 'Vizionare' 
@@ -59,135 +46,35 @@ const cleanUndefined = (obj: any): any => {
 
 export const activityService = {
   addActivity: async (data: Omit<Activity, 'id' | 'createdAt' | 'updatedAt'>) => {
-    try {
-      const activityId = data.activityId || (await entityIdService.getNextId('activity'));
-      const now = serverTimestamp();
-      const sanitized = cleanUndefined({
-        ...data,
-        activityId,
-        type: data.type || 'Vizionare',
-        status: data.status || 'Programată'
-      });
+    const activityId = data.activityId || (await entityIdService.getNextId('activity'));
+    const sanitized = cleanUndefined({
+      ...data,
+      activityId,
+      type: data.type || 'Vizionare',
+      status: data.status || 'Programată',
+    });
 
-      // Save into activities collection
-      const docRef = await addDoc(collection(db, ACTIVITIES_COLLECTION), {
-        ...sanitized,
-        createdAt: now,
-        updatedAt: now
-      });
-
-      // Mirror to tours and viewings collections for backwards compatibility & calendar sync
-      try {
-        await addDoc(collection(db, 'tours'), {
-          tourId: activityId,
-          activityId,
-          propertyId: data.propertyId || '',
-          clientId: data.clientId || '',
-          clientName: data.clientName || 'Client',
-          clientPhone: data.clientPhone || '',
-          staffId: data.staffId || '',
-          staffName: data.staffName || '',
-          date: data.date,
-          hour: data.hour,
-          status: data.status || 'Programată',
-          notes: data.notes || '',
-          createdAt: now,
-          updatedAt: now
-        });
-      } catch (err) {
-        console.warn('[activityService] Mirroring to tours failed:', err);
-      }
-
-      try {
-        await addDoc(collection(db, 'viewings'), {
-          propertyId: data.propertyId || '',
-          contactId: data.clientId || activityId,
-          contactName: data.clientName || 'Client',
-          agentId: data.staffId || '',
-          agentName: data.staffName || '',
-          date: data.date,
-          hour: data.hour,
-          activityId,
-          createdAt: now,
-          updatedAt: now
-        });
-      } catch (err) {
-        console.warn('[activityService] Mirroring to viewings failed:', err);
-      }
-
-      return docRef;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, ACTIVITIES_COLLECTION);
-    }
+    // Server creates in /tenants/{tenantId}/activities and mirrors to tenant-scoped tours & viewings
+    return crmApiClient.create<Activity>(ACTIVITIES_COLLECTION, sanitized);
   },
 
   updateActivity: async (activityDocId: string, data: Partial<Activity>) => {
-    const path = `${ACTIVITIES_COLLECTION}/${activityDocId}`;
-    try {
-      const ref = doc(db, ACTIVITIES_COLLECTION, activityDocId);
-      return await updateDoc(ref, {
-        ...data,
-        updatedAt: serverTimestamp()
-      });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
-    }
+    await crmApiClient.update<Activity>(ACTIVITIES_COLLECTION, activityDocId, data);
   },
 
   deleteActivity: async (activityDocId: string) => {
-    const path = `${ACTIVITIES_COLLECTION}/${activityDocId}`;
-    try {
-      const ref = doc(db, ACTIVITIES_COLLECTION, activityDocId);
-      return await deleteDoc(ref);
-    } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, path);
-    }
+    await crmApiClient.remove(ACTIVITIES_COLLECTION, activityDocId);
   },
 
   getActivity: async (activityDocId: string) => {
-    const path = `${ACTIVITIES_COLLECTION}/${activityDocId}`;
-    try {
-      const ref = doc(db, ACTIVITIES_COLLECTION, activityDocId);
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        return { id: snap.id, ...snap.data() } as Activity;
-      }
-      return null;
-    } catch (error) {
-      handleFirestoreError(error, OperationType.GET, path);
-    }
+    return crmApiClient.getById<Activity>(ACTIVITIES_COLLECTION, activityDocId);
   },
 
   subscribeToPropertyActivities: (propertyId: string, callback: (activities: Activity[]) => void) => {
-    const q = query(
-      collection(db, ACTIVITIES_COLLECTION),
-      where('propertyId', '==', propertyId),
-      orderBy('date', 'asc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const activities = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-      })) as Activity[];
-      callback(activities);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, ACTIVITIES_COLLECTION);
-    });
+    return crmApiClient.subscribe<Activity>(ACTIVITIES_COLLECTION, callback, { propertyId });
   },
 
   subscribeToAllActivities: (callback: (activities: Activity[]) => void) => {
-    const q = query(
-      collection(db, ACTIVITIES_COLLECTION),
-      orderBy('date', 'asc')
-    );
-    return onSnapshot(q, (snapshot) => {
-      const activities = snapshot.docs.map(d => ({
-        id: d.id,
-        ...d.data()
-      })) as Activity[];
-      callback(activities);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, ACTIVITIES_COLLECTION);
-    });
-  }
+    return crmApiClient.subscribe<Activity>(ACTIVITIES_COLLECTION, callback);
+  },
 };

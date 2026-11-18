@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { 
   Building2, 
+  Calendar,
   ClipboardList, 
   Inbox, 
   PanelLeftClose, 
@@ -13,7 +14,7 @@ import { Contact } from "../services/contactsService";
 import { PersonalMember } from "../services/personalService";
 import { getCurrentVersion } from "../utils/versionService";
 
-export type NavSubItem = 'Lead-uri' | 'Cereri' | 'Proprietati' | 'Imobile' | 'Proprietăți' | 'Contacte' | 'Clienți' | 'Personal';
+export type NavSubItem = 'Lead-uri' | 'Cereri' | 'Proprietati' | 'Imobile' | 'Proprietăți' | 'Calendar' | 'Contacte' | 'Clienți' | 'Personal';
 export type NavTransactionType = 'Închiriere' | 'Vânzare';
 
 interface SidebarProps {
@@ -95,8 +96,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         isCollapsed ? 'w-[56px]' : 'w-[230px]'
       }`}
     >
-      {/* Top Header Box (Height matches the main top header: exact h-[50px]) */}
-      <div className="h-[50px] shrink-0 border-b border-gray-200 bg-white flex items-center justify-between px-3.5">
+      {/* Top Header Box (Height matches the main top header: exact h-12) */}
+      <div className="h-12 shrink-0 border-b border-gray-200 bg-white flex items-center justify-between px-4">
         {!isCollapsed ? (
           <>
             <div 
@@ -104,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="flex items-center cursor-pointer select-none group"
               title="Acasă - brokr"
             >
-              <span className="text-[22px] font-bold tracking-tight text-[#051D35] font-sans leading-none flex items-center">
+              <span className="font-title text-[22px] font-semibold tracking-tight text-[#051D35] leading-none flex items-center">
                 brokr<span className="text-[#BE9662]">.</span>
               </span>
             </div>
@@ -112,7 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button 
               type="button"
               onClick={handleToggleCollapse}
-              className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors cursor-pointer focus:outline-none"
+              className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-md transition-colors cursor-pointer focus:outline-none"
               title="Restrânge meniul"
             >
               <PanelLeftClose size={15} />
@@ -127,7 +128,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="w-9 h-9 rounded-md flex items-center justify-center bg-white hover:bg-gray-100 transition-all cursor-pointer focus:outline-none"
               title="Extinde meniul (brokr)"
             >
-              <span className="text-[20px] font-bold tracking-tight text-[#051D35] font-sans leading-none">
+              <span className="font-title text-[20px] font-semibold tracking-tight text-[#051D35] leading-none">
                 b<span className="text-[#BE9662]">.</span>
               </span>
             </button>
@@ -135,7 +136,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
       </div>
 
-      {/* Main navigation container: Lead-uri, Cereri, Imobile, Contacte, Personal */}
+      {/* Main navigation container: Lead-uri, Cereri, Proprietati, Calendar, Contacte, Personal */}
       <div className="flex-1 overflow-y-auto no-scrollbar p-0 divide-y divide-gray-100 font-sans">
         {!isCollapsed ? (
           <>
@@ -143,7 +144,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Lead-uri')}
-              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
+              className={`w-full h-12 px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 activeSubItem === 'Lead-uri' && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
                   : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -154,7 +155,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="text-[13px] font-sans font-medium truncate">Lead-uri</span>
               </div>
               {counts.leads > 0 && (
-                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                <span className={`text-[11px] font-sans tabular-nums px-2 py-1 rounded font-normal ${
                   activeSubItem === 'Lead-uri' && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.leads}
@@ -166,7 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Cereri')}
-              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
+              className={`w-full h-12 px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 activeSubItem === 'Cereri' && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
                   : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -177,7 +178,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="text-[13px] font-sans font-medium truncate">Cereri</span>
               </div>
               {counts.cereri > 0 && (
-                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                <span className={`text-[11px] font-sans tabular-nums px-2 py-1 rounded font-normal ${
                   activeSubItem === 'Cereri' && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.cereri}
@@ -189,7 +190,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Proprietati')}
-              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
+              className={`w-full h-12 px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 isImobileActive && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
                   : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -200,7 +201,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="text-[13px] font-sans font-medium truncate">Proprietati</span>
               </div>
               {counts.proprietati > 0 && (
-                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                <span className={`text-[11px] font-sans tabular-nums px-2 py-1 rounded font-normal ${
                   isImobileActive && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.proprietati}
@@ -208,11 +209,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </button>
 
+            {/* Calendar */}
+            <button
+              type="button"
+              onClick={() => handleItemClick('Calendar')}
+              className={`w-full h-12 px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
+                activeSubItem === 'Calendar' || location.pathname === '/calendar'
+                  ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
+              }`}
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <Calendar size={18} className={activeSubItem === 'Calendar' || location.pathname === '/calendar' ? 'text-[#BE9662]' : 'text-gray-500'} />
+                <span className="text-[13px] font-sans font-medium truncate">Calendar</span>
+              </div>
+            </button>
+
             {/* Contacte */}
             <button
               type="button"
               onClick={() => handleItemClick('Contacte')}
-              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
+              className={`w-full h-12 px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 isContacteActive && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
                   : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -223,7 +240,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="text-[13px] font-sans font-medium truncate">Contacte</span>
               </div>
               {counts.clienti > 0 && (
-                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                <span className={`text-[11px] font-sans tabular-nums px-2 py-1 rounded font-normal ${
                   isContacteActive && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.clienti}
@@ -235,7 +252,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Personal')}
-              className={`w-full h-[50px] px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
+              className={`w-full h-12 px-5 rounded-none flex items-center justify-between transition-colors cursor-pointer select-none text-left font-sans ${
                 activeSubItem === 'Personal' && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-gray-900 font-semibold border-l-4 border-l-[#BE9662]'
                   : 'text-gray-700 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -246,7 +263,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <span className="text-[13px] font-sans font-medium truncate">Personal</span>
               </div>
               {counts.personal > 0 && (
-                <span className={`text-[11px] font-mono px-2 py-0.5 rounded font-semibold ${
+                <span className={`text-[11px] font-sans tabular-nums px-2 py-1 rounded font-normal ${
                   activeSubItem === 'Personal' && location.pathname !== '/calendar' ? 'bg-white border border-gray-200 text-[#051D35]' : 'bg-gray-100 text-gray-600'
                 }`}>
                   {counts.personal}
@@ -260,7 +277,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Lead-uri')}
-              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
+              className={`w-full h-12 flex items-center justify-center transition-colors cursor-pointer select-none ${
                 activeSubItem === 'Lead-uri' && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
                   : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -272,7 +289,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Cereri')}
-              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
+              className={`w-full h-12 flex items-center justify-center transition-colors cursor-pointer select-none ${
                 activeSubItem === 'Cereri' && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
                   : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -284,7 +301,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Proprietati')}
-              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
+              className={`w-full h-12 flex items-center justify-center transition-colors cursor-pointer select-none ${
                 isImobileActive && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
                   : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -295,8 +312,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
             <button
               type="button"
+              onClick={() => handleItemClick('Calendar')}
+              className={`w-full h-12 flex items-center justify-center transition-colors cursor-pointer select-none ${
+                activeSubItem === 'Calendar' || location.pathname === '/calendar'
+                  ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
+                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
+              }`}
+              title="Calendar"
+            >
+              <Calendar size={18} />
+            </button>
+            <button
+              type="button"
               onClick={() => handleItemClick('Contacte')}
-              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
+              className={`w-full h-12 flex items-center justify-center transition-colors cursor-pointer select-none ${
                 isContacteActive && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
                   : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -308,7 +337,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <button
               type="button"
               onClick={() => handleItemClick('Personal')}
-              className={`w-full h-[50px] flex items-center justify-center transition-colors cursor-pointer select-none ${
+              className={`w-full h-12 flex items-center justify-center transition-colors cursor-pointer select-none ${
                 activeSubItem === 'Personal' && location.pathname !== '/calendar'
                   ? 'bg-gray-100 text-[#051D35] border-l-4 border-l-[#BE9662]'
                   : 'text-gray-500 hover:bg-gray-50 hover:text-gray-900 border-l-4 border-l-transparent'
@@ -337,10 +366,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="h-[48px] px-1 flex flex-col items-center justify-center cursor-default font-sans text-center"
             title={`${versionInfo.versionCode} / ${versionInfo.aiInputsCount} ${versionInfo.dateFormatted}`}
           >
-            <span className="text-[10px] font-sans font-bold text-gray-700 leading-tight">
+            <span className="text-[10px] font-sans font-semibold text-gray-700 leading-tight">
               v{versionInfo.major}.{versionInfo.minor}
             </span>
-            <span className="text-[9px] font-sans text-gray-400 leading-tight mt-0.5">
+            <span className="text-[9px] font-sans text-gray-400 leading-tight mt-1">
               /{versionInfo.aiInputsCount}
             </span>
           </div>

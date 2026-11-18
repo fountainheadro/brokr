@@ -1,3 +1,6 @@
+import { getApiAuthHeaders } from "../lib/apiAuth";
+import { getCachedTitleRule } from "./automationSettingsService";
+
 export interface CRMData {
   detaliiGenerale: {
     stadiu: string;
@@ -152,6 +155,7 @@ export interface ExtractionResult {
   markdownMarketing: string;
   summary: string;
   presentationSections?: Record<string, Record<string, string>> | null;
+  automationSource?: Record<string, any> | null;
   originalDescription?: string;
   text?: string;
 }
@@ -168,12 +172,12 @@ export interface BasicLeadData {
 
 // Securely proxy the basic parsing request to our backend API route
 export async function extractBasicData(content: string, title: string): Promise<BasicLeadData> {
+  const headers = await getApiAuthHeaders({ "Content-Type": "application/json" });
+  const titleAutomationRule = getCachedTitleRule();
   const response = await fetch("/api/extract-basic", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ content, title })
+    headers,
+    body: JSON.stringify({ content, title, titleAutomationRule })
   });
 
   if (!response.ok) {
@@ -192,13 +196,18 @@ export async function extractData(
   propertyId?: string,
   propertyUrl?: string
 ): Promise<ExtractionResult> {
+  const headers = await getApiAuthHeaders({ "Content-Type": "application/json" });
+  const titleAutomationRule = getCachedTitleRule();
   const response = await fetch("/api/extract-data", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ content, title, imageUrls, propertyId, propertyUrl })
+    headers,
+    body: JSON.stringify({ content, title, imageUrls, propertyId, propertyUrl, titleAutomationRule })
   });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.error || "Eroare la extragerea completă a datelor de la server");
+  }
 
   return response.json();
 }
@@ -220,11 +229,10 @@ export interface AITextResult {
 }
 
 export async function generateAIText(params: AITextParams): Promise<AITextResult> {
+  const headers = await getApiAuthHeaders({ "Content-Type": "application/json" });
   const response = await fetch("/api/generate-ai-text", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
+    headers,
     body: JSON.stringify(params)
   });
 

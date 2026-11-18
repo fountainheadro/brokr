@@ -21,6 +21,7 @@ import { toast } from "react-hot-toast";
 import { contactsService, Contact } from "../services/contactsService";
 import { Lead, getLeadRole } from "../services/leadsService";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { getThumbnailImageUrl } from "../utils/imageUtils";
 
 const formatWhatsAppLink = (phone: string) => {
   const cleanPhone = phone.replace(/\D/g, "");
@@ -112,21 +113,21 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50 shrink-0">
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
               <div className="w-8 h-8 rounded-lg bg-[#BE9662]/10 border border-[#BE9662]/20 flex items-center justify-center text-[#BE9662] shrink-0">
                 <Building2 size={18} />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <h3 className="text-sm font-semibold text-gray-900 truncate">
+                  <h3 className="font-title text-sm font-semibold text-gray-900 truncate">
                     {lead.title}
                   </h3>
                   {internalId && (
-                    <span className="text-[10px] font-mono font-semibold px-1.5 py-0.2 rounded bg-[#051D35]/5 text-[#051D35] border border-[#051D35]/15 shrink-0">
+                    <span className="text-[10px] font-sans font-normal px-2 py-1 rounded bg-[#051D35]/5 text-[#051D35] border border-[#051D35]/15 shrink-0">
                       #{internalId}
                     </span>
                   )}
-                  <span className={`text-[10px] font-semibold px-1.5 py-0.2 rounded border tracking-wide uppercase ${
+                  <span className={`text-[10px] font-semibold px-2 py-1 rounded border tracking-wide uppercase ${
                     role === 'Proprietar' 
                       ? 'bg-amber-50 text-amber-800 border-amber-200' 
                       : role === 'Chirias' 
@@ -136,18 +137,18 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                     {role === 'Chirias' ? 'Chiriaș' : (role === 'Cumparator' ? 'Cumpărător' : 'Proprietar')}
                   </span>
                 </div>
-                <p className="text-[11px] text-gray-500 truncate mt-0.5">
+                <p className="text-[11px] text-gray-500 font-normal truncate mt-1">
                   Detalii lead, proprietate și contacte interesate
                 </p>
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0 ml-3">
+            <div className="flex items-center gap-2 shrink-0 ml-3">
               {/* Share Button */}
               <button
                 type="button"
                 onClick={handleShare}
-                className="h-8 px-2.5 rounded-md border border-gray-200 bg-white hover:bg-amber-50/50 hover:border-[#BE9662]/40 text-gray-700 hover:text-[#051D35] text-xs font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+                className="h-8 px-3 rounded-md border border-gray-200 bg-white hover:bg-amber-50/50 hover:border-[#BE9662]/40 text-gray-700 hover:text-[#051D35] text-xs font-semibold flex items-center gap-2 transition-all shadow-2xs cursor-pointer"
                 title="Copiază link public de prezentare (fără date proprietar)"
               >
                 {copiedShare ? <Check size={13} className="text-emerald-600" /> : <Share2 size={13} className="text-[#BE9662]" />}
@@ -181,7 +182,7 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
                 title="Închide"
               >
                 <X size={16} />
@@ -193,42 +194,42 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
           <div className="p-5 space-y-4 text-xs overflow-y-auto">
 
             {/* Property Overview Card */}
-            <div className="p-4 bg-gray-50/50 border border-gray-200 rounded-lg space-y-3">
+            <div className="p-4 bg-gray-50/50 border border-gray-200 rounded-lg space-y-4">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                <h4 className="font-title text-[12px] font-semibold text-[#051D35] uppercase tracking-wider flex items-center gap-2">
                   <Tag size={12} className="text-[#BE9662]" />
                   <span>Informații Imobil</span>
-                </span>
-                <span className="text-base font-bold text-[#051D35] font-mono">
+                </h4>
+                <span className="text-base font-normal text-[#051D35] font-sans tabular-nums">
                   {lead.price || "Preț la cerere"}
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-center">
-                <div className="sm:col-span-8 grid grid-cols-2 gap-2 text-xs">
-                  <div className="p-2.5 rounded-md bg-white border border-gray-200">
-                    <span className="block text-[10px] font-semibold text-gray-400 uppercase">Tranzacție</span>
-                    <span className="font-semibold text-gray-800">{lead.transactionType || "Vânzare"}</span>
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4 items-center">
+                <div className="sm:col-span-8 grid grid-cols-2 gap-4 text-xs">
+                  <div className="p-3 rounded-md bg-white border border-gray-200">
+                    <span className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Tranzacție</span>
+                    <span className="font-normal text-gray-800">{lead.transactionType || "Vânzare"}</span>
                   </div>
 
-                  <div className="p-2.5 rounded-md bg-white border border-gray-200">
-                    <span className="block text-[10px] font-semibold text-gray-400 uppercase">Categorie</span>
-                    <span className="font-semibold text-gray-800">{lead.categoria || "Apartament"}</span>
+                  <div className="p-3 rounded-md bg-white border border-gray-200">
+                    <span className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Categorie</span>
+                    <span className="font-normal text-gray-800">{lead.categoria || "Apartament"}</span>
                   </div>
 
-                  <div className="p-2.5 rounded-md bg-white border border-gray-200">
-                    <span className="block text-[10px] font-semibold text-gray-400 uppercase">Camere</span>
-                    <span className="font-semibold text-gray-800">{rooms ? `${rooms} camere` : "-"}</span>
+                  <div className="p-3 rounded-md bg-white border border-gray-200">
+                    <span className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Camere</span>
+                    <span className="font-normal text-gray-800">{rooms ? `${rooms} camere` : "-"}</span>
                   </div>
 
-                  <div className="p-2.5 rounded-md bg-white border border-gray-200">
-                    <span className="block text-[10px] font-semibold text-gray-400 uppercase">Suprafață utilă</span>
-                    <span className="font-semibold text-gray-800">{suprafata ? `${suprafata} mp` : "-"}</span>
+                  <div className="p-3 rounded-md bg-white border border-gray-200">
+                    <span className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Suprafață utilă</span>
+                    <span className="font-normal text-gray-800">{suprafata ? `${suprafata} mp` : "-"}</span>
                   </div>
 
-                  <div className="p-2.5 rounded-md bg-white border border-gray-200 col-span-2 flex items-center gap-1.5">
+                  <div className="p-3 rounded-md bg-white border border-gray-200 col-span-2 flex items-center gap-2">
                     <MapPin size={13} className="text-[#BE9662] shrink-0" />
-                    <span className="text-gray-700 font-medium truncate">{lead.zone || "București"}</span>
+                    <span className="text-gray-700 font-normal truncate">{lead.zone || "București"}</span>
                   </div>
                 </div>
 
@@ -237,8 +238,9 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                   <div className="w-full h-28 rounded-lg overflow-hidden bg-gray-100 border border-gray-200 flex items-center justify-center shadow-2xs">
                     {displayImage ? (
                       <img 
-                        src={displayImage} 
+                        src={getThumbnailImageUrl(displayImage, 480)} 
                         alt={lead.title}
+                        decoding="async"
                         className="w-full h-full object-cover"
                         referrerPolicy="no-referrer"
                       />
@@ -254,16 +256,16 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
             </div>
 
             {/* Split Sections: Proprietar & Contacte interesate */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
               {/* Section 1: Proprietar */}
               <div className="p-4 bg-white border border-gray-200 rounded-lg space-y-3 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between pb-2 border-b border-gray-100">
-                    <span className="text-[11px] font-semibold text-gray-700 flex items-center gap-1.5">
+                    <h4 className="font-title text-[12px] font-semibold text-[#051D35] flex items-center gap-2">
                       <User size={13} className="text-[#051D35]" />
                       <span>Proprietar</span>
-                    </span>
+                    </h4>
                     <button
                       type="button"
                       onClick={onAddContactClick}
@@ -276,19 +278,19 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                   </div>
 
                   {/* Primary Owner Box */}
-                  <div className="mt-2.5 p-3 rounded-md bg-gray-50 border border-gray-200 space-y-2">
+                  <div className="mt-3 p-3 rounded-md bg-gray-50 border border-gray-200 space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="font-semibold text-gray-900 text-xs truncate">
+                      <span className="font-normal text-gray-900 text-xs truncate">
                         {lead.ownerName || "Nespecificat"}
                       </span>
-                      <span className="text-[10px] font-semibold px-1.5 py-0.2 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                      <span className="text-[10px] font-semibold px-2 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200">
                         Principal
                       </span>
                     </div>
 
                     {lead.ownerPhone && lead.ownerPhone !== "Nespecificat" ? (
-                      <div className="flex items-center justify-between pt-1.5 border-t border-gray-200/60">
-                        <span className="font-mono font-bold text-gray-800 text-xs">
+                      <div className="flex items-center justify-between pt-2 border-t border-gray-200/60">
+                        <span className="font-sans font-normal text-gray-800 text-xs tabular-nums">
                           {lead.ownerPhone}
                         </span>
 
@@ -306,7 +308,7 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                             href={formatWhatsAppLink(lead.ownerPhone)}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="h-5 px-1.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[10px] font-bold flex items-center gap-1 border border-emerald-200 transition-colors"
+                            className="h-6 px-2 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-[10px] font-semibold flex items-center gap-1 border border-emerald-200 transition-colors"
                             title="WhatsApp"
                           >
                             <MessageCircle size={10} />
@@ -315,13 +317,13 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                         </div>
                       </div>
                     ) : (
-                      <p className="text-[11px] text-gray-400 italic">Telefon nespecificat</p>
+                      <p className="text-[11px] text-gray-400 font-normal italic">Telefon nespecificat</p>
                     )}
                   </div>
 
                   {/* Additional Owner Contacts */}
                   {ownerContacts.length > 0 && (
-                    <div className="mt-2.5 space-y-1.5">
+                    <div className="mt-3 space-y-2">
                       <span className="text-[10px] font-semibold text-gray-400 uppercase block">
                         Alte contacte proprietar ({ownerContacts.length})
                       </span>
@@ -331,8 +333,8 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                           onClick={() => { onContactClick(contact); onClose(); }}
                           className="flex items-center justify-between p-2 rounded bg-gray-50 hover:bg-gray-100/70 border border-gray-200 transition-colors cursor-pointer text-xs"
                         >
-                          <span className="font-medium text-gray-800">{contact.firstName} {contact.lastName}</span>
-                          <span className="font-mono text-gray-500 text-[11px]">{contact.phone}</span>
+                          <span className="font-normal text-gray-800">{contact.firstName} {contact.lastName}</span>
+                          <span className="font-sans font-normal text-gray-500 text-[11px] tabular-nums">{contact.phone}</span>
                         </div>
                       ))}
                     </div>
@@ -344,10 +346,10 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
               <div className="p-4 bg-white border border-gray-200 rounded-lg space-y-3 flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between pb-2 border-b border-gray-100">
-                    <span className="text-[11px] font-semibold text-gray-700 flex items-center gap-1.5">
+                    <h4 className="font-title text-[12px] font-semibold text-[#051D35] flex items-center gap-2">
                       <Users size={13} className="text-[#BE9662]" />
                       <span>Contacte Interesate ({renterBuyerContacts.length})</span>
-                    </span>
+                    </h4>
                     <button
                       type="button"
                       onClick={onAddContactClick}
@@ -360,18 +362,18 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                   </div>
 
                   {renterBuyerContacts.length > 0 ? (
-                    <div className="mt-2.5 space-y-1.5 max-h-48 overflow-y-auto">
+                    <div className="mt-3 space-y-2 max-h-48 overflow-y-auto">
                       {renterBuyerContacts.map((contact, idx) => (
                         <div
                           key={contact.id || idx}
                           onClick={() => { onContactClick(contact); onClose(); }}
-                          className="flex items-center justify-between p-2.5 rounded bg-gray-50 hover:bg-gray-100/70 border border-gray-200 transition-colors cursor-pointer text-xs group"
+                          className="flex items-center justify-between p-3 rounded bg-gray-50 hover:bg-gray-100/70 border border-gray-200 transition-colors cursor-pointer text-xs group"
                         >
                           <div>
-                            <span className="font-semibold text-gray-900 block group-hover:text-[#051D35]">
+                            <span className="font-normal text-gray-900 block group-hover:text-[#051D35]">
                               {contact.firstName} {contact.lastName}
                             </span>
-                            <span className={`text-[9px] font-semibold px-1.5 py-0.2 rounded mt-0.5 inline-block ${
+                            <span className={`text-[9px] font-semibold px-2 py-1 rounded mt-1 inline-block ${
                               contact.type === "Buyer" 
                                 ? "bg-blue-50 text-blue-700 border border-blue-200" 
                                 : "bg-emerald-50 text-emerald-700 border border-emerald-200"
@@ -380,8 +382,8 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-1.5">
-                            <span className="font-mono text-gray-600 text-[11px]">{contact.phone}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-sans font-normal text-gray-600 text-[11px] tabular-nums">{contact.phone}</span>
                             <button
                               type="button"
                               onClick={async (e) => {
@@ -416,9 +418,9 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
           </div>
 
           {/* Footer Bar */}
-          <div className="px-5 py-3.5 flex items-center justify-between border-t border-gray-100 bg-gray-50/50 shrink-0">
-            <span className="text-[11px] text-gray-400 font-mono">
-              Status: <strong className="text-gray-700">{lead.status}</strong>
+          <div className="px-5 py-4 flex items-center justify-between border-t border-gray-100 bg-gray-50/50 shrink-0">
+            <span className="text-[11px] text-gray-400 font-sans">
+              Status: <strong className="font-semibold text-gray-700">{lead.status}</strong>
             </span>
 
             <div className="flex items-center gap-2">

@@ -48,7 +48,9 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { auth } from "../lib/firebase";
+import { ProtectedPublicImage } from "./ProtectedPublicImage";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -93,6 +95,7 @@ interface AttributeRowProps {
   onEditChange?: (val: string) => void;
   multiline?: boolean;
   options?: string[];
+  isPublicShared?: boolean;
 }
 
 const AttributeRow: React.FC<AttributeRowProps> = ({ 
@@ -102,15 +105,21 @@ const AttributeRow: React.FC<AttributeRowProps> = ({
   isEditing = false,
   editValue,
   onEditChange,
-  options
+  multiline = false,
+  options,
+  isPublicShared = false
 }) => {
   const [copied, setCopied] = useState(false);
   const [isFocused, setIsFocused] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectRef = useRef<HTMLSelectElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const textToCopy = copyValue || (typeof value === "string" ? value : "");
 
   const rawEdit = editValue ?? (typeof value === "string" ? value : "");
+  const displayStr = typeof value === "string" ? value : "";
+  const useMultiline = multiline || rawEdit.length > 52 || displayStr.length > 52;
+
   let matchedValue = rawEdit;
   if (options && options.length > 0) {
     const found = options.find(opt => opt.toLowerCase() === rawEdit.toLowerCase());
@@ -134,99 +143,114 @@ const AttributeRow: React.FC<AttributeRowProps> = ({
     toast.success(`Copiat: ${label}`);
   };
 
-  return (
-    <div 
-      className={`group/row relative flex items-stretch border-b border-gray-100 last:border-b-0 transition-colors font-sans min-h-[36px] ${
-        isFocused 
-          ? "border-l-3 border-l-[#BE9662]" 
-          : "border-l-3 border-l-transparent"
-      }`}
-    >
-      {/* Left Cell: Label */}
-      <div className="w-[30%] sm:w-[22%] sm:min-w-[130px] px-3.5 py-2 flex items-center shrink-0 border-r border-gray-100 select-text bg-gray-50/30">
-        <span className={`text-[12px] font-sans transition-colors flex items-center gap-1.5 ${
-          isFocused ? "font-bold text-[#051D35]" : "font-medium text-gray-900"
-        }`}>
-          {label}:
-          {isFocused && (
-            <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662] shrink-0 animate-pulse" title="Mod focus activ" />
-          )}
-        </span>
-      </div>
+  const activeFocus = isEditing && isFocused;
+  const focusBoxClasses = activeFocus
+    ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
+    : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-900";
 
-      {/* Right Cell: Value (100% of cell surface is the seamless editable input or select dropdown) */}
-      <div 
+  return (
+    <div className="group/row relative flex flex-col min-w-0 font-sans">
+      {/* Classic Label Above */}
+      <label
         onClick={() => {
-          if (isEditing) {
-            if (options && options.length > 0) {
-              selectRef.current?.focus();
-            } else {
-              inputRef.current?.focus();
-            }
-          }
+          if (!isEditing) return;
+          if (options && options.length > 0) selectRef.current?.focus();
+          else if (useMultiline) textareaRef.current?.focus();
+          else inputRef.current?.focus();
         }}
-        className={`flex-1 relative flex items-stretch min-w-0 transition-colors ${
-          isFocused 
-            ? "bg-amber-50/40" 
-            : isEditing 
-              ? "hover:bg-amber-50/15 cursor-pointer" 
-              : "hover:bg-gray-50/60"
+        className={`flex items-center gap-2 px-2 text-[12px] leading-4 ${
+          isPublicShared && !isEditing ? "mb-[8px]" : "mb-1"
+        } font-semibold text-[#051D35] transition-colors select-none ${
+          isEditing ? "cursor-pointer" : ""
         }`}
       >
-        {isEditing ? (
-          options && options.length > 0 ? (
-            <div className="relative w-full h-full flex items-center">
-              <select
-                ref={selectRef}
-                value={matchedValue}
-                onChange={(e) => onEditChange?.(e.target.value)}
-                onFocus={() => setIsFocused(true)}
-                onBlur={() => setIsFocused(false)}
-                className={`w-full h-full min-h-[36px] px-3.5 pr-8 py-2 text-[12px] font-sans leading-normal bg-transparent border-none outline-none rounded-none focus:outline-none focus:ring-0 p-0 m-0 shadow-none cursor-pointer appearance-none transition-colors ${
-                  isFocused ? "text-[#051D35] font-semibold" : "text-gray-800 font-normal"
-                }`}
-              >
-                {options.map((opt) => (
-                  <option key={opt} value={opt} className="bg-white text-gray-900 py-1 font-sans">
-                    {opt}
-                  </option>
-                ))}
-              </select>
-              <ChevronDown size={13} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
-          ) : (
-            <input
-              ref={inputRef}
-              type="text"
-              value={editValue ?? (typeof value === "string" ? value : "")}
+        <span className="truncate">{label}</span>
+        {activeFocus && (
+          <span
+            className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
+            title="Mod focus activ"
+          />
+        )}
+      </label>
+
+      {/* Reserved Information / Input Slot Below (exact matching geometry -> 0px layout shift) */}
+      {isEditing ? (
+        options && options.length > 0 ? (
+          <div className="relative w-full h-9">
+            <select
+              ref={selectRef}
+              value={matchedValue}
               onChange={(e) => onEditChange?.(e.target.value)}
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLElement).blur();
-              }}
-              className={`w-full h-full min-h-[36px] px-3.5 py-2 text-[12px] font-sans leading-normal bg-transparent border-none outline-none rounded-none focus:outline-none focus:ring-0 p-0 m-0 shadow-none cursor-text select-text transition-colors ${
-                isFocused ? "text-[#051D35] font-semibold" : "text-gray-800 font-normal"
+              className={`w-full !h-9 !pl-2 !pr-7 !py-0 rounded-md border text-[12px] leading-5 font-sans font-normal outline-none shadow-none cursor-pointer appearance-none transition-all ${focusBoxClasses}`}
+            >
+              {options.map((opt) => (
+                <option key={opt} value={opt} className="bg-white text-gray-900 font-sans font-normal">
+                  {opt}
+                </option>
+              ))}
+            </select>
+            <ChevronDown
+              size={13}
+              className={`absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none transition-colors ${
+                activeFocus ? "text-[#BE9662]" : "text-gray-400"
               }`}
             />
-          )
-        ) : (
-          <div className="w-full h-full min-h-[36px] px-3.5 py-2 text-[12px] font-sans text-gray-600 leading-normal flex items-center break-words select-text pr-10">
-            {value}
           </div>
-        )}
+        ) : useMultiline ? (
+          <textarea
+            ref={textareaRef}
+            rows={2}
+            value={editValue ?? (typeof value === "string" ? value : "")}
+            onChange={(e) => onEditChange?.(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") (e.target as HTMLElement).blur();
+            }}
+            className={`w-full !px-2 !py-2 !min-h-[56px] rounded-md border text-[12px] leading-5 font-sans font-normal outline-none shadow-none resize-y transition-all ${focusBoxClasses}`}
+          />
+        ) : (
+          <input
+            ref={inputRef}
+            type="text"
+            value={editValue ?? (typeof value === "string" ? value : "")}
+            onChange={(e) => onEditChange?.(e.target.value)}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => setIsFocused(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "Escape") (e.target as HTMLElement).blur();
+            }}
+            className={`w-full !h-9 !px-2 !py-0 rounded-md border text-[12px] leading-5 font-sans font-normal outline-none shadow-none transition-all ${focusBoxClasses}`}
+          />
+        )
+      ) : (
+        <div
+          className={`relative w-full px-2 rounded-md border border-transparent bg-transparent text-[12px] font-normal text-gray-900 select-text leading-5 ${
+            isPublicShared
+              ? "h-auto py-0 whitespace-pre-wrap break-words pr-8"
+              : useMultiline
+                ? "min-h-[56px] py-2 whitespace-pre-wrap break-words pr-8"
+                : "h-9 flex items-center pr-8"
+          }`}
+        >
+          <span className={isPublicShared || useMultiline ? "block w-full" : "truncate block w-full"}>
+            {value}
+          </span>
 
-        {!isEditing && textToCopy && (
-          <button
-            type="button"
-            onClick={handleCopy}
-            className="opacity-0 group-hover/row:opacity-100 flex items-center justify-center w-6 h-6 rounded-md bg-white border border-gray-200 text-gray-400 hover:text-[#051D35] hover:border-gray-300 shadow-2xs transition-all active:scale-90 absolute right-2.5 top-1/2 -translate-y-1/2 cursor-pointer z-10"
-            title={`Copiază ${label}`}
-          >
-            {copied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
-          </button>
-        )}
-      </div>
+          {textToCopy && (
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="opacity-0 group-hover/row:opacity-100 flex items-center justify-center w-6 h-6 rounded-md bg-white border border-gray-200 text-gray-400 hover:text-[#051D35] hover:border-gray-300 shadow-2xs transition-all active:scale-90 absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer z-10"
+              title={`Copiază ${label}`}
+            >
+              {copied ? <Check size={11} className="text-emerald-600" /> : <Copy size={11} />}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };
@@ -235,22 +259,23 @@ interface SubCategoryHeaderProps {
   title: string;
   count?: string;
   actions?: React.ReactNode;
+  isPublicShared?: boolean;
 }
 
 const SubCategoryHeader: React.FC<SubCategoryHeaderProps> = ({ title, count, actions }) => (
-  <div className="min-h-9 py-1 px-3.5 bg-gray-50/80 border-b border-gray-100 flex items-center justify-between gap-2 select-none font-sans">
+  <div className="min-h-10 py-2 px-5 bg-gray-50/60 border-b border-gray-100 flex items-center justify-between gap-2 select-none">
     <div className="flex items-center gap-2">
-      <span className="w-1.5 h-1.5 rounded-full bg-[#BE9662]" />
-      <span className="text-[11px] font-bold uppercase tracking-wider text-[#051D35] font-sans">
+      <span className="w-2 h-2 rounded-full bg-[#BE9662]" />
+      <span className="font-title text-[12px] font-semibold text-[#051D35]">
         {title}
       </span>
       {count && (
-        <span className="text-[10px] font-mono text-gray-400 font-medium ml-1">
+        <span className="text-[10px] text-gray-400 font-normal ml-1 tabular-nums">
           {count}
         </span>
       )}
     </div>
-    {actions && <div className="flex items-center gap-1.5">{actions}</div>}
+    {actions && <div className="flex items-center gap-2">{actions}</div>}
   </div>
 );
 
@@ -278,7 +303,7 @@ const SectionEditButton: React.FC<SectionEditButtonProps> = ({
       <button
         type="button"
         onClick={onStartEdit}
-        className="h-6 px-2.5 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-700 hover:text-[#051D35] border border-gray-200 transition-all flex items-center gap-1 shadow-2xs cursor-pointer font-sans"
+        className="h-8 px-3 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-700 hover:text-[#051D35] border border-gray-200 transition-all flex items-center gap-2 shadow-2xs cursor-pointer font-sans"
         title="Modifică datele acestei secțiuni"
       >
         <Edit3 size={11} className="text-[#BE9662]" />
@@ -292,7 +317,7 @@ const SectionEditButton: React.FC<SectionEditButtonProps> = ({
       <button
         type="button"
         onClick={onCancel}
-        className="h-6 px-2.5 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-500 hover:text-gray-800 border border-gray-300 transition-all flex items-center gap-1 shadow-2xs cursor-pointer font-sans"
+        className="h-8 px-3 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-500 hover:text-gray-800 border border-gray-300 transition-all flex items-center gap-2 shadow-2xs cursor-pointer font-sans"
         title="Renunță la editare"
       >
         <X size={11} className="text-gray-400" />
@@ -302,11 +327,11 @@ const SectionEditButton: React.FC<SectionEditButtonProps> = ({
   }
 
   return (
-    <div className="flex items-center gap-1.5">
+    <div className="flex items-center gap-2">
       <button
         type="button"
         onClick={onCancel}
-        className="h-6 px-2 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-500 hover:text-gray-800 border border-gray-200 transition-all flex items-center gap-1 cursor-pointer font-sans"
+        className="h-8 px-2 rounded-md text-[11px] font-medium bg-white hover:bg-gray-100 text-gray-500 hover:text-gray-800 border border-gray-200 transition-all flex items-center gap-1 cursor-pointer font-sans"
         title="Renunță la modificări"
       >
         <X size={11} />
@@ -315,7 +340,7 @@ const SectionEditButton: React.FC<SectionEditButtonProps> = ({
       <button
         type="button"
         onClick={onSave}
-        className="h-6 px-2.5 rounded-md text-[11px] font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white border border-[#051D35] transition-all flex items-center gap-1 shadow-xs cursor-pointer font-sans"
+        className="h-8 px-3 rounded-md text-[11px] font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white border border-[#051D35] transition-all flex items-center gap-2 shadow-xs cursor-pointer font-sans"
         title="Salvează modificările secțiunii"
       >
         <Check size={11} className="text-[#BE9662]" />
@@ -332,7 +357,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onOpenEditForm,
   showTopNavbar = false,
   onDelete,
-  onAddActivity
+  onAddActivity,
+  onUpdateLead
 }) => {
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
   const [isCopied, setIsCopied] = useState<boolean>(false);
@@ -425,8 +451,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           return;
         }
 
-        // Trigger line: 110px below viewport top (accounting for 90px fixed headers + 20px padding)
-        const triggerLine = 110;
+        // Trigger line: 104px below viewport top (accounting for 88px fixed headers + 16px padding)
+        const triggerLine = 104;
         let currentSectionId = "photos";
         for (const sect of NAV_SECTIONS) {
           const el = document.getElementById(sect.id);
@@ -538,9 +564,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     if (!el) return;
 
     if (isPublicShared) {
-      // 90px fixed header (50px navbar + 40px jump links) + 20px padding = 110px
-      // Exact alignment: section top lands at y = 110px, leaving 20px padding under the 90px fixed menu
-      const topOffset = 110;
+      // 88px fixed header (48px navbar + 40px jump links) + 16px padding = 104px
+      const topOffset = 104;
       const currentScroll = window.pageYOffset || document.documentElement.scrollTop || window.scrollY || 0;
       const targetTop = el.getBoundingClientRect().top + currentScroll - topOffset;
 
@@ -717,11 +742,21 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
   };
 
-  // Compile full image list
+  // Base clean proxy URLs come from shared imageUtils; per-slot thumbnails append ?w=...
+
+  // Compile full image list with clean proxy URLs
   const allImages = useMemo(() => {
     const images: string[] = [];
-    if (lead?.coverImage && !images.includes(lead.coverImage)) {
-      images.push(lead.coverImage);
+    const addClean = (raw: string | undefined | null) => {
+      if (!raw || typeof raw !== "string") return;
+      const clean = getCleanDisplayImageUrl(raw);
+      if (clean && !images.includes(clean)) {
+        images.push(clean);
+      }
+    };
+
+    if (lead?.coverImage) {
+      addClean(lead.coverImage);
     }
     const crmImagini = lead?.extractedData?.crmData?.imagini;
     if (crmImagini) {
@@ -731,9 +766,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         if (Array.isArray(list)) {
           list.forEach(item => {
             const url = typeof item === "string" ? item : item?.original;
-            if (url && typeof url === "string" && !images.includes(url)) {
-              images.push(url);
-            }
+            addClean(url);
           });
         }
       });
@@ -1104,6 +1137,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Bucătărie": saved.dotari?.["Bucătărie"] || "frigider, plită, cuptor, hotă",
         "Baie 1": saved.dotari?.["Baie 1"] || "-",
         "Baie 2": saved.dotari?.["Baie 2"] || "-",
+        "Baie 3": saved.dotari?.["Baie 3"] || "-",
+        "Baie 4": saved.dotari?.["Baie 4"] || "-",
         "Hol": saved.dotari?.["Hol"] || "interfon",
         "Altele": saved.dotari?.["Altele"] || "-",
         ...(saved.dotari || {})
@@ -1140,7 +1175,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         "Situație juridică": saved.acte?.["Situație juridică"] || "Fara probleme",
         "Disponibilitate": saved.acte?.["Disponibilitate"] || "Imediată",
         "Finanțare": saved.acte?.["Finanțare"] || "Credit bancar / fonduri proprii",
-        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || "12 luni",
+        "Condiții contractuale": saved.acte?.["Condiții contractuale"] || saved.acte?.["Contract"] || "12 luni",
+        "Contract": saved.acte?.["Contract"] || saved.acte?.["Condiții contractuale"] || "12 luni",
         "Avans": saved.acte?.["Avans"] || "1 luna",
         "Garanție": saved.acte?.["Garanție"] || "1 luna",
         ...(saved.acte || {})
@@ -1188,11 +1224,95 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     if (!lead?.id) return;
     try {
       const newCover = imagesList[0] || "";
+      
+      // Update all categories in crmData.imagini to reflect only retained images
+      const existingCrmImagini = lead?.extractedData?.crmData?.imagini || {
+        living: [],
+        camera: [],
+        bucatarie: [],
+        baie: [],
+        alteSpatii: []
+      };
+
+      const updatedCrmImagini: any = {
+        living: Array.isArray(existingCrmImagini.living)
+          ? existingCrmImagini.living.filter((item: any) => {
+              const url = typeof item === "string" ? item : item?.original;
+              const clean = getCleanDisplayImageUrl(url);
+              return clean && imagesList.includes(clean);
+            })
+          : [],
+        camera: Array.isArray(existingCrmImagini.camera)
+          ? existingCrmImagini.camera.filter((item: any) => {
+              const url = typeof item === "string" ? item : item?.original;
+              const clean = getCleanDisplayImageUrl(url);
+              return clean && imagesList.includes(clean);
+            })
+          : [],
+        bucatarie: Array.isArray(existingCrmImagini.bucatarie)
+          ? existingCrmImagini.bucatarie.filter((item: any) => {
+              const url = typeof item === "string" ? item : item?.original;
+              const clean = getCleanDisplayImageUrl(url);
+              return clean && imagesList.includes(clean);
+            })
+          : [],
+        baie: Array.isArray(existingCrmImagini.baie)
+          ? existingCrmImagini.baie.filter((item: any) => {
+              const url = typeof item === "string" ? item : item?.original;
+              const clean = getCleanDisplayImageUrl(url);
+              return clean && imagesList.includes(clean);
+            })
+          : [],
+        alteSpatii: Array.isArray(existingCrmImagini.alteSpatii)
+          ? existingCrmImagini.alteSpatii.filter((item: any) => {
+              const url = typeof item === "string" ? item : item?.original;
+              const clean = getCleanDisplayImageUrl(url);
+              return clean && imagesList.includes(clean);
+            })
+          : []
+      };
+
+      // Collect all remaining images across categories
+      const allFoundUrls = new Set<string>();
+      (["living", "camera", "bucatarie", "baie", "alteSpatii"] as const).forEach(cat => {
+        updatedCrmImagini[cat]?.forEach((item: any) => {
+          const u = typeof item === "string" ? item : item?.original;
+          const clean = getCleanDisplayImageUrl(u);
+          if (clean) allFoundUrls.add(clean);
+        });
+      });
+
+      // Ensure any newly added image in imagesList is preserved in alteSpatii
+      imagesList.forEach(img => {
+        if (!allFoundUrls.has(img)) {
+          updatedCrmImagini.alteSpatii.push({ original: img });
+          allFoundUrls.add(img);
+        }
+      });
+
       const updates: any = {
         coverImage: newCover,
-        "extractedData.crmData.imagini.living": imagesList
+        images: imagesList,
+        "extractedData.crmData.imagini": updatedCrmImagini
       };
+
       await leadsService.updateLeadData(lead.id, updates);
+      
+      // Notify parent component optimistically so allImages updates immediately
+      if (onUpdateLead) {
+        onUpdateLead({
+          coverImage: newCover,
+          images: imagesList,
+          extractedData: {
+            ...lead.extractedData,
+            crmData: {
+              ...(lead.extractedData?.crmData as any),
+              imagini: updatedCrmImagini
+            }
+          } as any
+        });
+      }
+
       setIsEditingPhotos(false);
       setIsPhotosDirty(false);
       toast.success("Fotografiile au fost salvate cu succes!");
@@ -1326,7 +1446,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     fallbackVal: string, 
     isLast: boolean = false, 
     multiline: boolean = false,
-    options?: string[]
+    options?: string[],
+    keepEmptyRow: boolean = false
   ) => {
     const isSecEditing = editingSection === sectionId;
     const originalVal = sectionData[sectionId]?.[label] ?? fallbackVal;
@@ -1335,9 +1456,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       : originalVal;
 
     const valStr = typeof currentVal === "string" ? currentVal.trim() : (currentVal == null ? "" : String(currentVal).trim());
+    const isEmptyVal = valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null";
 
-    // User rule: Where there is a "-", if no data has been found on the url provided for crawling, just remove that row of data in the page.
-    if (!isSecEditing && (valStr === "-" || valStr === "" || valStr === "N/A" || valStr === "null")) {
+    // User rule: Where there is a "-", if no data has been found on the url provided for crawling, just remove that row of data in the page (unless explicitly preserved).
+    if (!isSecEditing && !keepEmptyRow && isEmptyVal) {
       return null;
     }
 
@@ -1345,50 +1467,42 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       <AttributeRow
         key={label}
         label={label}
-        value={valStr === "-" ? "" : currentVal}
-        copyValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
+        value={isEmptyVal ? <span className="text-gray-400">-</span> : currentVal}
+        copyValue={!isEmptyVal && typeof currentVal === "string" ? currentVal : ""}
         isEditing={isSecEditing}
-        editValue={typeof currentVal === "string" && currentVal !== "-" ? currentVal : ""}
+        editValue={!isEmptyVal && typeof currentVal === "string" ? currentVal : ""}
         onEditChange={(newVal) => handleFieldChange(sectionId, label, newVal)}
         multiline={multiline}
         isLast={isLast}
         options={options}
+        isPublicShared={isPublicShared}
       />
     );
   };
 
   return (
-    <div ref={containerRef} className={isPublicShared ? "w-full min-h-screen bg-transparent text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20" : "w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden"}>
+    <div ref={containerRef} className={isPublicShared ? "w-full min-h-screen bg-transparent text-gray-900 flex flex-col font-sans" : "w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden"}>
       
       {/* Header Container: 100% full-width fixed bar at the top for public shared page */}
       {isPublicShared ? (
         <header className="fixed top-0 left-0 right-0 w-full z-40 bg-white select-none shadow-none">
           {/* Row 1: Logo & Actions (100% full-width bar with 1px solid border, no shadow, boxed 1280px content) */}
           {showTopNavbar && (
-            <div className="w-full border-b border-gray-200 h-[50px] bg-white">
-              <div className="w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 h-[50px] flex items-center justify-between">
+            <div className="w-full border-b border-gray-200 h-12 bg-white">
+              <div className="w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 h-12 flex items-center justify-between">
                 <div className="flex items-center h-full">
                   <a 
                     href="/"
                     className="flex items-center select-none group focus:outline-none"
                     title="Acasă - brokr"
                   >
-                    <span className="text-[22px] font-bold tracking-tight text-[#051D35] font-sans leading-none flex items-center">
+                    <span className="font-title text-[22px] font-semibold tracking-tight text-[#051D35] leading-none flex items-center">
                       brokr<span className="text-[#BE9662]">.</span>
                     </span>
                   </a>
                 </div>
 
-                <div className="flex items-center gap-1 sm:gap-2 h-full shrink-0">
-                  <button
-                    type="button"
-                    onClick={handlePrint}
-                    className="h-9 w-9 rounded-lg flex items-center justify-center bg-transparent hover:bg-gray-100 text-gray-500 hover:text-gray-900 transition-colors shrink-0 cursor-pointer select-none group"
-                    title="Tipărește oferta"
-                  >
-                    <Printer size={17} className="text-gray-500 group-hover:text-gray-900 transition-colors" />
-                  </button>
-
+                <div className="flex items-center gap-2 h-full shrink-0">
                   <button
                     type="button"
                     onClick={handleNativeShare}
@@ -1404,8 +1518,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
           {/* Row 2: Jump Links toolbar (100% full-width bar with 1px solid border, NO shadow, boxed 1280px content) */}
           <div className="w-full border-b border-gray-200 h-10 bg-white">
-            <div className="w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 h-10 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-              <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
+            <div className="w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 h-10 flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-2 shrink-0 overflow-x-auto no-scrollbar py-1">
                 {NAV_SECTIONS.map((sect) => {
                   const Icon = sect.icon;
                   const isActive = activeSection === sect.id;
@@ -1415,7 +1529,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       key={sect.id}
                       type="button"
                       onClick={() => scrollToSection(sect.id)}
-                      className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                      className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
                         isActive
                           ? "bg-[#051D35] text-white font-medium shadow-xs"
                           : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
@@ -1434,15 +1548,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         <>
           {/* Top Navbar for modal/internal view */}
           {showTopNavbar && (
-            <nav className="h-[50px] shrink-0 bg-white border-b border-gray-200 select-none z-30">
-              <div className="w-full px-4 h-[50px] flex items-center justify-between">
+            <nav className="h-12 shrink-0 bg-white border-b border-gray-200 select-none z-30">
+              <div className="w-full px-4 h-12 flex items-center justify-between">
                 <div className="flex items-center h-full">
-                  <span className="text-[22px] font-bold tracking-tight text-[#051D35] font-sans leading-none flex items-center">
+                  <span className="font-title text-[22px] font-semibold tracking-tight text-[#051D35] leading-none flex items-center">
                     brokr<span className="text-[#BE9662]">.</span>
                   </span>
                 </div>
 
-                <div className="flex items-center gap-1 sm:gap-2 h-full shrink-0">
+                <div className="flex items-center gap-2 h-full shrink-0">
                   <button
                     type="button"
                     onClick={handlePrint}
@@ -1467,8 +1581,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
           {/* Jump Links toolbar for modal/internal view */}
           <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20">
-            <div className="w-full px-4 h-10 flex items-center justify-between gap-3 overflow-x-auto no-scrollbar">
-              <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto no-scrollbar py-0.5">
+            <div className="w-full px-4 h-10 flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
+              <div className="flex items-center gap-2 shrink-0 overflow-x-auto no-scrollbar py-1">
                 {NAV_SECTIONS.map((sect) => {
                   const Icon = sect.icon;
                   const isActive = activeSection === sect.id;
@@ -1478,7 +1592,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       key={sect.id}
                       type="button"
                       onClick={() => scrollToSection(sect.id)}
-                      className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
+                      className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer group font-sans ${
                         isActive
                           ? "bg-[#051D35] text-white font-medium shadow-xs"
                           : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
@@ -1491,7 +1605,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 })}
               </div>
 
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 {onDelete && (
                   <button 
                     type="button"
@@ -1558,7 +1672,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   <button
                     type="button"
                     onClick={onAddActivity}
-                    className="h-7 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
+                    className="h-7 px-3 flex items-center gap-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs group"
                     title="Adaugă activitate pentru această proprietate"
                   >
                     <Plus size={13} className="text-[#BE9662]" />
@@ -1572,84 +1686,134 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       )}
 
       {/* Main Layout (Scrollable container below the fixed headers) */}
-      <main ref={mainScrollRef} className={isPublicShared ? "w-full bg-transparent p-0 overflow-visible pt-[110px]" : "w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth"}>
-        <div className={isPublicShared ? "w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 pb-[40px] space-y-[20px]" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
+      <main ref={mainScrollRef} className={isPublicShared ? "w-full bg-transparent p-0 overflow-visible pt-[104px]" : "w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth"}>
+        <div className={isPublicShared ? "w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 pb-10 space-y-4" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
           
           {/* Main Column */}
-          <div className={isPublicShared ? "w-full p-0 space-y-[20px]" : "lg:col-span-8 p-4 sm:p-6 lg:p-7 space-y-[20px] border-b lg:border-b-0 lg:border-r border-gray-200"}>
+          <div className={isPublicShared ? "w-full p-0 space-y-4" : "lg:col-span-8 p-4 sm:p-6 space-y-4 border-b lg:border-b-0 lg:border-r border-gray-200"}>
 
             {/* Mosaic Photo Gallery (no container card, no header) */}
             {allImages.length > 0 && (
-              <div id="photos" className="w-full h-[50vh] lg:h-[420px] rounded-xl overflow-hidden grid grid-cols-4 gap-2 sm:gap-2.5 bg-gray-100 select-none scroll-mt-[110px]">
+              <div id="photos" className="w-full h-[50vh] lg:h-[420px] rounded-xl overflow-hidden grid grid-cols-4 grid-rows-1 gap-2 bg-gray-100 select-none scroll-mt-[104px]">
                 {/* Col 1 (50% width) - 1st photo */}
                 <div 
                   onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
-                  className="col-span-2 row-span-2 relative h-full overflow-hidden cursor-pointer group bg-gray-200"
+                  className="col-span-2 relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                 >
-                  <img 
-                    src={allImages[0]} 
-                    alt={`${displayTitle} - foto principală`}
-                    className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                    referrerPolicy="no-referrer"
-                  />
-                </div>
-
-                {/* Col 2 (25% width) - 2 equal height stacked photos */}
-                <div className="col-span-1 grid grid-rows-2 gap-2 sm:gap-2.5 h-full min-h-0">
-                  <div 
-                    onClick={() => { setSelectedPhotoIndex(1); setIsGalleryOpen(true); }}
-                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
-                  >
+                  {isPublicShared ? (
+                    <ProtectedPublicImage
+                      src={getThumbnailImageUrl(allImages[0], 1000)}
+                      alt={`${displayTitle} - foto principală`}
+                      fit="cover"
+                      className="group-hover:scale-102 transition-transform duration-300"
+                    />
+                  ) : (
                     <img 
-                      src={allImages[1] || allImages[0]} 
-                      alt={`${displayTitle} - foto 2`}
+                      src={getThumbnailImageUrl(allImages[0], 1000)} 
+                      alt={`${displayTitle} - foto principală`}
+                      decoding="async"
                       className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
                       referrerPolicy="no-referrer"
                     />
+                  )}
+                </div>
+
+                {/* Col 2 (25% width) - 2 equal 50% height stacked photos aligned with Col 1 bottom */}
+                <div className="col-span-1 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 h-full min-h-0">
+                  <div 
+                    onClick={() => { setSelectedPhotoIndex(1); setIsGalleryOpen(true); }}
+                    className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                  >
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[1] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 2`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[1] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 2`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                   </div>
                   <div 
                     onClick={() => { setSelectedPhotoIndex(2); setIsGalleryOpen(true); }}
-                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                    className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
-                    <img 
-                      src={allImages[2] || allImages[0]} 
-                      alt={`${displayTitle} - foto 3`}
-                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
-                    />
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[2] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 3`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[2] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 3`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                   </div>
                 </div>
 
-                {/* Col 3 (25% width) - 2 equal height stacked photos, last photo acts as open lightbox link */}
-                <div className="col-span-1 grid grid-rows-2 gap-2 sm:gap-2.5 h-full min-h-0">
+                {/* Col 3 (25% width) - 2 equal 50% height stacked photos aligned with Col 1 bottom, last photo acts as open lightbox link */}
+                <div className="col-span-1 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 h-full min-h-0">
                   <div 
                     onClick={() => { setSelectedPhotoIndex(3); setIsGalleryOpen(true); }}
-                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                    className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
-                    <img 
-                      src={allImages[3] || allImages[0]} 
-                      alt={`${displayTitle} - foto 4`}
-                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
-                    />
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[3] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 4`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[3] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 4`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                   </div>
                   <div 
                     onClick={() => { setSelectedPhotoIndex(4); setIsGalleryOpen(true); }}
-                    className="relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
+                    className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
-                    <img 
-                      src={allImages[4] || allImages[0]} 
-                      alt={`${displayTitle} - foto 5`}
-                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
-                      referrerPolicy="no-referrer"
-                    />
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[4] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 5`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[4] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 5`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                     {/* Dark overlay showing total count & open lightbox link */}
                     <div className="absolute inset-0 bg-black/55 group-hover:bg-black/65 transition-colors flex flex-col items-center justify-center text-center p-2 cursor-pointer z-10">
-                      <span className="text-white text-sm sm:text-base md:text-lg font-bold underline underline-offset-4 decoration-2 font-sans tracking-wide">
+                      <span className="text-white text-sm sm:text-base md:text-lg font-semibold underline underline-offset-4 decoration-2 font-sans tracking-wide">
                         Toate imaginile ({allImages.length})
                       </span>
                       {allImages.length > 5 && (
-                        <span className="text-gray-200 text-[11px] sm:text-xs mt-1 font-medium font-sans">
+                        <span className="text-gray-200 text-[11px] sm:text-xs mt-1 font-normal font-sans">
                           +{allImages.length - 4} imagini
                         </span>
                       )}
@@ -1660,26 +1824,38 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             )}
 
             {/* #CARD 1: "PREȚ & CONDIȚII" */}
-            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
-              <div className="p-[20px] bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-[20px] select-none">
-                <div className="space-y-1.5 min-w-0 flex-1">
-                  <h1 className="text-[18px] font-normal text-gray-900 leading-snug tracking-normal font-sans">
+            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+              <div className={`p-5 bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${isPublicShared ? "" : "select-none"}`}>
+                <div className="space-y-2 min-w-0 flex-1">
+                  <h1 className="font-title text-[19px] font-semibold text-[#051D35] leading-snug tracking-tight">
                     {displayTitle}
                   </h1>
-                  <div className="flex items-baseline gap-1.5">
-                    <span className="text-2xl sm:text-3xl font-black text-[#051D35] tracking-tight">
+                  <div className="flex items-baseline gap-2">
+                    <span
+                      className={
+                        isPublicShared
+                          ? "font-title text-[19px] font-semibold text-[#051D35] leading-snug tracking-tight tabular-nums"
+                          : "text-2xl sm:text-3xl font-semibold text-[#051D35] tracking-tight tabular-nums"
+                      }
+                    >
                       {priceParts.amount} €
                     </span>
                     {priceParts.isRent && (
-                      <span className="text-[16px] font-normal text-gray-500 font-sans">
+                      <span className={isPublicShared ? "text-[14px] font-normal text-gray-500" : "text-[16px] font-normal text-gray-500"}>
                         / lună
                       </span>
                     )}
                   </div>
                 </div>
 
-                <div className="flex items-center gap-[20px] shrink-0 border-l border-gray-200 pl-[20px] py-1">
-                  <span className="text-sm sm:text-base font-bold text-gray-900 font-sans tracking-tight">
+                <div className="flex items-center gap-4 shrink-0 border-l border-gray-200 pl-5 py-1">
+                  <span
+                    className={
+                      isPublicShared
+                        ? "font-title text-[14px] font-normal text-gray-900 leading-snug tracking-tight tabular-nums"
+                        : "text-sm sm:text-base font-semibold text-gray-900 tracking-tight tabular-nums"
+                    }
+                  >
                     ID: {exactId}
                   </span>
                   <SectionEditButton
@@ -1693,44 +1869,92 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 </div>
               </div>
 
-              {/* 2-column layout: Col 1 = moved from CONDITII in same order; Col 2 = existing items (Preț, TVA, Comision) */}
-              <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 font-sans">
-                {/* Column 1: Items moved from CONDIȚII */}
-                <div className="divide-y divide-gray-100">
-                  {isRent ? (
-                    <>
-                      {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
-                      {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
-                      {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
-                    </>
-                  ) : (
-                    <>
-                      {renderRow("acte", "Situație juridică", "Fara probleme")}
-                      {renderRow("acte", "Disponibilitate", "Imediată")}
-                      {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
-                    </>
-                  )}
-                </div>
+              {/* 2-column layout: clean label-above / info-below fields with zero boxes in view mode */}
+              {isPublicShared ? (
+                (() => {
+                  const leftCells = [
+                    renderRow("tranzactie", "Preț", formattedPrice),
+                    renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare"),
+                    renderRow("tranzactie", "Comision", defaultCommission, true),
+                  ];
+                  const rightCells = isRent
+                    ? [
+                        renderRow("acte", "Contract", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS),
+                        renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS),
+                        renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS),
+                      ]
+                    : [
+                        renderRow("acte", "Situație juridică", "Fara probleme"),
+                        renderRow("acte", "Disponibilitate", "Imediată"),
+                        renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true),
+                      ];
+                  const rowPairs = leftCells
+                    .map((left, idx) => ({ left, right: rightCells[idx] ?? null }))
+                    .filter((pair) => pair.left !== null || pair.right !== null);
+                  const leftOrders = ["order-1 md:order-none", "order-2 md:order-none", "order-3 md:order-none"];
+                  const rightOrders = ["order-4 md:order-none", "order-5 md:order-none", "order-6 md:order-none"];
+                  const lastIdx = rowPairs.length - 1;
 
-                {/* Column 2: Existing items in card */}
-                <div className="divide-y divide-gray-100">
-                  {renderRow("tranzactie", "Preț", formattedPrice)}
-                  {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
-                  {renderRow("tranzactie", "Comision", defaultCommission, true)}
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 font-sans">
+                      {rowPairs.map((pair, idx) => (
+                        <React.Fragment key={idx}>
+                          <div
+                            className={`${leftOrders[idx] || ""} px-5 ${
+                              idx === 0 ? "pt-5" : "pt-[20px]"
+                            } ${idx === lastIdx ? "pb-5 md:pb-5" : ""} md:border-r md:border-gray-100`}
+                          >
+                            {pair.left}
+                          </div>
+                          <div
+                            className={`${rightOrders[idx] || ""} px-5 ${
+                              idx === 0 ? "pt-5 border-t border-gray-100 md:border-t-0" : "pt-[20px]"
+                            } ${idx === lastIdx ? "pb-5" : ""}`}
+                          >
+                            {pair.right}
+                          </div>
+                        </React.Fragment>
+                      ))}
+                    </div>
+                  );
+                })()
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 font-sans">
+                  <div className={`p-5 ${editingSection === "tranzactie" ? "space-y-[16px]" : "space-y-4"}`}>
+                    {isRent ? (
+                      <>
+                        {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
+                        {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
+                        {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
+                      </>
+                    ) : (
+                      <>
+                        {renderRow("acte", "Situație juridică", "Fara probleme")}
+                        {renderRow("acte", "Disponibilitate", "Imediată")}
+                        {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
+                      </>
+                    )}
+                  </div>
+
+                  <div className={`p-5 ${editingSection === "tranzactie" ? "space-y-[16px]" : "space-y-4"}`}>
+                    {renderRow("tranzactie", "Preț", formattedPrice)}
+                    {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
+                    {renderRow("tranzactie", "Comision", defaultCommission, true)}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* #CARD 2: "INTRODUCERE" */}
-            <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
-              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+            <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <FileText size={16} />
                   </div>
                   <div>
-                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                      INTRODUCERE
+                    <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                      Introducere
                     </h2>
                   </div>
                 </div>
@@ -1745,34 +1969,50 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="p-[20px] font-sans">
-                {editingSection === "introducere" ? (
-                  <div 
-                    onClick={() => introTextareaRef.current?.focus()}
-                    className={`p-3.5 transition-all font-sans cursor-text ${
-                      introFocused 
-                        ? "bg-amber-50/40 border-l-3 border-l-[#BE9662]" 
-                        : "bg-transparent border-l-3 border-l-transparent hover:bg-amber-50/15"
-                    }`}
-                  >
-                    <textarea
-                      ref={introTextareaRef}
-                      rows={5}
-                      value={draftSectionData["introducere"]?.["summary"] ?? (sectionData["introducere"]?.["summary"] || summaryDescription)}
-                      onChange={(e) => handleFieldChange("introducere", "summary", e.target.value)}
-                      onFocus={() => setIntroFocused(true)}
-                      onBlur={() => setIntroFocused(false)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") (e.target as HTMLElement).blur();
-                      }}
-                      className={`w-full text-xs sm:text-sm font-sans leading-relaxed bg-transparent border-0 rounded-none p-0 m-0 outline-none resize-y select-text focus:outline-none transition-all ${
-                        introFocused ? "text-[#051D35] font-medium" : "text-gray-700"
-                      }`}
-                      placeholder="Descrierea proprietății..."
+              <div className="p-5 font-sans">
+                <label
+                  onClick={() => {
+                    if (editingSection === "introducere") introTextareaRef.current?.focus();
+                  }}
+                  className={`flex items-center gap-2 px-2 text-[12px] leading-4 ${
+                    isPublicShared ? "mb-[8px]" : "mb-1"
+                  } font-semibold text-[#051D35] transition-colors select-none ${
+                    editingSection === "introducere" ? "cursor-pointer" : ""
+                  }`}
+                >
+                  <span>Descriere proprietate</span>
+                  {editingSection === "introducere" && introFocused && (
+                    <span
+                      className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
+                      title="Mod focus activ"
                     />
-                  </div>
+                  )}
+                </label>
+
+                {editingSection === "introducere" ? (
+                  <textarea
+                    ref={introTextareaRef}
+                    rows={5}
+                    value={draftSectionData["introducere"]?.["summary"] ?? (sectionData["introducere"]?.["summary"] || summaryDescription)}
+                    onChange={(e) => handleFieldChange("introducere", "summary", e.target.value)}
+                    onFocus={() => setIntroFocused(true)}
+                    onBlur={() => setIntroFocused(false)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") (e.target as HTMLElement).blur();
+                    }}
+                    className={`w-full !px-2 !py-2 !min-h-[120px] rounded-md border text-[12px] font-sans font-normal leading-[1.6] outline-none shadow-none resize-y select-text transition-all ${
+                      introFocused
+                        ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
+                        : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
+                    }`}
+                    placeholder="Descrierea proprietății..."
+                  />
                 ) : (
-                  <div className="text-xs sm:text-sm text-gray-700 leading-relaxed space-y-3 font-normal whitespace-pre-line select-text font-sans p-3.5 border-l-3 border-l-transparent">
+                  <div
+                    className={`w-full px-2 ${
+                      isPublicShared ? "py-0 h-auto" : "py-2 min-h-[120px]"
+                    } rounded-md border border-transparent bg-transparent text-[12px] text-gray-700 leading-[1.6] font-normal whitespace-pre-line select-text font-sans`}
+                  >
                     {sectionData["introducere"]?.["summary"] || summaryDescription}
                   </div>
                 )}
@@ -1780,153 +2020,222 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "APARTAMENT" */}
-            <div id="apartament" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px]">
-              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+            <div id="apartament" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px]">
+              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <Home size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
-                    APARTAMENT
+                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                    Apartament
                   </h2>
                 </div>
               </div>
 
-              <div className="font-sans divide-y divide-gray-200">
-                {/* 1. Configurație & Finisaje Side by Side */}
-                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-                  {/* Left: Configurație */}
-                  <div className="flex flex-col">
-                    <SubCategoryHeader 
-                      title="Configurație" 
-                      actions={
-                        <SectionEditButton
-                          isEditing={editingSection === "configuratie"}
-                          isDirty={isSectionDirty("configuratie")}
-                          onStartEdit={() => handleStartEditSection("configuratie")}
-                          onCancel={() => handleCancelEditSection("configuratie")}
-                          onSave={() => handleSaveSection("configuratie")}
-                          disabled={isPublicShared}
-                        />
-                      }
-                    />
-                    <div className="divide-y divide-gray-100 flex-1">
-                      {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
-                      {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
-                      {renderRow("configuratie", "Etaj", etaj)}
-                      {renderRow("configuratie", "An construcție", anConstructie)}
-                      {renderRow("configuratie", "Număr camere", String(camere))}
-                      {renderRow("configuratie", "Număr băi", String(bai))}
-                      {renderRow("configuratie", "Balcon", String(balcoane))}
-                      {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
-                    </div>
-                  </div>
+              {(() => {
+                const apartmentRooms = [
+                  { label: "Living", finisaje: "vopsea lavabilă, parchet", mobilare: "canapea, măsuță cafea, comodă", dotari: "aer condiționat, smart TV" },
+                  ...(bedroomCount >= 1 ? [{ label: "Camera 1", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                  ...(bedroomCount >= 2 ? [{ label: "Camera 2", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                  ...(bedroomCount >= 3 ? [{ label: "Camera 3", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                  ...(bedroomCount >= 4 ? [{ label: "Camera 4", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                  { label: "Bucătărie", finisaje: "vopsea lavabilă, faianță și gresie", mobilare: "mobilă de bucatarie premium", dotari: "frigider, plită, cuptor, hotă" },
+                  ...(baiCount >= 1 ? [{ label: "Baie 1", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                  ...(baiCount >= 2 ? [{ label: "Baie 2", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                  ...(baiCount >= 3 ? [{ label: "Baie 3", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                  ...(baiCount >= 4 ? [{ label: "Baie 4", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                  { label: "Hol", finisaje: "vopsea lavabilă, parchet", mobilare: "cuier, pantofar", dotari: "interfon" },
+                ];
 
-                  {/* Right: Finisaje */}
-                  <div className="flex flex-col">
-                    <SubCategoryHeader 
-                      title="Finisaje" 
-                      actions={
-                        <SectionEditButton
-                          isEditing={editingSection === "finisaje"}
-                          isDirty={isSectionDirty("finisaje")}
-                          onStartEdit={() => handleStartEditSection("finisaje")}
-                          onCancel={() => handleCancelEditSection("finisaje")}
-                          onSave={() => handleSaveSection("finisaje")}
-                          disabled={isPublicShared}
-                        />
-                      }
-                    />
-                    <div className="divide-y divide-gray-100 flex-1">
-                      {renderRow("finisaje", "Living", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 1 && renderRow("finisaje", "Camera 1", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 2 && renderRow("finisaje", "Camera 2", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 3 && renderRow("finisaje", "Camera 3", "vopsea lavabilă, parchet")}
-                      {bedroomCount >= 4 && renderRow("finisaje", "Camera 4", "vopsea lavabilă, parchet")}
-                      {renderRow("finisaje", "Bucătărie", "vopsea lavabilă, faianță și gresie")}
-                      {baiCount >= 1 && renderRow("finisaje", "Baie 1", "faianță și gresie")}
-                      {baiCount >= 2 && renderRow("finisaje", "Baie 2", "faianță și gresie")}
-                      {baiCount >= 3 && renderRow("finisaje", "Baie 3", "faianță și gresie")}
-                      {baiCount >= 4 && renderRow("finisaje", "Baie 4", "faianță și gresie")}
-                      {renderRow("finisaje", "Hol", "vopsea lavabilă, parchet", true)}
-                    </div>
-                  </div>
-                </div>
+                const mobileLeftOrderClasses = [
+                  "order-2 md:order-none",
+                  "order-3 md:order-none",
+                  "order-4 md:order-none",
+                  "order-5 md:order-none",
+                  "order-6 md:order-none",
+                  "order-7 md:order-none",
+                  "order-8 md:order-none",
+                  "order-9 md:order-none",
+                  "order-10 md:order-none",
+                  "order-11 md:order-none",
+                  "order-12 md:order-none",
+                ];
+                const mobileRightOrderClasses = [
+                  "order-[14] md:order-none",
+                  "order-[15] md:order-none",
+                  "order-[16] md:order-none",
+                  "order-[17] md:order-none",
+                  "order-[18] md:order-none",
+                  "order-[19] md:order-none",
+                  "order-[20] md:order-none",
+                  "order-[21] md:order-none",
+                  "order-[22] md:order-none",
+                  "order-[23] md:order-none",
+                  "order-[24] md:order-none",
+                ];
 
-                {/* 2. Mobilare & Dotări Side by Side */}
-                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-                  {/* Left: Mobilare */}
-                  <div className="flex flex-col">
-                    <SubCategoryHeader 
-                      title="Mobilare" 
-                      actions={
-                        <SectionEditButton
-                          isEditing={editingSection === "mobilare"}
-                          isDirty={isSectionDirty("mobilare")}
-                          onStartEdit={() => handleStartEditSection("mobilare")}
-                          onCancel={() => handleCancelEditSection("mobilare")}
-                          onSave={() => handleSaveSection("mobilare")}
-                          disabled={isPublicShared}
+                return (
+                  <div className="font-sans divide-y divide-gray-200">
+                    {/* 1. Configurație & Finisaje Side by Side */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                      {/* Left: Configurație */}
+                      <div className="flex flex-col">
+                        <SubCategoryHeader 
+                          title="Configurație" 
+                          isPublicShared={isPublicShared}
+                          actions={
+                            <SectionEditButton
+                              isEditing={editingSection === "configuratie"}
+                              isDirty={isSectionDirty("configuratie")}
+                              onStartEdit={() => handleStartEditSection("configuratie")}
+                              onCancel={() => handleCancelEditSection("configuratie")}
+                              onSave={() => handleSaveSection("configuratie")}
+                              disabled={isPublicShared}
+                            />
+                          }
                         />
-                      }
-                    />
-                    <div className="divide-y divide-gray-100 flex-1">
-                      {renderRow("mobilare", "Living", "canapea, măsuță cafea, comodă")}
-                      {bedroomCount >= 1 && renderRow("mobilare", "Camera 1", "pat, noptiere, dulap")}
-                      {bedroomCount >= 2 && renderRow("mobilare", "Camera 2", "pat, noptiere, dulap")}
-                      {bedroomCount >= 3 && renderRow("mobilare", "Camera 3", "pat, noptiere, dulap")}
-                      {bedroomCount >= 4 && renderRow("mobilare", "Camera 4", "pat, noptiere, dulap")}
-                      {renderRow("mobilare", "Bucătărie", "mobilă de bucatarie premium")}
-                      {baiCount >= 1 && renderRow("mobilare", "Baie 1", "obiecte sanitare premium")}
-                      {baiCount >= 2 && renderRow("mobilare", "Baie 2", "obiecte sanitare premium")}
-                      {baiCount >= 3 && renderRow("mobilare", "Baie 3", "obiecte sanitare premium")}
-                      {baiCount >= 4 && renderRow("mobilare", "Baie 4", "obiecte sanitare premium")}
-                      {renderRow("mobilare", "Hol", "cuier, pantofar", true)}
-                    </div>
-                  </div>
+                        <div
+                          className={
+                            isPublicShared
+                              ? "p-5 grid grid-cols-1 [&:has(>:nth-child(6))]:md:grid-cols-2 gap-[20px] content-start flex-1"
+                              : `p-5 ${editingSection === "configuratie" ? "space-y-[16px]" : "space-y-4"} flex-1`
+                          }
+                        >
+                          {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
+                          {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
+                          {renderRow("configuratie", "Etaj", etaj)}
+                          {renderRow("configuratie", "An construcție", anConstructie)}
+                          {renderRow("configuratie", "Număr camere", String(camere))}
+                          {renderRow("configuratie", "Număr băi", String(bai))}
+                          {renderRow("configuratie", "Balcon", String(balcoane))}
+                          {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
+                        </div>
+                      </div>
 
-                  {/* Right: Dotări */}
-                  <div className="flex flex-col">
-                    <SubCategoryHeader 
-                      title="Dotări" 
-                      actions={
-                        <SectionEditButton
-                          isEditing={editingSection === "dotari"}
-                          isDirty={isSectionDirty("dotari")}
-                          onStartEdit={() => handleStartEditSection("dotari")}
-                          onCancel={() => handleCancelEditSection("dotari")}
-                          onSave={() => handleSaveSection("dotari")}
-                          disabled={isPublicShared}
+                      {/* Right: Finisaje */}
+                      <div className="flex flex-col">
+                        <SubCategoryHeader 
+                          title="Finisaje" 
+                          isPublicShared={isPublicShared}
+                          actions={
+                            <SectionEditButton
+                              isEditing={editingSection === "finisaje"}
+                              isDirty={isSectionDirty("finisaje")}
+                              onStartEdit={() => handleStartEditSection("finisaje")}
+                              onCancel={() => handleCancelEditSection("finisaje")}
+                              onSave={() => handleSaveSection("finisaje")}
+                              disabled={isPublicShared}
+                            />
+                          }
                         />
-                      }
-                    />
-                    <div className="divide-y divide-gray-100 flex-1">
-                      {renderRow("dotari", "Living", "aer condiționat, smart TV")}
-                      {bedroomCount >= 1 && renderRow("dotari", "Camera 1", "-")}
-                      {bedroomCount >= 2 && renderRow("dotari", "Camera 2", "-")}
-                      {bedroomCount >= 3 && renderRow("dotari", "Camera 3", "-")}
-                      {bedroomCount >= 4 && renderRow("dotari", "Camera 4", "-")}
-                      {renderRow("dotari", "Bucătărie", "frigider, plită, cuptor, hotă")}
-                      {baiCount >= 1 && renderRow("dotari", "Baie 1", "-")}
-                      {baiCount >= 2 && renderRow("dotari", "Baie 2", "-")}
-                      {baiCount >= 3 && renderRow("dotari", "Baie 3", "-")}
-                      {baiCount >= 4 && renderRow("dotari", "Baie 4", "-")}
-                      {renderRow("dotari", "Hol", "interfon", true)}
+                        <div
+                          className={
+                            isPublicShared
+                              ? "p-5 grid grid-cols-1 [&:has(>:nth-child(6))]:md:grid-cols-2 gap-[20px] content-start flex-1"
+                              : `p-5 ${editingSection === "finisaje" ? "space-y-[16px]" : "space-y-4"} flex-1`
+                          }
+                        >
+                          {apartmentRooms.map((room, idx) =>
+                            renderRow("finisaje", room.label, room.finisaje, idx === apartmentRooms.length - 1, false, undefined, isPublicShared)
+                          )}
+                        </div>
+                      </div>
                     </div>
+
+                    {/* 2. Mobilare & Dotări Side by Side */}
+                    {isPublicShared ? (
+                      <div className="grid grid-cols-1 md:grid-cols-2">
+                        <div className="order-1 md:order-none md:border-r md:border-gray-200">
+                          <SubCategoryHeader title="Mobilare" isPublicShared={isPublicShared} />
+                        </div>
+                        <div className="order-[13] md:order-none mt-5 md:mt-0 border-t border-gray-200 md:border-t-0">
+                          <SubCategoryHeader title="Dotări" isPublicShared={isPublicShared} />
+                        </div>
+                        {apartmentRooms.map((room, idx) => {
+                          const isLastRoom = idx === apartmentRooms.length - 1;
+                          return (
+                            <React.Fragment key={room.label}>
+                              <div
+                                className={`${mobileLeftOrderClasses[idx] || ""} px-5 ${
+                                  idx === 0 ? "pt-5" : "pt-[20px]"
+                                } ${isLastRoom ? "md:pb-5" : ""} md:border-r md:border-gray-200`}
+                              >
+                                {renderRow("mobilare", room.label, room.mobilare, isLastRoom, false, undefined, true)}
+                              </div>
+                              <div
+                                className={`${mobileRightOrderClasses[idx] || ""} px-5 ${
+                                  idx === 0 ? "pt-5" : "pt-[20px]"
+                                } ${isLastRoom ? "pb-5" : ""}`}
+                              >
+                                {renderRow("dotari", room.label, room.dotari, isLastRoom, false, undefined, true)}
+                              </div>
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                        {/* Left: Mobilare */}
+                        <div className="flex flex-col">
+                          <SubCategoryHeader 
+                            title="Mobilare" 
+                            isPublicShared={isPublicShared}
+                            actions={
+                              <SectionEditButton
+                                isEditing={editingSection === "mobilare"}
+                                isDirty={isSectionDirty("mobilare")}
+                                onStartEdit={() => handleStartEditSection("mobilare")}
+                                onCancel={() => handleCancelEditSection("mobilare")}
+                                onSave={() => handleSaveSection("mobilare")}
+                                disabled={isPublicShared}
+                              />
+                            }
+                          />
+                          <div className={`p-5 ${editingSection === "mobilare" ? "space-y-[16px]" : "space-y-4"} flex-1`}>
+                            {apartmentRooms.map((room, idx) =>
+                              renderRow("mobilare", room.label, room.mobilare, idx === apartmentRooms.length - 1, false, undefined, isPublicShared)
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Right: Dotări */}
+                        <div className="flex flex-col">
+                          <SubCategoryHeader 
+                            title="Dotări" 
+                            isPublicShared={isPublicShared}
+                            actions={
+                              <SectionEditButton
+                                isEditing={editingSection === "dotari"}
+                                isDirty={isSectionDirty("dotari")}
+                                onStartEdit={() => handleStartEditSection("dotari")}
+                                onCancel={() => handleCancelEditSection("dotari")}
+                                onSave={() => handleSaveSection("dotari")}
+                                disabled={isPublicShared}
+                              />
+                            }
+                          />
+                          <div className={`p-5 ${editingSection === "dotari" ? "space-y-[16px]" : "space-y-4"} flex-1`}>
+                            {apartmentRooms.map((room, idx) =>
+                              renderRow("dotari", room.label, room.dotari, idx === apartmentRooms.length - 1, false, undefined, isPublicShared)
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </div>
-              </div>
+                );
+              })()}
             </div>
 
             {/* #CARD "BLOC" */}
-            <div id="bloc" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
-              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+            <div id="bloc" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <Building2 size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    BLOC
+                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                    Bloc
                   </h2>
                 </div>
 
@@ -1940,7 +2249,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="font-sans divide-y divide-gray-100">
+              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "bloc" ? "gap-[16px]" : "gap-4")} font-sans`}>
                 {renderRow("bloc", "Acces", "Tag magnetic, interfon")}
                 {renderRow("bloc", "Spații", "-")}
                 {renderRow("bloc", "Dotări", "Lift, supraveghere video")}
@@ -1949,14 +2258,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "IMPREJURIMI" */}
-            <div id="imprejurimi" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
-              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+            <div id="imprejurimi" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <Compass size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    ÎMPREJURIMI
+                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                    Împrejurimi
                   </h2>
                 </div>
 
@@ -1970,7 +2279,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="font-sans divide-y divide-gray-100">
+              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "imprejurimi" ? "gap-[16px]" : "gap-4")} font-sans`}>
                 {renderRow("imprejurimi", "Educație", "Grădinițe de stat și private, școli gimnaziale, licee în apropiere")}
                 {renderRow("imprejurimi", "Comerț", "Numeroase magazine de proximitate.")}
                 {renderRow("imprejurimi", "Benzinării", "Multiple statii de alimentare.")}
@@ -1982,14 +2291,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "TRANSPORT" */}
-            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
-              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <Bus size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    TRANSPORT
+                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                    Transport
                   </h2>
                 </div>
 
@@ -2003,7 +2312,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="font-sans divide-y divide-gray-100">
+              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "transport" ? "gap-[16px]" : "gap-4")} font-sans`}>
                 {renderRow("transport", "Metrou", "Stație de metrou în proximitate")}
                 {renderRow("transport", "Tramvai", "Linii tramvai în zonă")}
                 {renderRow("transport", "Troleibuz", "Linii troleibuz în apropiere")}
@@ -2012,14 +2321,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             </div>
 
             {/* #CARD "PARCARE" */}
-            <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[110px] font-sans">
-              <div className="px-[20px] py-[16px] bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+            <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <Car size={16} />
                   </div>
-                  <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                    PARCARE
+                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                    Parcare
                   </h2>
                 </div>
 
@@ -2033,62 +2342,62 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="font-sans">
+              <div className="p-5 font-sans">
                 {renderRow("parcare", "Parcare", "Publica in zona", true, true)}
               </div>
             </div>
 
             {/* Bottom spacing ensuring smooth scrolling and precise alignment for all jump links */}
-            <div className={isPublicShared ? "h-[calc(100vh-110px)] pointer-events-none" : "h-[20vh] min-h-[160px] pointer-events-none"} aria-hidden="true" />
+            <div className={isPublicShared ? "h-[calc(100vh-104px)] pointer-events-none" : "h-[20vh] min-h-[160px] pointer-events-none"} aria-hidden="true" />
 
           </div>
 
           {/* Right Column: Sticky Sidebar with Owner Card first, then Property Carousel, Price, Title & Share - STRICTLY EXCLUDED on isPublicShared */}
           {!isPublicShared && (
-            <div className="lg:col-span-4 p-4 sm:p-6 lg:p-7 space-y-[20px] lg:sticky lg:top-0">
+            <div className="lg:col-span-4 p-4 sm:p-6 space-y-4 lg:sticky lg:top-0">
             
             {/* OWNER CARD (FIRST IN RIGHT COLUMN) - STRICTLY VISIBLE ONLY INTERNALLY IN CRM (!isPublicShared) */}
             {!isPublicShared && (
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
                 <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                       <User size={16} />
                     </div>
                     <div>
-                      <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                        DATE PROPRIETAR
+                      <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                        Date Proprietar
                       </h2>
-                      <span className="text-[10px] text-gray-500 font-medium font-sans">
+                      <span className="text-[10px] text-gray-500 font-normal font-sans">
                         Privat CRM • Confidențial
                       </span>
                     </div>
                   </div>
-                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded border border-gray-200">
+                  <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-gray-600 bg-gray-100 px-2 py-1 rounded border border-gray-200">
                     <Lock size={10} className="text-gray-400" />
                     Ascuns pe share
                   </span>
                 </div>
 
-                <div className="p-5 space-y-3 text-xs font-sans">
+                <div className="p-5 space-y-4 text-[12px] font-sans">
                   <div>
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
+                    <span className="text-[12px] font-semibold text-[#051D35] block mb-1 font-sans">
                       Nume Proprietar
                     </span>
-                    <span className="font-bold text-gray-900 text-sm font-sans">
+                    <span className="font-normal text-gray-900 text-[12px] font-sans">
                       {lead.ownerName || "Nespecificat"}
                     </span>
                   </div>
 
                   <div>
-                    <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider block mb-0.5 font-sans">
+                    <span className="text-[12px] font-semibold text-[#051D35] block mb-1 font-sans">
                       Telefon Direct
                     </span>
                     {lead.ownerPhone ? (
                       <div className="flex items-center gap-2">
                         <a 
                           href={`tel:${lead.ownerPhone}`}
-                          className="font-mono font-bold text-[#051D35] hover:underline flex items-center gap-1 font-sans"
+                          className="text-[12px] font-normal text-[#051D35] hover:underline flex items-center gap-1 font-sans tabular-nums"
                         >
                           <Phone size={13} className="text-[#BE9662]" />
                           {lead.ownerPhone}
@@ -2103,7 +2412,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         </button>
                       </div>
                     ) : (
-                      <span className="text-gray-400 italic font-sans">Nu este specificat</span>
+                      <span className="text-[12px] text-gray-400 font-normal italic font-sans">Nu este specificat</span>
                     )}
                   </div>
 
@@ -2111,7 +2420,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     <div className="pt-2 border-t border-gray-100 flex gap-2 font-sans">
                       <a
                         href={`tel:${lead.ownerPhone.replace(/[^0-9+]/g, "")}`}
-                        className="flex-1 h-7 rounded bg-[#051D35] text-white font-medium text-xs flex items-center justify-center gap-1 hover:bg-[#0a2b4a] transition-colors"
+                        className="flex-1 h-8 rounded bg-[#051D35] text-white font-medium text-xs flex items-center justify-center gap-1 hover:bg-[#0a2b4a] transition-colors"
                       >
                         <Phone size={11} className="text-[#BE9662]" />
                         <span>Apelează</span>
@@ -2120,7 +2429,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         href={`https://wa.me/4${lead.ownerPhone.replace(/[^0-9]/g, "")}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="flex-1 h-7 rounded bg-emerald-600 text-white font-medium text-xs flex items-center justify-center gap-1 hover:bg-emerald-700 transition-colors"
+                        className="flex-1 h-8 rounded bg-emerald-600 text-white font-medium text-xs flex items-center justify-center gap-1 hover:bg-emerald-700 transition-colors"
                       >
                         <MessageSquare size={11} />
                         <span>WhatsApp</span>
@@ -2128,7 +2437,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     </div>
                   )}
 
-                  <p className="text-[10px] text-gray-400 italic pt-1 font-sans">
+                  <p className="text-[10px] text-gray-400 font-normal italic pt-1 font-sans">
                     * Aceste date sunt confidențiale și sunt vizibile exclusiv consultanților agenției, nu apar pe link-ul distribuit clienților.
                   </p>
                 </div>
@@ -2139,15 +2448,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
               {/* Standardized Card Header */}
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <Camera size={16} />
                   </div>
                   <div>
-                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                      FOTOGRAFII IMOBIL
+                    <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                      Fotografii Imobil
                     </h2>
-                    <span className="text-[10px] text-gray-500 font-medium font-sans">
+                    <span className="text-[10px] text-gray-500 font-normal font-sans">
                       {imagesList.length} {imagesList.length === 1 ? "fotografie" : "fotografii"}
                     </span>
                   </div>
@@ -2192,8 +2501,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     <div className="w-12 h-12 rounded-full bg-[#BE9662]/20 text-[#BE9662] flex items-center justify-center mb-2 animate-bounce">
                       <Upload size={24} />
                     </div>
-                    <p className="text-sm font-bold tracking-wide">Plasează fotografiile aici</p>
-                    <p className="text-xs text-gray-300 mt-0.5">Trage fișierele pentru a le adăuga în galerie</p>
+                    <p className="font-title text-sm font-semibold tracking-wide">Plasează fotografiile aici</p>
+                    <p className="text-xs text-gray-300 mt-1">Trage fișierele pentru a le adăuga în galerie</p>
                   </div>
                 )}
 
@@ -2217,19 +2526,39 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   {imagesList.length > 0 ? (
                     <>
                       <img 
-                        src={imagesList[carouselIndex] || imagesList[0]} 
+                        src={getThumbnailImageUrl(imagesList[carouselIndex] || imagesList[0], 720)} 
                         alt={`${displayTitle} - foto ${carouselIndex + 1}`}
+                        decoding="async"
                         onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
                         className="w-full h-full object-cover cursor-pointer group-hover:scale-102 transition-transform duration-300" 
                         referrerPolicy="no-referrer"
                       />
 
-                      {/* Counter Badge */}
-                      <div className="absolute top-3 right-3 flex items-center gap-1.5 z-10">
+                      {/* Counter Badge & Actions */}
+                      <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+                        {isEditingPhotos && imagesList.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const idxToDelete = carouselIndex;
+                              setImagesList(prev => prev.filter((_, i) => i !== idxToDelete));
+                              setIsPhotosDirty(true);
+                              if (carouselIndex >= imagesList.length - 1) {
+                                setCarouselIndex(Math.max(0, imagesList.length - 2));
+                              }
+                            }}
+                            className="h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-[11px] font-sans font-medium backdrop-blur-xs flex items-center gap-1 transition-colors cursor-pointer shadow-xs"
+                            title="Șterge fotografia curentă"
+                          >
+                            <X size={11} />
+                            <span>Șterge</span>
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
-                          className="h-6 px-2 rounded-md bg-black/65 hover:bg-black/85 text-white text-[11px] font-mono font-medium backdrop-blur-xs flex items-center gap-1 transition-colors cursor-pointer"
+                          className="h-7 px-2 rounded-md bg-black/65 hover:bg-black/85 text-white text-[11px] font-normal backdrop-blur-xs flex items-center gap-1 transition-colors cursor-pointer tabular-nums"
                           title="Deschide galeria completă"
                         >
                           <Camera size={11} className="text-[#BE9662]" />
@@ -2246,7 +2575,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                               e.stopPropagation();
                               setCarouselIndex((prev) => (prev === 0 ? imagesList.length - 1 : prev - 1));
                             }}
-                            className="absolute left-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
+                            className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
                             title="Fotografia anterioară"
                           >
                             <ChevronLeft size={16} />
@@ -2257,7 +2586,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                               e.stopPropagation();
                               setCarouselIndex((prev) => (prev === imagesList.length - 1 ? 0 : prev + 1));
                             }}
-                            className="absolute right-2.5 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
+                            className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
                             title="Fotografia următoare"
                           >
                             <ChevronRight size={16} />
@@ -2266,9 +2595,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       )}
                     </>
                   ) : (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-1.5 p-4 text-center">
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2 p-4 text-center">
                       <Camera size={32} className="text-gray-300" />
-                      <span className="text-xs">Nicio fotografie disponibilă</span>
+                      <span className="text-xs font-normal">Nicio fotografie disponibilă</span>
                     </div>
                   )}
                 </div>
@@ -2276,7 +2605,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 {/* Thumbnails Slots & Pagination */}
                 <div className="space-y-2 pt-1">
                   {imagesList.length > 4 && (
-                    <div className="flex items-center justify-between text-[11px] text-gray-500 font-sans px-0.5">
+                    <div className="flex items-center justify-between text-[11px] text-gray-500 font-sans px-1">
                       <span>Sloturi {slotPage * 4 + 1} - {Math.min((slotPage + 1) * 4, imagesList.length)} din {imagesList.length}</span>
                       <div className="flex items-center gap-1">
                         <button
@@ -2288,7 +2617,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         >
                           <ChevronLeft size={12} />
                         </button>
-                        <span className="font-mono text-[10px] px-1">{slotPage + 1}/{Math.ceil(imagesList.length / 4)}</span>
+                        <span className="text-[10px] px-1 tabular-nums">{slotPage + 1}/{Math.ceil(imagesList.length / 4)}</span>
                         <button
                           type="button"
                           disabled={(slotPage + 1) * 4 >= imagesList.length}
@@ -2358,13 +2687,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                             title={`Foto ${actualIndex + 1} (Trage pentru rearanjare)`}
                           >
                             <img
-                              src={imgUrl}
+                              src={getThumbnailImageUrl(imgUrl, 180)}
                               alt={`Foto ${actualIndex + 1}`}
+                              loading="lazy"
+                              decoding="async"
                               className="w-full h-full object-cover select-none"
                               referrerPolicy="no-referrer"
                             />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
-                            <span className="absolute bottom-1 left-1 px-1 py-0.2 rounded bg-black/60 text-white font-mono text-[9px] pointer-events-none">
+                            <span className="absolute bottom-1 left-1 px-1 py-0 rounded bg-black/60 text-white text-[9px] pointer-events-none tabular-nums">
                               {actualIndex + 1}
                             </span>
                             {isEditingPhotos && (
@@ -2392,7 +2723,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                           key={`empty-${offset}`}
                           className="aspect-square rounded-lg border border-dashed border-gray-200 bg-gray-50/50 flex items-center justify-center text-gray-300"
                         >
-                          <span className="text-[10px] font-mono text-gray-300">{slotPage * 4 + offset + 1}</span>
+                          <span className="text-[10px] text-gray-300 tabular-nums">{slotPage * 4 + offset + 1}</span>
                         </div>
                       );
                     })}
@@ -2414,15 +2745,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             {/* LINK ACCES PUBLIC - Standardized Card Header */}
             <div className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs font-sans">
               <div className="px-6 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-bold">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
                     <Share2 size={16} />
                   </div>
                   <div>
-                    <h2 className="text-xs font-bold text-gray-900 uppercase tracking-wider font-sans">
-                      LINK ACCES PUBLIC
+                    <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                      Link Acces Public
                     </h2>
-                    <span className="text-[10px] text-emerald-700 font-medium font-sans">
+                    <span className="text-[10px] text-emerald-700 font-normal font-sans">
                       Fără date proprietar
                     </span>
                   </div>
@@ -2430,14 +2761,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
 
               <div className="p-5 space-y-2 font-sans">
-                <div className="flex items-center gap-1.5 bg-gray-50 border border-gray-200 rounded p-1 pl-2">
-                  <span className="text-[11px] font-mono text-gray-600 truncate flex-1 select-all font-sans">
+                <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded p-1 pl-2">
+                  <span className="text-[12px] text-gray-600 font-normal truncate flex-1 select-all font-sans">
                     {getPublicShareUrl(lead.id || "")}
                   </span>
                   <button
                     type="button"
                     onClick={handleNativeShare}
-                    className="h-6 px-2.5 rounded text-[11px] font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-colors shrink-0 cursor-pointer font-sans flex items-center gap-1"
+                    className="h-7 px-3 rounded text-[11px] font-semibold bg-[#051D35] text-white hover:bg-[#0a2b4a] transition-colors shrink-0 cursor-pointer font-sans flex items-center gap-1"
                     title="Deschide aplicația nativă pentru distribuire"
                   >
                     <Share2 size={11} className="text-[#BE9662]" />
@@ -2446,7 +2777,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   <button
                     type="button"
                     onClick={handleCopyLink}
-                    className="h-6 px-2.5 rounded text-[11px] font-medium bg-white text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors shrink-0 cursor-pointer font-sans"
+                    className="h-7 px-3 rounded text-[11px] font-medium bg-white text-gray-700 hover:bg-gray-100 border border-gray-200 transition-colors shrink-0 cursor-pointer font-sans"
                     title="Copiază linkul"
                   >
                     {isCopied ? "Copiat" : "Copiază"}
@@ -2479,7 +2810,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col">
           <div className="h-14 px-6 flex items-center justify-between text-white border-b border-white/10 shrink-0">
             <div className="flex items-center gap-3">
-              <span className="text-xs font-mono font-bold bg-white/10 px-2.5 py-1 rounded">
+              <span className="text-xs font-semibold bg-white/10 px-2 py-1 rounded tabular-nums">
                 {selectedPhotoIndex + 1} / {allImages.length}
               </span>
               <span className="text-xs text-gray-300 hidden sm:inline truncate max-w-md">
@@ -2498,18 +2829,30 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           </div>
 
           <div className="flex-1 relative flex items-center justify-center p-4">
-            <img 
-              src={imagesList[selectedPhotoIndex] || imagesList[0]} 
-              alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
-              className="max-h-[82vh] max-w-[90vw] object-contain rounded shadow-2xl transition-all"
-              referrerPolicy="no-referrer"
-            />
+            {isPublicShared ? (
+              <div className="w-full h-[82vh] max-w-[90vw]">
+                <ProtectedPublicImage
+                  src={getThumbnailImageUrl(imagesList[selectedPhotoIndex] || imagesList[0], 1600)}
+                  alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
+                  fit="contain"
+                  className="rounded shadow-2xl"
+                />
+              </div>
+            ) : (
+              <img 
+                src={getThumbnailImageUrl(imagesList[selectedPhotoIndex] || imagesList[0], 1600)} 
+                alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
+                decoding="async"
+                className="max-h-[82vh] max-w-[90vw] object-contain rounded shadow-2xl transition-all"
+                referrerPolicy="no-referrer"
+              />
+            )}
 
             {imagesList.length > 1 && (
               <button
                 type="button"
                 onClick={() => setSelectedPhotoIndex(prev => (prev === 0 ? imagesList.length - 1 : prev - 1))}
-                className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
+                className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm cursor-pointer"
                 title="Fotografia anterioară"
               >
                 <ChevronLeft size={24} />
@@ -2520,7 +2863,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <button
                 type="button"
                 onClick={() => setSelectedPhotoIndex(prev => (prev === imagesList.length - 1 ? 0 : prev + 1))}
-                className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm"
+                className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm cursor-pointer"
                 title="Următoarea fotografie"
               >
                 <ChevronRight size={24} />
@@ -2534,13 +2877,21 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 key={idx}
                 type="button"
                 onClick={() => setSelectedPhotoIndex(idx)}
-                className={`w-14 h-12 rounded overflow-hidden border-2 transition-all shrink-0 ${
+                className={`w-14 h-12 rounded overflow-hidden border-2 transition-all shrink-0 cursor-pointer ${
                   selectedPhotoIndex === idx 
                     ? "border-[#BE9662] scale-105" 
                     : "border-transparent opacity-50 hover:opacity-100"
                 }`}
               >
-                <img src={img} alt={`thumb-${idx}`} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                {isPublicShared ? (
+                  <ProtectedPublicImage
+                    src={getThumbnailImageUrl(img, 140)}
+                    alt={`thumb-${idx}`}
+                    fit="cover"
+                  />
+                ) : (
+                  <img src={getThumbnailImageUrl(img, 140)} alt={`thumb-${idx}`} loading="lazy" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                )}
               </button>
             ))}
           </div>

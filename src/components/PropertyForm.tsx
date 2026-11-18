@@ -17,6 +17,7 @@ import {
   EditableMultiSelect
 } from './FormElements';
 import { Download, FileText, Search, Zap, Sparkles, Loader2, ArrowRightLeft } from 'lucide-react';
+import { getCleanDisplayImageUrl } from '../utils/imageUtils';
 
 import { 
   STADIU_OPTIONS, 
@@ -533,10 +534,10 @@ export const DetaliiGeneraleSection = ({ data, onUpdate, categoria }: { data: an
   const [markerPosition, setMarkerPosition] = React.useState(DEFAULT_CENTER);
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionHeader>Detalii Generale</SectionHeader>
-      <div className="grid grid-cols-1 gap-6">
-        <div className="space-y-5">
+      <div className="grid grid-cols-1 gap-4">
+        <div className="space-y-4">
           <FormGrid cols={3}>
             <div><FormLabel>Stadiu</FormLabel><FormSelect value={safeData.stadiu || STADIU_OPTIONS[0]} options={STADIU_OPTIONS} placeholder="Activ - Hot" onChange={(val) => onUpdate?.('crmData.detaliiGenerale.stadiu', val)} /></div>
             <div><FormLabel>Tranzacție</FormLabel><FormSelect value={safeData.tranzactie} options={TRANZACTIE_OPTIONS} placeholder="" showEmpty={false} onChange={(val) => onUpdate?.('crmData.detaliiGenerale.tranzactie', val)} /></div>
@@ -551,8 +552,8 @@ export const DetaliiGeneraleSection = ({ data, onUpdate, categoria }: { data: an
       </div>
       
       <FormDivider />
-      <div className="flex flex-col lg:flex-row gap-5">
-        <div className="flex-1 space-y-5">
+      <div className="flex flex-col lg:flex-row gap-4">
+        <div className="flex-1 space-y-4">
           <SectionHeader>Localizare</SectionHeader>
           <div>
             <FormLabel>Oraș</FormLabel>
@@ -568,7 +569,7 @@ export const DetaliiGeneraleSection = ({ data, onUpdate, categoria }: { data: an
             />
           </div>
           
-          <div className="grid grid-cols-3 gap-5">
+          <div className="grid grid-cols-3 gap-4">
             <div className="col-span-2">
               <FormLabel>Stradă</FormLabel>
               <FormInput 
@@ -585,7 +586,7 @@ export const DetaliiGeneraleSection = ({ data, onUpdate, categoria }: { data: an
             </div>
           </div>
 
-          <div className="grid grid-cols-3 gap-5">
+          <div className="grid grid-cols-3 gap-4">
             <div>
               <FormLabel>Bloc</FormLabel>
               <FormInput value={safeData.localizare?.bloc} onChange={(val) => onUpdate?.('crmData.detaliiGenerale.localizare.bloc', val)} />
@@ -604,7 +605,7 @@ export const DetaliiGeneraleSection = ({ data, onUpdate, categoria }: { data: an
         <div className="lg:w-1/2 aspect-square lg:aspect-auto h-[400px] lg:h-auto min-h-[300px]">
           {!hasValidKey ? (
             <div className="w-full h-full bg-white rounded-[16px] border border-gray-100 p-5 flex flex-col items-center justify-center text-center shadow-soft">
-              <h4 className="text-[15px] font-bold text-[--color-text-main] mb-3">Google Maps API Key Required</h4>
+              <h4 className="font-title text-[15px] font-semibold text-[--color-text-main] mb-3">Google Maps API Key Required</h4>
               <p className="text-[12px] text-[--color-text-secondary] mb-6">
                 Please add <code>GOOGLE_MAPS_PLATFORM_KEY</code> to your secrets to enable the map.
               </p>
@@ -647,12 +648,12 @@ export const DetaliiGeneraleSection = ({ data, onUpdate, categoria }: { data: an
                 <div className="flex flex-col items-center justify-center -translate-y-5">
                   {/* Pin head and body */}
                   <div className="w-9 h-9 rounded-full bg-red-500 border-2 border-white shadow-lg flex items-center justify-center">
-                    <div className="w-2.5 h-2.5 rounded-full bg-white shadow-inner" />
+                    <div className="w-2 h-2 rounded-full bg-white shadow-inner" />
                   </div>
                   {/* Pin tip stick */}
-                  <div className="w-1.5 h-3 bg-red-500 shadow-sm" />
+                  <div className="w-2 h-3 bg-red-500 shadow-sm" />
                   {/* Shadow on map surface */}
-                  <div className="w-4 h-1 bg-black/30 rounded-full blur-[1px] translate-y-0.5 scale-x-125" />
+                  <div className="w-4 h-1 bg-black/30 rounded-full blur-[1px] translate-y-1 scale-x-125" />
                 </div>
               </div>
             </div>
@@ -660,7 +661,7 @@ export const DetaliiGeneraleSection = ({ data, onUpdate, categoria }: { data: an
         </div>
       </div>
       <FormDivider />
-      <div className="grid grid-cols-2 gap-5">
+      <div className="grid grid-cols-2 gap-4">
         <div>
           <FormLabel>Puncte de Interes</FormLabel>
           <FormInput 
@@ -699,7 +700,7 @@ const EditableTextArea = ({ initialValue, height = "h-32", onUpdate }: { initial
         setValue(e.target.value);
         onUpdate?.(e.target.value);
       }}
-      className={`input-base w-full ${height} p-5 resize-none`}
+      className={`input-base w-full ${height} p-4 font-normal resize-none`}
     />
   );
 };
@@ -787,9 +788,9 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
 
   if (isSpatiuComercial) {
     return (
-      <div className="space-y-8">
+      <div className="space-y-4">
         {/* DETALII SECTION */}
-        <div className="space-y-5">
+        <div className="space-y-4">
           <SectionHeader>Detalii</SectionHeader>
           <FormGrid cols={5}>
             <div><FormLabel>Încăperi</FormLabel><FormInput value={safeData.detalii?.camere} onChange={(val) => onUpdate?.('crmData.caracteristici.detalii.camere', val)} /></div>
@@ -817,7 +818,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
         <FormDivider />
 
         {/* SUPRAFETE SECTION */}
-        <div className="space-y-5">
+        <div className="space-y-4">
           <SectionHeader>Suprafețe</SectionHeader>
           <FormGrid cols={6}>
             <div><FormLabel>Utilă</FormLabel><FormInput value={utila} unit="m2" onChange={handleUtilaChange} /></div>
@@ -832,7 +833,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
         <FormDivider />
 
         {/* CLADIRE SECTION */}
-        <div className="space-y-5">
+        <div className="space-y-4">
           <SectionHeader>Clădire</SectionHeader>
           <FormGrid cols={6}>
             <div><FormLabel>Stadiu Construcție</FormLabel><FormSelect value={safeData.alteDetalii?.stadiuConstructie || "Finalizata"} options={STADIU_CONSTRUCTIE_OPTIONS} onChange={(val) => onUpdate?.('crmData.caracteristici.alteDetalii.stadiuConstructie', val)} /></div>
@@ -843,9 +844,9 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
             <div><FormLabel>Anul Renovării</FormLabel><FormInput value={safeData.alteDetalii?.anRenovare} onChange={(val) => onUpdate?.('crmData.caracteristici.alteDetalii.anRenovare', val)} /></div>
           </FormGrid>
 
-          <div className="mt-5">
+          <div className="mt-4">
             <FormLabel>Înălțime</FormLabel>
-            <div className="flex flex-wrap items-center gap-5 mt-4">
+            <div className="flex flex-wrap items-center gap-4 mt-4">
               <div className="flex items-center gap-2">
                 <FormCheckbox 
                   label="S +" 
@@ -878,7 +879,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
               </div>
               <div className="flex items-center gap-3">
                 <div className="w-16"><FormInput value={safeData.alteDetalii?.niveluriConstructie?.split('+')?.[1]?.trim() || ""} onChange={(val) => onUpdate?.('crmData.caracteristici.alteDetalii.niveluriConstructie', val)} /></div>
-                <span className="text-[13px] text-[#6a7282] font-medium">Etaje +</span>
+                <span className="text-[13px] text-[#6a7282] font-normal">Etaje +</span>
               </div>
               <div className="flex items-center gap-2">
                 <FormCheckbox 
@@ -899,7 +900,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
 
   // Default Apartment View
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionHeader>Detalii</SectionHeader>
       <FormGrid cols={4}>
         <div><FormLabel>Tip Apartament</FormLabel><FormSelect value={safeData.detalii?.tipApartament} options={TIP_APARTAMENT_OPTIONS} onChange={(val) => onUpdate?.('crmData.caracteristici.detalii.tipApartament', val)} /></div>
@@ -923,7 +924,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
         <div><FormLabel>Parcări</FormLabel><FormInput value={safeData.detalii?.parcari} onChange={(val) => onUpdate?.('crmData.caracteristici.detalii.parcari', val)} /></div>
         <div><FormLabel>Garaje</FormLabel><FormInput value={safeData.detalii?.garaje} onChange={(val) => onUpdate?.('crmData.caracteristici.detalii.garaje', val)} /></div>
       </FormGrid>
-      <div className="flex flex-wrap gap-5 py-2">
+      <div className="flex flex-wrap gap-4 py-2">
         {['Geam la baie', 'Bucatarie deschisa', 'Pet friendly', 'Cheia in agentie'].map(label => (
           <FormCheckbox 
             key={label} 
@@ -957,7 +958,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
       </FormGrid>
       <FormDivider />
       <SectionHeader>Clădire</SectionHeader>
-      <div className="space-y-5 mb-5">
+      <div className="space-y-4 mb-4">
         <FormGrid cols={4}>
           <div><FormLabel>Stadiu Construcție</FormLabel><FormSelect value={safeData.alteDetalii?.stadiuConstructie || "Finalizata"} options={STADIU_CONSTRUCTIE_OPTIONS} onChange={(val) => onUpdate?.('crmData.caracteristici.alteDetalii.stadiuConstructie', val)} /></div>
           <div><FormLabel>Tip</FormLabel><FormSelect value={safeData.alteDetalii?.tipImobil || "Bloc Mixt"} options={TIP_IMOBIL_OPTIONS} onChange={(val) => onUpdate?.('crmData.caracteristici.alteDetalii.tipImobil', val)} /></div>
@@ -965,9 +966,9 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
           <div><FormLabel>Risc Seismic</FormLabel><FormSelect value={safeData.alteDetalii?.riscSeismic || ""} options={RISC_SEISMIC_OPTIONS} onChange={(val) => onUpdate?.('crmData.caracteristici.alteDetalii.riscSeismic', val)} /></div>
         </FormGrid>
 
-        <div className="mt-5">
+        <div className="mt-4">
           <FormLabel>Înălțime</FormLabel>
-          <div className="flex flex-wrap items-center gap-5 mt-4">
+          <div className="flex flex-wrap items-center gap-4 mt-4">
             <div className="flex items-center gap-2">
               <FormCheckbox 
                 label="S +" 
@@ -1000,7 +1001,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
             </div>
             <div className="flex items-center gap-3">
               <div className="w-16"><FormInput value={safeData.alteDetalii?.niveluriConstructie?.split('+')?.[1]?.trim() || safeData.alteDetalii?.niveluriConstructie || ""} onChange={(val) => onUpdate?.('crmData.caracteristici.alteDetalii.niveluriConstructie', val)} /></div>
-              <span className="text-[13px] text-[#6a7282] font-medium">Etaje +</span>
+              <span className="text-[13px] text-[#6a7282] font-normal">Etaje +</span>
             </div>
           </div>
         </div>
@@ -1010,7 +1011,7 @@ export const CaracteristiciSection = ({ data, onUpdate, categoria }: { data: any
       <FormGrid cols={4}>
          <div><FormLabel>Clasǎ Energetică</FormLabel><FormSelect value={safeData.energetica?.clasa || ""} options={CLASA_ENERGETICA_OPTIONS} onChange={(val) => onUpdate?.('crmData.caracteristici.energetica.clasa', val)} /></div>
       </FormGrid>
-      <FormGrid cols={3} className="mt-5">
+      <FormGrid cols={3} className="mt-4">
          <div><FormLabel>Consum Anual Specific</FormLabel><FormInput value={safeData.energetica?.consumAnual} unit="kWh/m2an" onChange={(val) => onUpdate?.('crmData.caracteristici.energetica.consumAnual', val)} /></div>
          <div><FormLabel>Indice de Emisii Echivalent CO2</FormLabel><FormInput value={safeData.energetica?.emisiiCO2} unit="kgco2/m2an" onChange={(val) => onUpdate?.('crmData.caracteristici.energetica.emisiiCO2', val)} /></div>
          <div><FormLabel>Consum Specific din Surse Regenerabile</FormLabel><FormInput value={safeData.energetica?.consumRegenerabile} unit="kWh/m2an" onChange={(val) => onUpdate?.('crmData.caracteristici.energetica.consumRegenerabile', val)} /></div>
@@ -1032,7 +1033,7 @@ export const UtilitatiSection = ({ data, onUpdate, categoria }: { data: any, onU
 
   if (isSpatiuComercial) {
     return (
-      <div className="space-y-8">
+      <div className="space-y-4">
         <SectionHeader>Utilități</SectionHeader>
         <FormGrid cols={3}>
            <div className="space-y-2">
@@ -1153,7 +1154,7 @@ export const UtilitatiSection = ({ data, onUpdate, categoria }: { data: any, onU
            </div>
         </FormGrid>
 
-        <FormGrid cols={4} className="mt-5">
+        <FormGrid cols={4} className="mt-4">
             <div className="space-y-2">
               <FormLabel>Ferestre</FormLabel>
               {['PVC', 'Lemn', 'Aluminiu', 'Termopan'].map(l => (
@@ -1299,7 +1300,7 @@ export const UtilitatiSection = ({ data, onUpdate, categoria }: { data: any, onU
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionHeader>Utilități</SectionHeader>
       <FormGrid cols={3}>
           <div className="space-y-2">
@@ -1406,7 +1407,7 @@ export const UtilitatiSection = ({ data, onUpdate, categoria }: { data: any, onU
          </div>
       </FormGrid>
 
-      <FormGrid cols={4} className="mt-5">
+      <FormGrid cols={4} className="mt-4">
           <div className="space-y-2">
             <FormLabel>Ferestre</FormLabel>
             {['PVC', 'Lemn', 'Aluminiu', 'Termopan'].map(l => (
@@ -1465,7 +1466,7 @@ export const UtilitatiSection = ({ data, onUpdate, categoria }: { data: any, onU
          </div>
       </FormGrid>
 
-      <FormGrid cols={4} className="mt-5">
+      <FormGrid cols={4} className="mt-4">
          <div className="space-y-2">
             <FormLabel>Uși Interior</FormLabel>
             {['Celulare', 'Lemn', 'Panel', 'PVC', 'Sticla', 'Metal'].map(l => (
@@ -1544,7 +1545,7 @@ export const UtilitatiSection = ({ data, onUpdate, categoria }: { data: any, onU
          </div>
       </FormGrid>
 
-      <FormGrid cols={4} className="mt-5">
+      <FormGrid cols={4} className="mt-4">
           <div className="space-y-2">
             <FormLabel>Electrocasnice</FormLabel>
             {['Masina de spalat rufe', 'Frigider', 'Aragaz', 'Masina de spalat vase', 'TV', 'Cafetiera', 'Cuptor microunde', 'Hota', 'Plita electrica'].map(l => (
@@ -1625,9 +1626,9 @@ export const PretSection = ({ data, tranzactie, onUpdate }: { data: any, tranzac
   const calculatedCommission = !isVanzare ? getHalfPrice(currentPret) : "";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <SectionHeader>Detalii Preț</SectionHeader>
-      <div className="grid grid-cols-4 gap-5 items-start">
+      <div className="grid grid-cols-4 gap-4 items-start">
          <div>
            <FormLabel>Preț</FormLabel>
            <FormInput 
@@ -1640,7 +1641,7 @@ export const PretSection = ({ data, tranzactie, onUpdate }: { data: any, tranzac
          </div>
          <div>
            <FormLabel>Monedă</FormLabel>
-           <div className="flex items-center gap-5">
+           <div className="flex items-center gap-4">
              <div className="flex-1">
                <FormSelect value={safeData.detalii?.moneda} onChange={(val) => onUpdate?.('crmData.pret.detalii.moneda', val)} />
              </div>
@@ -1663,8 +1664,8 @@ export const PretSection = ({ data, tranzactie, onUpdate }: { data: any, tranzac
          </div>
       </div>
   
-      <div className="flex items-center gap-5">
-         <div className="flex gap-5">
+      <div className="flex items-center gap-4">
+         <div className="flex gap-4">
             {['Pret negociabil', 'Pret la cerere', 'Regim hotelier', 'Afiseaza pret/m²'].map(l => (
               <FormCheckbox 
                 key={l} 
@@ -1678,7 +1679,7 @@ export const PretSection = ({ data, tranzactie, onUpdate }: { data: any, tranzac
             ))}
          </div>
          <div className="flex-1 flex justify-end">
-            <button className="h-11 px-6 bg-white border border-[--color-border] rounded-full text-[12px] font-bold text-[--color-text-main] hover:bg-gray-50 transition-colors shadow-none">
+            <button className="h-10 px-6 bg-white border border-[--color-border] rounded-full text-[12px] font-semibold text-[--color-text-main] hover:bg-gray-50 transition-colors shadow-none">
               Vezi istoric pret
             </button>
          </div>
@@ -1724,7 +1725,7 @@ export const PretSection = ({ data, tranzactie, onUpdate }: { data: any, tranzac
            <FormInput value={!isVanzare ? (calculatedCommission || safeData.comisioane?.comisionProprietarValoare) : safeData.comisioane?.comisionProprietarValoare} onChange={(val) => onUpdate?.('crmData.pret.comisioane.comisionProprietarValoare', val)} />
          </div>
       </FormGrid>
-      <div className="mb-6">
+      <div className="mb-4">
         <FormCheckbox 
           label="Colaborare" 
           checked={safeData.comisioane?.colaborare} 
@@ -1988,15 +1989,15 @@ export const DescriereSection = ({
   };
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       {/* On-demand AI Title & Description Generator */}
-      <div className="bg-amber-50/60 border border-amber-200/80 rounded-lg p-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2.5">
+      <div className="bg-amber-50/60 border border-amber-200/80 rounded-lg p-3 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-md bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
             <Sparkles size={16} />
           </div>
           <div>
-            <h4 className="text-xs font-semibold text-gray-900">Generare Text Marketing cu AI (La cerere)</h4>
+            <h4 className="font-title text-xs font-semibold text-gray-900">Generare Text Marketing cu AI (La cerere)</h4>
             <p className="text-[11px] text-gray-500">
               Apasă doar dacă dorești să generezi automat un titlu sub 70 caractere și descrierea conform regulilor oficiale.
             </p>
@@ -2006,7 +2007,7 @@ export const DescriereSection = ({
           type="button"
           onClick={handleGenerateWithAI}
           disabled={isAiGenerating}
-          className="px-3.5 py-1.5 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-medium rounded-md transition-all flex items-center gap-1.5 shrink-0 disabled:opacity-50 shadow-xs cursor-pointer"
+          className="px-4 py-2 bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-medium rounded-md transition-all flex items-center gap-2 shrink-0 disabled:opacity-50 shadow-xs cursor-pointer"
         >
           {isAiGenerating ? (
             <>
@@ -2022,12 +2023,12 @@ export const DescriereSection = ({
         </button>
       </div>
 
-      <div className="mb-5">
+      <div className="mb-4">
          <div className="flex items-center justify-between mb-3">
            <SectionHeader>Titlu</SectionHeader>
            <button 
              onClick={generateTemplateTitle}
-             className="text-[11px] font-bold text-[--color-accent] hover:bg-[--color-accent]/10 px-3 py-1 rounded-full transition-colors border border-[--color-accent]/20 flex items-center gap-1.5"
+             className="text-[11px] font-semibold text-[--color-accent] hover:bg-[--color-accent]/10 px-3 py-1 rounded-full transition-colors border border-[--color-accent]/20 flex items-center gap-2"
            >
              <Zap size={12} fill="currentColor" />
              Construiește Titlu (Template)
@@ -2036,13 +2037,13 @@ export const DescriereSection = ({
          <FormInputWithCounter value={safeData.titlu} limit={70} onChange={(val) => onUpdate?.('crmData.descriere.titlu', val)} />
       </div>
       <FormDivider />
-      <div className="mb-5">
+      <div className="mb-4">
          <div className="flex items-center justify-between mb-3">
            <SectionHeader>Descriere</SectionHeader>
            <button 
              type="button"
              onClick={generateTemplateDescriere}
-             className="text-[11px] font-bold text-[--color-accent] hover:bg-[--color-accent]/10 px-3 py-1 rounded-full transition-colors border border-[--color-accent]/20 flex items-center gap-1.5"
+             className="text-[11px] font-semibold text-[--color-accent] hover:bg-[--color-accent]/10 px-3 py-1 rounded-full transition-colors border border-[--color-accent]/20 flex items-center gap-2"
            >
              <Zap size={12} fill="currentColor" />
              Construiește Descriere (Template)
@@ -2076,7 +2077,7 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
           <Zap size={32} />
         </div>
         <div>
-          <p className="text-[14px] font-black text-gray-400 uppercase tracking-widest">Nicio imagine detectată</p>
+          <p className="text-[14px] font-semibold text-gray-400 uppercase tracking-widest">Nicio imagine detectată</p>
           <p className="text-[12px] text-gray-400 mt-1">Extracția nu a identificat imagini pentru această proprietate.</p>
         </div>
       </div>
@@ -3284,9 +3285,9 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Information Header */}
-      <div className="bg-blue-50/60 border border-blue-200/80 rounded-lg p-3 flex items-center justify-between gap-3 text-xs text-blue-900">
+      <div className="bg-blue-50/60 border border-blue-200/80 rounded-lg p-3 flex items-center justify-between gap-4 text-xs text-blue-900">
         <div className="flex items-center gap-2">
           <ArrowRightLeft size={16} className="text-blue-600 shrink-0" />
           <span>
@@ -3299,14 +3300,14 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
         const images = safeData[cat.id] || [];
         
         return (
-          <div key={cat.id} className="p-4 bg-gray-50/50 rounded-xl border border-gray-200/80 space-y-3">
+          <div key={cat.id} className="p-4 bg-gray-50/50 rounded-xl border border-gray-200/80 space-y-4">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <span className="text-base">{cat.icon}</span>
-                <h4 className="text-xs font-bold text-gray-900 uppercase tracking-wider">
+                <h4 className="font-title text-xs font-semibold text-gray-900 uppercase tracking-wider">
                   {cat.label}
                 </h4>
-                <span className="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-600 font-semibold">
+                <span className="text-[11px] font-sans px-2 py-1 rounded-full bg-white border border-gray-200 text-gray-600 font-normal">
                   {images.length} {images.length === 1 ? 'poză' : 'poze'}
                 </span>
               </div>
@@ -3314,7 +3315,7 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
               {images.length > 0 && (
                 <button 
                   onClick={() => downloadAllInCategory(images, cat.id)}
-                  className="flex items-center gap-1.5 h-8 text-[11px] font-semibold text-gray-700 bg-white border border-gray-200 hover:bg-gray-100 px-3 rounded-md transition-colors shadow-2xs"
+                  className="flex items-center gap-2 h-8 text-[11px] font-semibold text-gray-700 bg-white border border-gray-200 hover:bg-gray-100 px-3 rounded-md transition-colors shadow-2xs"
                 >
                   <Download size={13} />
                   DESCARCĂ TOT ({images.length})
@@ -3325,12 +3326,12 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
             {images.length === 0 ? (
               <div className="py-5 px-4 border border-dashed border-gray-300 rounded-lg text-center bg-white/60">
                 <p className="text-xs font-medium text-gray-500">Slot gol: {cat.label}</p>
-                <p className="text-[11px] text-gray-400 mt-0.5">
+                <p className="text-[11px] text-gray-400 mt-1">
                   Folosește selectorul „Slot” de pe o fotografie din alte secțiuni pentru a o muta aici.
                 </p>
               </div>
             ) : (
-              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4">
                 {images.map((imageData: { original: string }, idx: number) => (
                   <ImageCard 
                     key={idx} 
@@ -3338,7 +3339,7 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
                     category={cat.id}
                     onMoveCategory={(targetCat) => handleMoveImage(imageData.original, cat.id, targetCat)}
                     onClick={() => {
-                      const proxied = `/api/proxy-image?url=${encodeURIComponent(imageData.original)}`;
+                      const proxied = getCleanDisplayImageUrl(imageData.original);
                       window.open(proxied, '_blank');
                     }}
                     noHoverEffect
@@ -3352,9 +3353,9 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
 
       {/* Sectiunea Promo ca ultima sectiune sub imagini */}
       {firstImage && (
-        <div className="border-t border-[--color-border] pt-10 mt-10">
-          <div className="flex items-center justify-between mb-5">
-            <h4 className="text-[14px] font-bold text-[--color-text-main] uppercase tracking-wider flex items-center gap-2">
+        <div className="border-t border-[--color-border] pt-8 mt-8">
+          <div className="flex items-center justify-between mb-4">
+            <h4 className="font-title text-[14px] font-semibold text-[--color-text-main] uppercase tracking-wider flex items-center gap-2">
               PROMO LANDING CARD
             </h4>
             <button 
@@ -3364,7 +3365,7 @@ export const ImaginiSection = ({ data, onUpdate, fullCRMData, propertyId }: { da
                  a.download = `promo-img.png`;
                  a.click();
               }}
-              className="flex items-center gap-2 h-10 text-[12px] font-bold text-[--color-text-main] border border-[--color-border] hover:bg-gray-50 px-5 rounded-full transition-colors shadow-none"
+              className="flex items-center gap-2 h-10 text-[12px] font-semibold text-[--color-text-main] border border-[--color-border] hover:bg-gray-50 px-5 rounded-full transition-colors shadow-none"
             >
               <Download size={14} />
               DESCARCĂ IMAGINE PROMO

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Download, Copy, Check, Zap } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { getCleanDisplayImageUrl, getThumbnailImageUrl } from '../utils/imageUtils';
 
 export const FormLabel = ({ children }: { children: React.ReactNode }) => (
   <label className="block text-[11px] font-semibold text-gray-500 uppercase tracking-wider mb-1">
@@ -30,10 +31,10 @@ export const FormInput = ({ value: initialValue, placeholder, unit, type = "text
         onBlur={() => onBlur?.(value)}
         onFocus={onFocus}
         placeholder={placeholder}
-        className={`input-base w-full ${unit ? 'pr-10' : ''} ${type === 'date' ? 'uppercase text-[12px] font-medium' : ''}`}
+        className={`input-base w-full font-normal ${unit ? 'pr-10' : ''} ${type === 'date' ? 'uppercase text-[12px] font-normal' : ''}`}
       />
       {unit && (
-        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] font-medium text-gray-400 pointer-events-none">
+        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-normal text-gray-400 pointer-events-none">
           {unit}
         </span>
       )}
@@ -64,9 +65,9 @@ export const FormInputWithCounter = ({ value: initialValue, limit = 70, onChange
         value={value}
         onChange={handleChange}
         onBlur={onBlur}
-        className={`input-base w-full pr-10 ${isOverLimit ? 'border-red-500 focus:border-red-500' : ''}`}
+        className={`input-base w-full font-normal pr-10 ${isOverLimit ? 'border-red-500 focus:border-red-500' : ''}`}
       />
-      <span className={`absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-mono ${isOverLimit ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
+      <span className={`absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-mono ${isOverLimit ? 'text-red-500 font-bold' : 'text-gray-400'}`}>
         {count}
       </span>
     </div>
@@ -97,7 +98,7 @@ export const FormSelect = ({ value: initialValue, placeholder, options = [], onC
   return (
     <div className="relative w-full">
       <select
-        className="input-base w-full appearance-none pr-8 cursor-pointer"
+        className="input-base w-full font-normal appearance-none pr-8 cursor-pointer"
         value={value}
         onChange={handleChange}
         onBlur={onBlur}
@@ -108,7 +109,7 @@ export const FormSelect = ({ value: initialValue, placeholder, options = [], onC
           </option>
         ))}
       </select>
-      <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+      <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
         <svg width="8" height="5" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
@@ -205,7 +206,7 @@ export const FormRadioBar = ({ options, activeValue: initialActive, onChange }: 
   };
 
   return (
-    <div className="flex flex-wrap gap-1.5 w-full">
+    <div className="flex flex-wrap gap-2 w-full">
       {options.map((opt) => {
         const isActive = String(active || "").toLowerCase() === String(opt || "").toLowerCase();
         return (
@@ -261,34 +262,34 @@ export const EditableMultiSelect = ({ label, options, initialSelected = [], onCh
     <div className="relative w-full" ref={dropdownRef}>
       <div 
         onClick={() => setIsOpen(!isOpen)}
-        className="input-base min-h-[48px] h-auto w-full px-5 py-2 pr-12 flex flex-wrap gap-2 cursor-pointer !rounded-[8px]"
+        className="input-base min-h-[48px] h-auto w-full px-4 py-2 pr-12 flex flex-wrap gap-2 cursor-pointer !rounded-[8px]"
       >
         {selected.length === 0 ? (
-          <span className="text-[15px] text-[--color-text-placeholder] self-center">Selectează {label}</span>
+          <span className="text-[15px] font-normal text-[--color-text-placeholder] self-center">Selectează {label}</span>
         ) : (
           selected.map(item => (
-            <span key={item} className="bg-gray-50 border border-gray-200 text-gray-700 text-[11px] font-bold px-3 py-1 rounded-[4px] flex items-center gap-1.5 self-center">
+            <span key={item} className="bg-gray-50 border border-gray-200 text-gray-700 text-[11px] font-normal px-3 py-1 rounded-[4px] flex items-center gap-2 self-center">
               {item}
               <Check size={10} className="text-gray-400" />
             </span>
           ))
         )}
       </div>
-      <div className="absolute right-5 top-1/2 -translate-y-1/2 pointer-events-none text-[--color-text-placeholder]">
+      <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-[--color-text-placeholder]">
         <svg width="10" height="6" viewBox="0 0 10 6" fill="none" xmlns="http://www.w3.org/2000/svg">
           <path d="M1 1L5 5L9 1" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
         </svg>
       </div>
 
       {isOpen && (
-        <div className="absolute z-10 w-full mt-2 bg-white border border-[--color-border] rounded-[8px] shadow-soft max-h-60 overflow-y-auto p-1.5 custom-scrollbar">
+        <div className="absolute z-10 w-full mt-2 bg-white border border-[--color-border] rounded-[8px] shadow-soft max-h-60 overflow-y-auto p-2 custom-scrollbar">
           {options.map(option => (
             <div 
               key={option}
               onClick={() => toggleOption(option)}
-              className={`flex items-center justify-between px-5 py-3 rounded-[12px] cursor-pointer transition-colors ${selected.includes(option) ? 'bg-gray-50 text-[--color-text-main]' : 'hover:bg-gray-50 text-[--color-text-secondary]'}`}
+              className={`flex items-center justify-between px-4 py-3 rounded-[12px] cursor-pointer transition-colors ${selected.includes(option) ? 'bg-gray-50 text-[--color-text-main]' : 'hover:bg-gray-50 text-[--color-text-secondary]'}`}
             >
-              <span className="text-[14px]">{option}</span>
+              <span className="text-[14px] font-normal">{option}</span>
               {selected.includes(option) && <Check size={16} className="text-[--color-accent]" />}
             </div>
           ))}
@@ -300,7 +301,7 @@ export const EditableMultiSelect = ({ label, options, initialSelected = [], onCh
 
 export const FormGrid = ({ children, cols = 3, className = "" }: { children: React.ReactNode, cols?: number, className?: string }) => (
   <div 
-    className={`grid gap-5 mb-5 ${className}`}
+    className={`grid gap-4 mb-4 ${className}`}
     style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
   >
     {children}
@@ -308,7 +309,7 @@ export const FormGrid = ({ children, cols = 3, className = "" }: { children: Rea
 );
 
 export const SectionHeader = ({ children }: { children: React.ReactNode }) => (
-  <h3 className="text-[14px] font-bold text-[--color-text-main] tracking-wider mb-5 mt-2">
+  <h3 className="font-title text-[14px] font-semibold text-[--color-text-main] tracking-wider mb-4 mt-2">
     {children}
   </h3>
 );
@@ -418,7 +419,7 @@ export const PromoCard = ({
 
         // 5. Title
         ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 50px Inter, system-ui, sans-serif";
+        ctx.font = "bold 50px 'Lato', sans-serif";
         const titleY = contentTop + 44; // Baseline of the 50px title (128 + 44 = 172px)
         ctx.fillText(titleText, contentLeft, titleY);
 
@@ -435,18 +436,18 @@ export const PromoCard = ({
         // 6. Draw Columns: labels and bullet points with multiline wrap
         const drawColumn = (title: string, list: string[], startX: number) => {
           ctx.fillStyle = "#ffffff";
-          ctx.font = "bold 34px Inter, system-ui, sans-serif";
+          ctx.font = "bold 34px 'Lato', sans-serif";
           ctx.fillText(title, startX, colTitleY);
 
           let currentY = colTitleY + 48;
           list.slice(0, 5).forEach((item) => {
             // Draw bullet character
-            ctx.font = "bold 27px Inter, system-ui, sans-serif";
+            ctx.font = "bold 27px 'Lato', sans-serif";
             ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
             ctx.fillText("•", startX, currentY);
 
             // Draw bullet text
-            ctx.font = "500 27px Inter, system-ui, sans-serif";
+            ctx.font = "500 27px 'Lato', sans-serif";
             ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
             
             const lines = wrapText(item, columnWidth - 40);
@@ -480,12 +481,12 @@ export const PromoCard = ({
 
         // Phone text
         ctx.fillStyle = "#ffffff";
-        ctx.font = "bold 44px Inter, system-ui, sans-serif";
+        ctx.font = "bold 44px 'Lato', sans-serif";
         ctx.textAlign = "center";
         ctx.fillText(phone, boxX + (boxW / 2), boxY + 80);
 
         // Property ID text
-        ctx.font = "500 21px Inter, system-ui, sans-serif";
+        ctx.font = "500 21px 'Lato', sans-serif";
         ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
         ctx.fillText(`Mentioneaza codul proprietatii #${propertyId || ""}`, boxX + (boxW / 2), boxY + 130);
         ctx.textAlign = "left"; // reset alignment
@@ -494,7 +495,7 @@ export const PromoCard = ({
         const textMaxW = contentWidth - boxW - innerPadding; // 1664 - 460 - 64 = 1140px
         
         // Draw helper string first at the bottom line
-        ctx.font = "500 21px Inter, system-ui, sans-serif";
+        ctx.font = "500 21px 'Lato', sans-serif";
         ctx.fillStyle = "#d1d5db";
         const helperTextLines = wrapText("Consultanță dedicată, asistență completă în negociere și contractare, plus vizionări rapide cu program flexibil.", textMaxW);
         let nextTextY = contentBottom - 10;
@@ -504,7 +505,7 @@ export const PromoCard = ({
         }
 
         // Draw bold main prompt string above it - same font size as "Caracteristici" (34px)
-        ctx.font = "bold 34px Inter, system-ui, sans-serif";
+        ctx.font = "bold 34px 'Lato', sans-serif";
         ctx.fillStyle = "#ffffff";
         const boldPromptLines = wrapText("Pentru programarea unei vizionări sau informații suplimentare, nu ezita să ne contactezi!", textMaxW);
         nextTextY -= 16; // divider gap
@@ -535,14 +536,6 @@ export const PromoCard = ({
       }
     };
 
-    const getProxyUrl = (url: string) => {
-      if (!url) return "";
-      if (url.startsWith("data:") || url.startsWith("blob:") || url.startsWith("/") || !url.startsWith("http")) {
-        return url;
-      }
-      return `/api/proxy-image?url=${encodeURIComponent(url)}`;
-    };
-
     const handleBgImg = (srcUrl: string) => {
       const img = new Image();
       img.crossOrigin = "anonymous";
@@ -555,7 +548,7 @@ export const PromoCard = ({
     };
 
     if (bgImage) {
-      handleBgImg(getProxyUrl(bgImage));
+      handleBgImg(getThumbnailImageUrl(bgImage, 1280));
     } else {
       renderCanvas();
     }
@@ -570,8 +563,9 @@ export const PromoCard = ({
        >
          {bgImage ? (
            <img 
-             src={bgImage} 
+             src={getThumbnailImageUrl(bgImage, 1280)} 
              alt="Promo Background" 
+             decoding="async"
              className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" 
              referrerPolicy="no-referrer" 
              draggable="false"
@@ -585,18 +579,18 @@ export const PromoCard = ({
          {/* Outer margin 64px, frame border, content padding 64px inside it */}
          <div className="absolute inset-16 border border-white/20 rounded-[12px] p-16 flex flex-col justify-between overflow-hidden">
            <div>
-             <h3 className="text-[14px] sm:text-[18px] md:text-[23px] lg:text-[26px] font-bold text-white tracking-tight leading-tight mb-8 md:mb-16">
+             <h3 className="font-title text-[14px] sm:text-[18px] md:text-[23px] lg:text-[26px] font-semibold text-white tracking-tight leading-tight mb-8 md:mb-16">
                {titleText}
              </h3>
  
              <div className="grid grid-cols-1 sm:grid-cols-3 gap-8 md:gap-12">
                <div className="space-y-4">
-                 <h4 className="text-[11px] sm:text-[13px] md:text-[15px] font-bold text-white tracking-wide uppercase opacity-90">
+                 <h4 className="font-title text-[11px] sm:text-[13px] md:text-[15px] font-semibold text-white tracking-wide uppercase opacity-90">
                    Avantaje
                  </h4>
                  <ul className="space-y-3 text-[9px] sm:text-[11px] md:text-[13px] lg:text-[14px] text-white/95 font-medium leading-relaxed">
                    {avantaje.slice(0, 5).map((item, idx) => (
-                     <li key={idx} className="flex items-start gap-2.5">
+                     <li key={idx} className="flex items-start gap-2">
                        <span className="text-white shrink-0 font-bold">•</span>
                        <span>{item}</span>
                      </li>
@@ -605,12 +599,12 @@ export const PromoCard = ({
                </div>
  
                <div className="space-y-4">
-                 <h4 className="text-[11px] sm:text-[13px] md:text-[15px] font-bold text-white tracking-wide uppercase opacity-90">
+                 <h4 className="font-title text-[11px] sm:text-[13px] md:text-[15px] font-semibold text-white tracking-wide uppercase opacity-90">
                    Dotări
                  </h4>
                  <ul className="space-y-3 text-[9px] sm:text-[11px] md:text-[13px] lg:text-[14px] text-white/95 font-medium leading-relaxed">
                    {dotari.slice(0, 5).map((item, idx) => (
-                     <li key={idx} className="flex items-start gap-2.5">
+                     <li key={idx} className="flex items-start gap-2">
                        <span className="text-white shrink-0 font-bold">•</span>
                        <span>{item}</span>
                      </li>
@@ -619,12 +613,12 @@ export const PromoCard = ({
                </div>
 
                <div className="space-y-4">
-                 <h4 className="text-[11px] sm:text-[13px] md:text-[15px] font-bold text-white tracking-wide uppercase opacity-90">
+                 <h4 className="font-title text-[11px] sm:text-[13px] md:text-[15px] font-semibold text-white tracking-wide uppercase opacity-90">
                    Împrejurimi
                  </h4>
                  <ul className="space-y-3 text-[9px] sm:text-[11px] md:text-[13px] lg:text-[14px] text-white/95 font-medium leading-relaxed">
                    {locatie.slice(0, 5).map((item, idx) => (
-                     <li key={idx} className="flex items-start gap-2.5">
+                     <li key={idx} className="flex items-start gap-2">
                        <span className="text-white shrink-0 font-bold">•</span>
                        <span>{item}</span>
                      </li>
@@ -698,13 +692,8 @@ export const ImageCard = ({
   onMoveCategory?: (targetCategory: string) => void,
   noHoverEffect?: boolean
 }) => {
-  const getProxiedUrl = (url: string) => {
-    if (!url) return '';
-    if (url.startsWith('/') || url.startsWith('data:')) return url;
-    return `/api/proxy-image?url=${encodeURIComponent(url)}`;
-  };
-
-  const proxiedUrl = getProxiedUrl(imageData.original);
+  const proxiedUrl = getCleanDisplayImageUrl(imageData.original);
+  const gridThumbnailUrl = getThumbnailImageUrl(imageData.original, 480);
 
   const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -733,8 +722,10 @@ export const ImageCard = ({
       >
         {imageData.original ? (
           <img 
-            src={proxiedUrl} 
+            src={gridThumbnailUrl} 
             alt={category} 
+            loading="lazy"
+            decoding="async"
             className={`w-full h-full object-cover transition-transform duration-300 ${noHoverEffect ? '' : 'group-hover:scale-105'}`} 
             referrerPolicy="no-referrer" 
             draggable="true"
@@ -747,14 +738,14 @@ export const ImageCard = ({
       </div>
 
       {/* Control bar for slot relocation & download */}
-      <div className="p-1.5 bg-gray-50/90 border-t border-gray-100 flex items-center justify-between gap-1">
+      <div className="p-2 bg-gray-50/90 border-t border-gray-100 flex items-center justify-between gap-1">
         {onMoveCategory ? (
           <div className="flex items-center gap-1 flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
-            <span className="text-[10px] text-gray-400 font-medium shrink-0">Slot:</span>
+            <span className="text-[10px] text-gray-400 font-semibold shrink-0">Slot:</span>
             <select
               value={category}
               onChange={(e) => onMoveCategory(e.target.value)}
-              className="w-full text-[11px] font-medium bg-white border border-gray-200 rounded px-1.5 py-0.5 text-gray-700 hover:border-gray-300 focus:outline-none cursor-pointer truncate"
+              className="w-full text-[11px] font-normal bg-white border border-gray-200 rounded px-2 py-1 text-gray-700 hover:border-gray-300 focus:outline-none cursor-pointer truncate"
             >
               <option value="living">Living</option>
               <option value="bucatarie">Bucătărie</option>

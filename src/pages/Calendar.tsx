@@ -99,17 +99,17 @@ export const Calendar: React.FC = () => {
     return (
       <div className="flex flex-col md:flex-row items-center justify-between px-4 md:px-8 py-6 bg-white border-b border-gray-50 gap-4">
         <div className="flex flex-col items-center md:items-start text-center md:text-left">
-          <h1 className="text-[20px] md:text-[28px] font-black text-gray-900 tracking-tight leading-none mb-1">Calendar Activități</h1>
-          <p className="text-[12px] md:text-[13px] text-gray-400 font-medium italic">Gestionează vizionările și activitățile tale cu clienții</p>
+          <h1 className="font-title text-[20px] md:text-[28px] font-semibold text-gray-900 tracking-tight leading-none mb-1">Calendar Activități</h1>
+          <p className="text-[12px] md:text-[13px] text-gray-400 font-normal italic">Gestionează vizionările și activitățile tale cu clienții</p>
         </div>
-        <div className="flex items-center gap-2 md:gap-4 bg-gray-50 p-1 md:p-1.5 rounded-[16px] border border-gray-100">
+        <div className="flex items-center gap-2 md:gap-4 bg-gray-50 p-1 md:p-2 rounded-[16px] border border-gray-100">
           <button 
             onClick={() => setCurrentMonth(subMonths(currentMonth, 1))}
             className="w-8 h-8 md:w-10 md:h-10 flex items-center justify-center rounded-xl bg-white text-gray-600 hover:bg-gray-100 transition-colors shadow-sm"
           >
             <ChevronLeft size={20} className="w-4 h-4 md:w-5 md:h-5" />
           </button>
-          <span className="text-[13px] md:text-[15px] font-bold text-gray-900 px-2 md:px-4 min-w-[120px] md:min-w-[150px] text-center capitalize">
+          <span className="text-[13px] md:text-[15px] font-semibold text-gray-900 px-2 md:px-4 min-w-[120px] md:min-w-[150px] text-center capitalize">
             {format(currentMonth, "MMMM yyyy", { locale: ro })}
           </span>
           <button 
@@ -128,7 +128,7 @@ export const Calendar: React.FC = () => {
     return (
       <div className="hidden md:grid grid-cols-7 bg-gray-50/50 border-b border-gray-100">
         {days.map((day, i) => (
-          <div key={i} className="py-4 text-center text-[11px] font-black text-gray-400 uppercase tracking-[0.2em]">
+          <div key={i} className="py-4 text-center text-[11px] font-semibold text-gray-400 uppercase tracking-[0.2em]">
             {day}
           </div>
         ))}
@@ -163,14 +163,14 @@ export const Calendar: React.FC = () => {
               } ${isToday ? 'ring-1 ring-inset ring-[--color-accent]/30 bg-[--color-accent]/[0.02]' : ''}`}
             >
               <div className="flex justify-between items-center mb-1 px-1">
-                <span className={`text-[12px] font-bold w-7 h-7 flex items-center justify-center rounded-full ${
+                <span className={`text-[12px] font-normal tabular-nums w-7 h-7 flex items-center justify-center rounded-full ${
                   isToday 
                     ? 'bg-[--color-accent] text-white shadow-lg shadow-[--color-accent]/20' 
                     : isCurrentMonth ? 'text-gray-900' : 'text-gray-300'
                 }`}>
                   {format(day, "d")}
                 </span>
-                <span className="md:hidden text-[10px] font-black text-gray-300 uppercase tracking-widest">
+                <span className="md:hidden text-[10px] font-semibold text-gray-300 uppercase tracking-widest">
                   {format(day, "EEEE", { locale: ro })}
                 </span>
               </div>
@@ -189,16 +189,16 @@ export const Calendar: React.FC = () => {
                         setSelectedViewing(viewing);
                         setIsViewingDetailsOpen(true);
                       }}
-                      className="p-1.5 rounded-[8px] bg-white border border-gray-100 shadow-sm cursor-pointer hover:border-[--color-accent] hover:shadow-md transition-all overflow-hidden group"
+                      className="p-2 rounded-[8px] bg-white border border-gray-100 shadow-sm cursor-pointer hover:border-[--color-accent] hover:shadow-md transition-all overflow-hidden group"
                     >
-                      <div className="flex items-center gap-1.5 text-[9px] font-black text-[--color-accent] mb-0.5">
+                      <div className="flex items-center gap-2 text-[9px] font-normal tabular-nums text-[--color-accent] mb-1">
                         <Clock size={10} strokeWidth={3} />
                         {viewing.hour}
                       </div>
-                      <div className="text-[11px] font-bold text-gray-900 truncate leading-tight group-hover:text-[--color-accent] transition-colors">
+                      <div className="text-[11px] font-normal text-gray-900 truncate leading-tight group-hover:text-[--color-accent] transition-colors">
                         {address || viewing.contactName}
                       </div>
-                      <div className="text-[9px] font-medium text-gray-400 truncate">
+                      <div className="text-[9px] font-normal text-gray-400 truncate">
                         {viewing.contactName}
                       </div>
                     </motion.div>
@@ -248,7 +248,7 @@ export const Calendar: React.FC = () => {
           onAddTourClick={() => navigate('/')}
           onNotificationsClick={() => setIsNotificationsOpen(true)} 
         />
-        <main className="flex-1 overflow-hidden flex flex-col px-[10px] py-[10px]">
+        <main className="flex-1 overflow-hidden flex flex-col p-4">
           <div className="flex-1 bg-white rounded-[16px] shadow-sm border border-gray-100 overflow-hidden flex flex-col">
             {renderHeader()}
             <div className="flex-1 overflow-y-auto custom-scrollbar no-scrollbar-mobile">

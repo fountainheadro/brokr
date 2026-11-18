@@ -1,10 +1,10 @@
-@import url('https://fonts.cdnfonts.com/css/neue-montreal');
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lato:ital,wght@0,100;0,300;0,400;0,700;0,900;1,100;1,300;1,400;1,700;1,900&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Neue Montreal", "PP Neue Montreal", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-sans: "Lato", sans-serif;
+  --font-title: "Lato", sans-serif;
+  --font-mono: "Lato", sans-serif;
 
   /* Layout Constants (Crisp density scale) */
   --spacing-edge: 16px;
@@ -43,7 +43,7 @@
   background-color: #ffffff;
   font-size: 13px;
   font-family: var(--font-sans);
-  font-weight: 450;
+  font-weight: 400;
   color: var(--color-brand-navy);
   outline: none;
   transition: all 0.15s ease-in-out;
@@ -67,28 +67,32 @@
 }
 
 @utility button-base {
-  @apply h-[34px] px-3 text-[13px] font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer;
+  @apply h-9 px-3 text-[13px] font-medium transition-all flex items-center justify-center gap-2 cursor-pointer;
   border-radius: var(--radius-standard);
 }
 
 @utility btn-brand-primary {
-  @apply h-[34px] px-4 text-[12px] font-medium bg-[--color-brand-navy] hover:bg-[--color-brand-navy-hover] text-white rounded-md transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50;
+  @apply h-9 px-4 text-[12px] font-medium bg-[--color-brand-navy] hover:bg-[--color-brand-navy-hover] text-white rounded-md transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer disabled:opacity-50;
 }
 
 @utility btn-brand-accent {
-  @apply h-[34px] px-4 text-[12px] font-medium bg-[--color-brand-gold] hover:bg-[--color-brand-gold-hover] text-white rounded-md transition-all flex items-center justify-center gap-1.5 shadow-xs cursor-pointer disabled:opacity-50;
+  @apply h-9 px-4 text-[12px] font-medium bg-[--color-brand-gold] hover:bg-[--color-brand-gold-hover] text-white rounded-md transition-all flex items-center justify-center gap-2 shadow-xs cursor-pointer disabled:opacity-50;
 }
 
 @utility badge-brand-gold {
-  @apply text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-[--color-brand-gold-light] text-[--color-brand-navy] border border-[--color-brand-gold-border] shrink-0;
+  @apply text-[10px] font-mono font-semibold px-2 py-1 rounded bg-[--color-brand-gold-light] text-[--color-brand-navy] border border-[--color-brand-gold-border] shrink-0;
 }
 
 @utility badge-brand-navy {
-  @apply text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded bg-[--color-brand-navy] text-white shrink-0;
+  @apply text-[10px] font-mono font-semibold px-2 py-1 rounded bg-[--color-brand-navy] text-white shrink-0;
 }
 
 @utility icon-brand-gold {
   @apply w-8 h-8 rounded-lg bg-[--color-brand-gold-light] border border-[--color-brand-gold-border] flex items-center justify-center text-[--color-brand-gold] shrink-0;
+}
+
+@utility font-title {
+  font-family: var(--font-title);
 }
 
 @utility text-brand-link {
@@ -165,11 +169,15 @@
   }
   
   h1, h2 {
-    @apply font-sans font-semibold text-[#051D35] text-[16px] tracking-tight;
+    @apply font-title font-semibold text-[#051D35] text-[16px] tracking-tight;
   }
 
   h3 {
-    @apply font-sans font-semibold text-[#051D35] text-[14px] tracking-tight;
+    @apply font-title font-semibold text-[#051D35] text-[14px] tracking-tight;
+  }
+
+  h4 {
+    @apply font-title font-semibold text-[#051D35];
   }
 
   p {

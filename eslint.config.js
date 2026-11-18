@@ -7,7 +7,7 @@ export default [
   {
     files: ['firestore.rules'],
     languageOptions: {
-      parser: firebaseRulesPlugin.preprocessors['.rules'],
+      parser: firebaseRulesPlugin.parser,
     },
     plugins: {
       '@firebase/security-rules': firebaseRulesPlugin,

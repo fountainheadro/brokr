@@ -1,4 +1,5 @@
 import { Router } from "express";
+import crypto from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse as parseUrl } from "url";
 import { IncomingMessage } from "http";
@@ -6,6 +7,14 @@ import { createSession, activeSessions, appendTranscript, broadcastToFrontend, C
 import { ulawToPcm, pcmToUlaw, resample8To16, resample24To8 } from "./g711";
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import axios from "axios";
+import { mwAuthentication, authenticateTokenString } from "../middleware/mw_authentication";
+import {
+  mwTwilioSignature,
+  verifyTwilioWsUpgrade,
+  createTwilioStreamToken,
+  verifyTwilioStreamToken,
+} from "../middleware/mw_twilio-signature";
+import { logger } from "../../src/core/logger/logger";
 
 export const aiCallRouter = Router();
 
@@ -49,8 +58,10 @@ const getPublicUrl = (req: any): string => {
 };
 
 const handleTwiml = (req: any, res: any) => {
-  const prompt = (req.query.prompt || req.body.prompt || "Discută politicos despre oportunitatea imobiliară.").toString();
-  
+  const prompt = (req.query.prompt || req.body?.prompt || "Discută politicos despre oportunitatea imobiliară.").toString();
+  const callSidParam = (req.body?.CallSid || req.query?.CallSid || "").toString();
+  const streamToken = callSidParam ? createTwilioStreamToken(callSidParam) : "";
+
   const publicUrl = getPublicUrl(req);
   const wssProtocol = publicUrl.startsWith("https") ? "wss" : "ws";
   
@@ -75,13 +86,14 @@ const handleTwiml = (req: any, res: any) => {
   <Connect>
     <Stream url="${wsUrl}">
       <Parameter name="prompt" value="${encodeURIComponent(prompt)}" />
+      ${streamToken ? `<Parameter name="streamToken" value="${streamToken}" />` : ""}
     </Stream>
   </Connect>
 </Response>`);
 };
 
-aiCallRouter.get("/twiml", handleTwiml);
-aiCallRouter.post("/twiml", handleTwiml);
+aiCallRouter.get("/twiml", mwTwilioSignature, handleTwiml);
+aiCallRouter.post("/twiml", mwTwilioSignature, handleTwiml);
 
 // Helper to safely format romanian and other numbers into Standard E.164 format
 const formatE164 = (numStr: string): string => {
@@ -107,7 +119,7 @@ const formatE164 = (numStr: string): string => {
 /**
  * Initiates an outbound trial/real Call
  */
-aiCallRouter.post("/dial", async (req, res) => {
+aiCallRouter.post("/dial", mwAuthentication, async (req, res) => {
   const { phoneNumber, prompt } = req.body;
 
   if (!phoneNumber) {
@@ -122,11 +134,11 @@ aiCallRouter.post("/dial", async (req, res) => {
 
   // Fallback / Demonstration Mode if Twilio keys are not configured
   if (!twilioSid || !twilioToken || !twilioFrom) {
-    const mockCallSid = `CA_mock_${Math.random().toString(36).substring(2, 11)}`;
+    const mockCallSid = `CA_mock_${crypto.randomBytes(12).toString("hex")}`;
     log(`⚠️ Twilio credentials missing in environmental variables. Starting SIMULATION session ${mockCallSid} for demo.`);
     
-    // Create actual active session to enable standard UI sync
-    const session = createSession(mockCallSid, phoneNumber, prompt);
+    // Create actual active session bound to caller UID
+    const session = createSession(mockCallSid, phoneNumber, prompt, req.authUser?.uid);
     session.status = "calling";
 
     // Simulate real-time Romanian conversation for spectacular demonstration
@@ -203,8 +215,8 @@ aiCallRouter.post("/dial", async (req, res) => {
     const callSid = response.data.sid;
     log(`Outbound call successfully initiated. CallSid: ${callSid}`);
 
-    // Create persistent call session
-    createSession(callSid, formattedTo, prompt);
+    // Create persistent call session bound to caller UID
+    createSession(callSid, formattedTo, prompt, req.authUser?.uid);
 
     return res.json({
       success: true,
@@ -234,10 +246,13 @@ aiCallRouter.post("/dial", async (req, res) => {
 /**
  * Returns currently active call session or status
  */
-aiCallRouter.get("/session/:callSid", (req, res) => {
+aiCallRouter.get("/session/:callSid", mwAuthentication, (req, res) => {
   const session = activeSessions.get(req.params.callSid);
   if (!session) {
     return res.status(404).json({ error: "Sesiunea de apel nu a fost găsită." });
+  }
+  if (session.ownerUid && req.authUser?.uid && session.ownerUid !== req.authUser.uid) {
+    return res.status(403).json({ error: "Acces interzis la sesiunea de apel a altui utilizator." });
   }
   return res.json({
     callSid: session.callSid,
@@ -271,6 +286,17 @@ export function setupWebSocket(server: any) {
         if (msg.event === "start") {
           callSid = msg.start.callSid;
           streamSid = msg.start.streamSid;
+          const providedStreamToken = msg.start?.customParameters?.streamToken;
+          const strictTwilioMode =
+            Boolean(process.env.TWILIO_AUTH_TOKEN?.trim()) || process.env.NODE_ENV === "production";
+
+          if (strictTwilioMode && providedStreamToken && !verifyTwilioStreamToken(callSid, String(providedStreamToken))) {
+            logger.recordMetric("twilio_signature_rejection");
+            log(`Rejected Twilio stream start with invalid streamToken for CallSid=${callSid}`);
+            ws.close(4003, "Invalid stream token");
+            return;
+          }
+
           log(`Media stream started: CallSid=${callSid}, StreamSid=${streamSid}`);
           
           // Hold stream reference to send responses back
@@ -296,11 +322,18 @@ export function setupWebSocket(server: any) {
             return;
           }
 
-          const ai = new GoogleGenAI({ apiKey });
+          const ai = new GoogleGenAI({
+            apiKey,
+            httpOptions: {
+              headers: {
+                "User-Agent": "aistudio-build",
+              },
+            },
+          });
           
           log("Connecting to Multimodal Gemini Live WebSocket API...");
           geminiSession = await ai.live.connect({
-            model: "gemini-3.1-flash-live-preview",
+            model: "gemini-3.8-live",
             callbacks: {
               onmessage: (geminiMsg: LiveServerMessage) => {
                 const serverContent = geminiMsg.serverContent as any;
@@ -434,22 +467,64 @@ Răspundeți întotdeauna pe un ton binevoitor, concis, prietenos și extrem de 
     });
   });
 
-  // 2. React Frontend App Stream WS Handler to broadcast transcript/notes in real-time
+  // 2. React Frontend App Stream WS Handler (authenticated via Firebase Bearer/frame token)
   wssFrontend.on("connection", (ws: WebSocket, request: IncomingMessage) => {
     let currentCallSid = "";
-    log("Frontend Web-App WebSocket Client connected.");
+    let authenticatedUid: string | null = null;
+    let authTimeout: NodeJS.Timeout | null = setTimeout(() => {
+      if (!authenticatedUid && ws.readyState === WebSocket.OPEN) {
+        logger.recordMetric("auth_failure");
+        ws.close(4001, "Authentication required");
+      }
+    }, 10000);
 
-    ws.on("message", (msgStr: string) => {
+    // Support optional Authorization Bearer header on upgrade
+    const upgradeAuth = request.headers.authorization;
+    const upgradeBearer =
+      typeof upgradeAuth === "string" && upgradeAuth.startsWith("Bearer ")
+        ? upgradeAuth.substring(7).trim()
+        : null;
+
+    log("Frontend Web-App WebSocket Client connected (awaiting authentication).");
+
+    ws.on("message", async (msgStr: string) => {
       try {
-        const msg = JSON.parse(msgStr);
-        if (msg.type === "subscribe" && msg.callSid) {
-          currentCallSid = msg.callSid;
-          log(`Frontend client subscribed to CallSid: ${currentCallSid}`);
+        const msg = JSON.parse(msgStr.toString());
 
-          const session = activeSessions.get(currentCallSid);
+        if (!authenticatedUid) {
+          const candidateToken = (typeof msg.authToken === "string" ? msg.authToken : upgradeBearer) || "";
+          try {
+            const user = await authenticateTokenString(candidateToken);
+            authenticatedUid = user.uid;
+            if (authTimeout) {
+              clearTimeout(authTimeout);
+              authTimeout = null;
+            }
+          } catch {
+            logger.recordMetric("auth_failure");
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "error", error: "Autentificare WebSocket eșuată." }));
+              ws.close(4001, "Unauthorized");
+            }
+            return;
+          }
+        }
+
+        if (msg.type === "subscribe" && msg.callSid) {
+          const requestedCallSid = String(msg.callSid);
+          const session = activeSessions.get(requestedCallSid);
+          if (session && session.ownerUid && session.ownerUid !== authenticatedUid) {
+            logger.recordMetric("authz_failure");
+            ws.send(JSON.stringify({ type: "error", error: "Acces interzis la acest apel." }));
+            ws.close(4003, "Forbidden");
+            return;
+          }
+
+          currentCallSid = requestedCallSid;
+          log(`Frontend client ${authenticatedUid} subscribed to CallSid: ${currentCallSid}`);
+
           if (session) {
             session.frontendConnections.add(ws);
-            // Send initial full state immediately upon subscription matching
             ws.send(JSON.stringify({
               type: "sync",
               status: session.status,
@@ -457,7 +532,6 @@ Răspundeți întotdeauna pe un ton binevoitor, concis, prietenos și extrem de 
               notes: session.notes
             }));
           } else {
-            // No session active yet, send empty sync block
             ws.send(JSON.stringify({
               type: "sync",
               status: "idle",
@@ -476,12 +550,16 @@ Răspundeți întotdeauna pe un ton binevoitor, concis, prietenos și extrem de 
         if (msg.type === "end_call" && currentCallSid) {
           const session = activeSessions.get(currentCallSid);
           if (session) {
+            if (session.ownerUid && session.ownerUid !== authenticatedUid) {
+              logger.recordMetric("authz_failure");
+              ws.close(4003, "Forbidden");
+              return;
+            }
             log(`Frontend requested to terminate call session: ${currentCallSid}`);
             session.status = "ended";
             broadcastToFrontend(session, { type: "status", status: "ended" });
             appendTranscript(session, "system", "Apel întrerupt manual din panou.");
             
-            // If it's a real Twilio call, optionally terminate Twilio call context
             const twilioSid = process.env.TWILIO_ACCOUNT_SID;
             const twilioToken = process.env.TWILIO_AUTH_TOKEN;
             if (twilioSid && twilioToken && !currentCallSid.startsWith("CA_mock")) {
@@ -500,6 +578,10 @@ Răspundeți întotdeauna pe un ton binevoitor, concis, prietenos și extrem de 
     });
 
     ws.on("close", () => {
+      if (authTimeout) {
+        clearTimeout(authTimeout);
+        authTimeout = null;
+      }
       if (currentCallSid) {
         const session = activeSessions.get(currentCallSid);
         if (session) {
@@ -515,6 +597,15 @@ Răspundeți întotdeauna pe un ton binevoitor, concis, prietenos și extrem de 
     log(`HTTP UPGRADE REQUEST FOR PATH: ${pathname}`);
 
     if (pathname === "/api/ai-call/stream") {
+      const twilioCheck = verifyTwilioWsUpgrade(request);
+      if (!twilioCheck.ok) {
+        logger.recordMetric("twilio_signature_rejection");
+        log(`Rejected unauthenticated Twilio WebSocket upgrade: ${twilioCheck.reason}`);
+        socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+
       wssTwilio.handleUpgrade(request, socket, head, (ws) => {
         wssTwilio.emit("connection", ws, request);
       });

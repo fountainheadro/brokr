@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   X, 
@@ -52,32 +52,49 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
   onDeleteLead,
   onSaveLead
 }) => {
-  if (!isOpen || !lead) return null;
-
-  const [title, setTitle] = useState(lead.title || "");
-  const [price, setPrice] = useState(lead.price || "");
+  const [title, setTitle] = useState(lead?.title || "");
+  const [price, setPrice] = useState(lead?.price || "");
   const [transactionType, setTransactionType] = useState<"Vânzare" | "Închiriere">(
-    lead.transactionType === "Închiriere" || (lead.transactionType as string) === "Inchiriere"
+    lead?.transactionType === "Închiriere" || (lead?.transactionType as string) === "Inchiriere"
       ? "Închiriere"
       : "Vânzare"
   );
-  const [categoria, setCategoria] = useState(lead.categoria || "Apartament");
-  const [ownerName, setOwnerName] = useState(lead.ownerName || "");
-  const [ownerPhone, setOwnerPhone] = useState(lead.ownerPhone || "");
-  const [notes, setNotes] = useState(lead.notes || "");
+  const [categoria, setCategoria] = useState(lead?.categoria || "Apartament");
+  const [ownerName, setOwnerName] = useState(lead?.ownerName || "");
+  const [ownerPhone, setOwnerPhone] = useState(lead?.ownerPhone || "");
+  const [notes, setNotes] = useState(lead?.notes || "");
   
   // Surfaces and location FALLBACK to extractedData or top-level lead fields
   const [suprafata, setSuprafata] = useState(
-    lead.extractedData?.crmData?.caracteristici?.suprafete?.utila || ""
+    lead?.extractedData?.crmData?.caracteristici?.suprafete?.utila || ""
   );
   const [oras, setOras] = useState(
-    lead.extractedData?.crmData?.detaliiGenerale?.localizare?.oras || lead.zone || "Bucuresti"
+    lead?.extractedData?.crmData?.detaliiGenerale?.localizare?.oras || lead?.zone || "Bucuresti"
   );
 
   const [saving, setSaving] = useState(false);
   const [showConfirmDelete, setShowConfirmDelete] = useState(false);
   const [copiedShare, setCopiedShare] = useState(false);
   const [copiedUrl, setCopiedUrl] = useState(false);
+
+  useEffect(() => {
+    if (!lead) return;
+    setTitle(lead.title || "");
+    setPrice(lead.price || "");
+    setTransactionType(
+      lead.transactionType === "Închiriere" || (lead.transactionType as string) === "Inchiriere"
+        ? "Închiriere"
+        : "Vânzare"
+    );
+    setCategoria(lead.categoria || "Apartament");
+    setOwnerName(lead.ownerName || "");
+    setOwnerPhone(lead.ownerPhone || "");
+    setNotes(lead.notes || "");
+    setSuprafata(lead.extractedData?.crmData?.caracteristici?.suprafete?.utila || "");
+    setOras(lead.extractedData?.crmData?.detaliiGenerale?.localizare?.oras || lead.zone || "Bucuresti");
+  }, [lead]);
+
+  if (!isOpen || !lead) return null;
 
   const handleCopyUrl = () => {
     navigator.clipboard.writeText(lead.url);
@@ -291,16 +308,16 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
         >
           {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-gray-50/50 shrink-0">
-            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
               <div className="w-8 h-8 rounded-lg bg-[#BE9662]/10 border border-[#BE9662]/20 flex items-center justify-center text-[#BE9662] shrink-0">
                 <Globe size={18} />
               </div>
               <div className="min-w-0 flex-1">
-                <h3 className="text-sm font-semibold text-gray-900 leading-tight truncate">
+                <h3 className="font-title text-sm font-semibold text-gray-900 leading-tight truncate">
                   Detalii Lead {lead.propertyId ? `#${lead.propertyId}` : ""}
                 </h3>
-                <div className="flex items-center gap-2 mt-0.5">
-                  <span className={`text-[10px] font-bold tracking-wider uppercase px-1.5 py-0.2 rounded border ${
+                <div className="flex items-center gap-2 mt-1">
+                  <span className={`text-[10px] font-semibold tracking-wider uppercase px-2 py-1 rounded border ${
                     lead.status === 'Pierdute' 
                       ? 'bg-rose-50 text-rose-700 border-rose-200' 
                       : 'bg-emerald-50 text-emerald-700 border-emerald-200'
@@ -311,12 +328,12 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-1.5 shrink-0 ml-3">
+            <div className="flex items-center gap-2 shrink-0 ml-3">
               {lead.id && (
                 <button
                   type="button"
                   onClick={handleShare}
-                  className="h-7 px-2.5 rounded-md border border-gray-200 bg-white hover:bg-amber-50/50 hover:border-[#BE9662]/40 text-gray-700 hover:text-[#051D35] text-[11px] font-semibold flex items-center gap-1.5 transition-all shadow-2xs cursor-pointer"
+                  className="h-7 px-3 rounded-md border border-gray-200 bg-white hover:bg-amber-50/50 hover:border-[#BE9662]/40 text-gray-700 hover:text-[#051D35] text-[11px] font-semibold flex items-center gap-2 transition-all shadow-2xs cursor-pointer"
                   title="Copiază link public de prezentare"
                 >
                   <Share2 size={12} className="text-[#BE9662]" />
@@ -351,7 +368,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
               <button
                 type="button"
                 onClick={onClose}
-                className="p-1.5 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
+                className="p-2 text-gray-400 hover:text-gray-700 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
                 title="Închide"
               >
                 <X size={16} />
@@ -360,25 +377,25 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
           </div>
 
           {/* Form Content */}
-          <div className="p-5 space-y-3.5 text-xs overflow-y-auto">
+          <div className="p-5 space-y-4 text-xs overflow-y-auto">
 
             {/* URL Sursă Box */}
             <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg flex items-center justify-between gap-3 text-xs">
               <div className="min-w-0 flex-1">
-                <span className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1">
+                <span className="block text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
                   URL Sursă
                 </span>
                 <a
                   href={lead.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="font-medium text-[#BE9662] hover:underline truncate block text-xs"
+                  className="font-normal text-[#BE9662] hover:underline truncate block text-xs"
                   title={lead.url}
                 >
                   {lead.url}
                 </a>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={handleCopyUrl}
@@ -402,14 +419,14 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
 
             {/* Section Divider */}
             <div className="pt-1">
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+              <h4 className="font-title text-[11px] font-semibold text-gray-400 uppercase tracking-wider block">
                 Detalii Identificate (corectează dacă e cazul)
-              </span>
+              </h4>
             </div>
 
             {/* Titlu Proprietate */}
             <div>
-              <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
+              <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                 <FileText size={12} className="text-[#BE9662]" />
                 <span>Titlu Proprietate *</span>
               </label>
@@ -419,14 +436,14 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="ex. Închiriez apartament 2 camere..."
-                className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 placeholder:text-gray-400"
+                className="w-full h-8 px-3 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 placeholder:text-gray-400"
               />
             </div>
 
             {/* Preț & Tip Tranzacție */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
+                <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                   <Tag size={12} className="text-[#BE9662]" />
                   <span>Preț</span>
                 </label>
@@ -435,7 +452,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   value={price}
                   onChange={(e) => setPrice(e.target.value)}
                   placeholder="ex. 750 EUR / lună"
-                  className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 placeholder:text-gray-400"
+                  className="w-full h-8 px-3 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 placeholder:text-gray-400"
                 />
               </div>
 
@@ -443,7 +460,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 <label className="block text-gray-700 font-semibold mb-1">
                   Tip Tranzacție
                 </label>
-                <div className="grid grid-cols-2 gap-1 p-0.5 bg-gray-50 border border-gray-200 rounded-md h-8">
+                <div className="grid grid-cols-2 gap-1 p-1 bg-gray-50 border border-gray-200 rounded-md h-8">
                   {(['Vânzare', 'Închiriere'] as const).map((t) => (
                     <button
                       key={t}
@@ -463,16 +480,16 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
             </div>
 
             {/* Categorie & Suprafață */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
+                <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                   <Home size={12} className="text-[#BE9662]" />
                   <span>Categorie</span>
                 </label>
                 <select
                   value={categoria}
                   onChange={(e) => setCategoria(e.target.value)}
-                  className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 cursor-pointer"
+                  className="w-full h-8 px-3 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 cursor-pointer"
                 >
                   {CATEGORIA_OPTIONS.map((opt) => (
                     <option key={opt} value={opt}>{opt}</option>
@@ -489,21 +506,21 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   value={suprafata}
                   onChange={(e) => setSuprafata(e.target.value)}
                   placeholder="ex. 65"
-                  className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 placeholder:text-gray-400"
+                  className="w-full h-8 px-3 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 placeholder:text-gray-400"
                 />
               </div>
             </div>
 
             {/* Oraș / Localizare */}
             <div>
-              <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
+              <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                 <MapPin size={12} className="text-[#BE9662]" />
                 <span>Oraș / Localizare</span>
               </label>
               <select
                 value={oras}
                 onChange={(e) => setOras(e.target.value)}
-                className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 cursor-pointer"
+                className="w-full h-8 px-3 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 cursor-pointer"
               >
                 {ORAS_OPTIONS.map((opt) => (
                   <option key={opt} value={opt}>{opt}</option>
@@ -512,13 +529,13 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
             </div>
 
             {/* Date Contact Proprietar */}
-            <div className="pt-2 border-t border-gray-100">
-              <span className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
+            <div className="pt-3 border-t border-gray-100">
+              <h4 className="font-title block text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
                 Date Contact Proprietar
-              </span>
-              <div className="grid grid-cols-2 gap-3">
+              </h4>
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
+                  <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                     <User size={12} className="text-gray-400" />
                     <span>Nume Proprietar</span>
                   </label>
@@ -527,12 +544,12 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                     value={ownerName}
                     onChange={(e) => setOwnerName(e.target.value)}
                     placeholder="ex. Popescu Ion"
-                    className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 placeholder:text-gray-400"
+                    className="w-full h-8 px-3 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 placeholder:text-gray-400"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
+                  <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                     <Phone size={12} className="text-gray-400" />
                     <span>Telefon Proprietar</span>
                   </label>
@@ -541,15 +558,15 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                     value={ownerPhone}
                     onChange={(e) => setOwnerPhone(e.target.value)}
                     placeholder="07xxxxxxxx"
-                    className="w-full h-8 px-2.5 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 placeholder:text-gray-400"
+                    className="w-full h-8 px-3 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 placeholder:text-gray-400"
                   />
                 </div>
               </div>
             </div>
 
             {/* Notițe / Observații */}
-            <div className="pt-2 border-t border-gray-100">
-              <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-1.5">
+            <div className="pt-3 border-t border-gray-100">
+              <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                 <FileText size={12} className="text-[#BE9662]" />
                 <span>Observații / Detalii Interne</span>
               </label>
@@ -558,17 +575,17 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
                 placeholder="Observații despre lead sau imobil..."
-                className="w-full p-2 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs text-gray-800 resize-none placeholder:text-gray-400"
+                className="w-full p-2 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 resize-none placeholder:text-gray-400"
               />
             </div>
 
           </div>
 
           {/* Footer Bar */}
-          <div className="px-5 py-3.5 flex items-center justify-between border-t border-gray-100 bg-gray-50/50 shrink-0 gap-2 flex-wrap">
-            <div className="flex items-center gap-1.5">
+          <div className="px-5 py-4 flex items-center justify-between border-t border-gray-100 bg-gray-50/50 shrink-0 gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
               {showConfirmDelete ? (
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-2">
                   <span className="text-xs font-semibold text-red-600 flex items-center gap-1">
                     <AlertTriangle size={13} />
                     Sigur?
@@ -576,7 +593,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   <button
                     type="button"
                     onClick={handleDelete}
-                    className="h-8 px-2.5 bg-red-600 hover:bg-red-700 text-white rounded-md text-xs font-semibold transition-colors cursor-pointer"
+                    className="h-8 px-3 bg-red-600 hover:bg-red-700 text-white rounded-md text-xs font-semibold transition-colors cursor-pointer"
                   >
                     Da, șterge
                   </button>
@@ -592,7 +609,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowConfirmDelete(true)}
-                  className="h-8 px-2.5 text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-md transition-colors cursor-pointer text-xs font-semibold flex items-center gap-1.5"
+                  className="h-8 px-3 text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-md transition-colors cursor-pointer text-xs font-semibold flex items-center gap-2"
                   title="Șterge lead"
                 >
                   <Trash2 size={13} />
@@ -605,7 +622,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   type="button"
                   onClick={handleReactivate}
                   disabled={saving}
-                  className="h-8 px-2.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  className="h-8 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
                   title="Re-activează leadul ca Nou"
                 >
                   <RotateCcw size={12} className="text-amber-600" />
@@ -616,7 +633,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   type="button"
                   onClick={handleMarkAsLost}
                   disabled={saving}
-                  className="h-8 px-2.5 bg-white hover:bg-rose-50 border border-gray-200 hover:border-rose-200 text-gray-600 hover:text-rose-700 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                  className="h-8 px-3 bg-white hover:bg-rose-50 border border-gray-200 hover:border-rose-200 text-gray-600 hover:text-rose-700 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
                   title="Marchează leadul ca Pierdut dacă nu se concretizează"
                 >
                   <XCircle size={12} className="text-gray-400 group-hover:text-rose-600" />
@@ -625,12 +642,12 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
               )}
             </div>
 
-            <div className="flex items-center gap-1.5 flex-wrap justify-end">
+            <div className="flex items-center gap-2 flex-wrap justify-end">
               <button
                 type="button"
                 onClick={handleSave}
                 disabled={saving}
-                className="h-8 px-3 border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-md transition-colors shadow-2xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="h-8 px-3 border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 font-medium rounded-md transition-colors shadow-2xs text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
               >
                 <Save size={13} />
                 <span>Salvează</span>
@@ -640,7 +657,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 type="button"
                 onClick={handleConvertToImobil}
                 disabled={saving}
-                className="h-8 px-3.5 bg-[#051D35] hover:bg-[#0a2b4a] text-white font-medium rounded-md transition-colors shadow-xs text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                className="h-8 px-4 bg-[#051D35] hover:bg-[#0a2b4a] text-white font-medium rounded-md transition-colors shadow-xs text-xs flex items-center gap-2 cursor-pointer disabled:opacity-50"
                 title="Concretizează leadul într-un Imobil nou pe piață"
               >
                 <Plus size={14} className="text-[#BE9662]" />

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useRef } from "react";
 import { 
   Users, 
   Search, 
@@ -13,12 +13,14 @@ import {
 } from "lucide-react";
 import { Contact, ContactType, contactsService } from "../services/contactsService";
 import { downloadVCard } from "../lib/vcard";
+import { VirtualizedTbody } from "./VirtualizedList";
 import toast from "react-hot-toast";
 
 interface ContactsViewProps {
   contacts: Contact[];
   onAddContactClick: () => void;
   onSelectProperty?: (propertyId: string) => void;
+  onContactClick?: (contact: Contact) => void;
 }
 
 const TYPE_LABELS: Record<ContactType, string> = {
@@ -45,12 +47,14 @@ const TYPE_COLORS: Record<ContactType, string> = {
 export const ContactsView: React.FC<ContactsViewProps> = ({
   contacts,
   onAddContactClick,
-  onSelectProperty
+  onSelectProperty,
+  onContactClick
 }) => {
   const [search, setSearch] = useState("");
   const [selectedType, setSelectedType] = useState<string>("Toate");
   const [copiedPhone, setCopiedPhone] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
 
   const handleCopyPhone = async (phone: string, id: string) => {
     try {
@@ -105,27 +109,20 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
   return (
     <div className="flex-1 flex flex-col h-full bg-gray-50 overflow-hidden">
       {/* Top Header / Action Bar */}
-      <div className="bg-white border-b border-gray-200 shrink-0 px-6 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-emerald-50 border border-emerald-100 flex items-center justify-center text-emerald-700">
-            <Users size={16} />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h2 className="text-[15px] font-semibold tracking-tight text-gray-900">
-                Contacte
-              </h2>
-              <span className="text-[11px] font-mono font-medium text-gray-500 bg-gray-100 px-2 py-0.5 rounded">
-                {contacts.length} total
-              </span>
-            </div>
-            <p className="text-[11px] text-gray-500 mt-0.5">
-              Proprietari, cumpărători, chiriași și parteneri înregistrați în sistem
-            </p>
+      <div className="bg-white border-b border-gray-200 shrink-0 h-[42px] min-h-[42px] max-h-[42px] box-border px-6 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <Users size={16} className="text-emerald-700 shrink-0" />
+          <div className="flex items-center gap-2 min-w-0">
+            <h2 className="font-title text-[15px] font-semibold tracking-tight text-gray-900 truncate leading-tight">
+              Contacte
+            </h2>
+            <span className="text-[11px] font-normal text-gray-500 bg-gray-100 px-2 py-0.5 rounded tabular-nums leading-none shrink-0">
+              {contacts.length} total
+            </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-4">
           {/* Quick Search */}
           <div className="relative w-56 sm:w-64">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
@@ -134,7 +131,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Caută după nume, ID (#C...), telefon..."
-              className="w-full h-8 pl-9 pr-3 text-xs bg-gray-50 border border-gray-200 rounded-md placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-gray-400 transition-colors font-sans"
+              className="w-full h-8 pl-9 pr-3 text-xs font-normal bg-gray-50 border border-gray-200 rounded-md placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-gray-400 transition-colors font-sans"
             />
           </div>
 
@@ -142,7 +139,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
           <button
             type="button"
             onClick={onAddContactClick}
-            className="h-8 px-3 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
+            className="h-8 px-3 flex items-center gap-2 text-xs font-medium bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
           >
             <Plus size={14} className="text-[#BE9662]" />
             <span>Adaugă Contact</span>
@@ -151,7 +148,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
       </div>
 
       {/* Sub-header Filter Tabs */}
-      <div className="bg-white border-b border-gray-200 shrink-0 px-6 h-[40px] flex items-center gap-2 overflow-x-auto no-scrollbar">
+      <div className="bg-transparent border-b border-gray-200 shrink-0 px-6 h-[42px] min-h-[42px] max-h-[42px] box-border flex items-center gap-2 overflow-x-auto no-scrollbar">
         {CONTACT_FILTERS.map((f) => {
           const count = f.id === "Toate" 
             ? contacts.length 
@@ -164,14 +161,14 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
             <button
               key={f.id}
               onClick={() => setSelectedType(f.id)}
-              className={`h-7 px-2.5 flex items-center gap-1.5 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+              className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer ${
                 selectedType === f.id
                   ? "bg-[#051D35] text-white font-medium shadow-xs"
                   : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
               }`}
             >
               <span>{f.label}</span>
-              <span className={`text-[10px] font-mono px-1 rounded ${
+              <span className={`text-[10px] px-1 rounded tabular-nums ${
                 selectedType === f.id ? "bg-white/15 text-[#BE9662]" : "bg-gray-100 text-gray-500"
               }`}>
                 {count}
@@ -182,13 +179,13 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
       </div>
 
       {/* Table Container */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-6">
         {filteredContacts.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-center bg-white rounded-xl border border-gray-200 p-8">
             <div className="w-10 h-10 bg-gray-100 rounded-full flex items-center justify-center text-gray-400 mb-3">
               <Users size={20} />
             </div>
-            <h3 className="text-sm font-semibold text-gray-900">Niciun contact găsit</h3>
+            <h3 className="font-title text-sm font-semibold text-gray-900">Niciun contact găsit</h3>
             <p className="text-xs text-gray-500 mt-1 max-w-sm">
               {search 
                 ? `Nu există niciun contact care să corespundă căutării "${search}".` 
@@ -197,7 +194,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
             <button
               type="button"
               onClick={onAddContactClick}
-              className="mt-4 h-8 px-3.5 flex items-center gap-1.5 text-xs font-medium bg-[#051D35] text-white rounded-md hover:bg-[#0a2b4a] transition-colors"
+              className="mt-4 h-8 px-4 flex items-center gap-2 text-xs font-medium bg-[#051D35] text-white rounded-md hover:bg-[#0a2b4a] transition-colors"
             >
               <Plus size={14} className="text-[#BE9662]" />
               <span>Adaugă primul contact</span>
@@ -217,24 +214,34 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                   <th className="py-3 px-4 text-right w-32">Acțiuni</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredContacts.map((contact, idx) => {
+              <VirtualizedTbody
+                items={filteredContacts}
+                colSpan={7}
+                scrollContainerRef={scrollContainerRef}
+                estimateRowHeight={52}
+                getItemKey={(contact, idx) => contact.id || `contact-${idx}`}
+                className="divide-y divide-gray-100"
+                renderRow={(contact, idx, rowRef) => {
                   const displayId = contact.contactId || `C${idx + 1}`;
                   const isConfirmingDelete = confirmDeleteId === contact.id;
 
                   return (
-                    <tr key={contact.id || idx} className="hover:bg-gray-50/70 transition-colors group">
+                    <tr
+                      ref={rowRef}
+                      onClick={() => onContactClick?.(contact)}
+                      className={`hover:bg-gray-50/70 transition-colors group ${onContactClick ? "cursor-pointer" : ""}`}
+                    >
                       {/* ID Client */}
-                      <td className="py-3 px-4 font-mono font-medium text-gray-900">
-                        <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-0.5 rounded text-[11px]">
+                      <td className="py-3 px-4 font-normal text-gray-900 tabular-nums">
+                        <span className="bg-emerald-50 text-emerald-800 border border-emerald-200 px-2 py-1 rounded text-[11px] font-normal">
                           #{displayId}
                         </span>
                       </td>
 
                       {/* Name */}
-                      <td className="py-3 px-4 font-semibold text-gray-900">
+                      <td className="py-3 px-4 font-normal text-gray-900">
                         <div className="flex items-center gap-2">
-                          <div className="w-6 h-6 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-[10px] font-bold uppercase">
+                          <div className="w-6 h-6 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center text-[10px] font-semibold uppercase">
                             {(contact.firstName?.[0] || "") + (contact.lastName?.[0] || "")}
                           </div>
                           <span>
@@ -245,17 +252,17 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
 
                       {/* Type Badge */}
                       <td className="py-3 px-4">
-                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium border ${TYPE_COLORS[contact.type] || "bg-gray-100 text-gray-700"}`}>
+                        <span className={`inline-flex items-center px-2 py-1 rounded text-[11px] font-normal border ${TYPE_COLORS[contact.type] || "bg-gray-100 text-gray-700"}`}>
                           {TYPE_LABELS[contact.type] || contact.type}
                         </span>
                       </td>
 
                       {/* Phone */}
-                      <td className="py-3 px-4">
-                        <div className="flex items-center gap-1.5">
+                      <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center gap-2">
                           <a 
                             href={`tel:${contact.phone}`}
-                            className="font-mono text-gray-700 hover:text-[#BE9662] hover:underline flex items-center gap-1"
+                            className="text-gray-700 hover:text-[#BE9662] hover:underline flex items-center gap-1 tabular-nums font-normal"
                           >
                             <Phone size={12} className="text-gray-400" />
                             {contact.phone}
@@ -276,11 +283,11 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                       </td>
 
                       {/* Associated Property */}
-                      <td className="py-3 px-4">
+                      <td className="py-3 px-4" onClick={(e) => e.stopPropagation()}>
                         {contact.propertyId ? (
                           <div 
                             onClick={() => onSelectProperty?.(contact.propertyId)}
-                            className="inline-flex items-center gap-1.5 font-mono text-[11px] text-[#BE9662] hover:text-[#967243] hover:underline cursor-pointer"
+                            className="inline-flex items-center gap-2 text-[11px] font-normal text-[#BE9662] hover:text-[#967243] hover:underline cursor-pointer tabular-nums"
                           >
                             <Building2 size={12} />
                             <span>#{contact.propertyId}</span>
@@ -293,7 +300,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                       {/* Commission */}
                       <td className="py-3 px-4">
                         {contact.commissionValue ? (
-                          <div className="flex items-center gap-1 text-gray-800 font-medium">
+                          <div className="flex items-center gap-1 text-gray-800 font-normal tabular-nums">
                             <Percent size={11} className="text-gray-400" />
                             <span>{contact.commissionValue}</span>
                           </div>
@@ -303,13 +310,13 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                       </td>
 
                       {/* Actions */}
-                      <td className="py-3 px-4 text-right">
+                      <td className="py-3 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                         <div className="flex items-center justify-end gap-1">
                           {/* vCard download */}
                           <button
                             type="button"
                             onClick={() => downloadVCard(contact, contact.propertyId)}
-                            className="p-1.5 text-gray-400 hover:text-[#BE9662] hover:bg-gray-100 rounded-md transition-colors"
+                            className="p-2 text-gray-400 hover:text-[#BE9662] hover:bg-gray-100 rounded-md transition-colors"
                             title="Descarcă vCard"
                           >
                             <Download size={13} />
@@ -322,14 +329,14 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => handleDelete(contact.id!)}
-                                  className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] font-bold rounded hover:bg-red-700 transition-colors"
+                                  className="px-2 py-1 bg-red-600 text-white text-[10px] font-semibold rounded hover:bg-red-700 transition-colors"
                                 >
                                   Șterge
                                 </button>
                                 <button
                                   type="button"
                                   onClick={() => setConfirmDeleteId(null)}
-                                  className="px-1.5 py-0.5 bg-gray-200 text-gray-700 text-[10px] rounded hover:bg-gray-300 transition-colors"
+                                  className="px-2 py-1 bg-gray-200 text-gray-700 text-[10px] rounded hover:bg-gray-300 transition-colors"
                                 >
                                   Anulează
                                 </button>
@@ -338,7 +345,7 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                               <button
                                 type="button"
                                 onClick={() => setConfirmDeleteId(contact.id!)}
-                                className="p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                                className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-md transition-colors"
                                 title="Șterge clientul"
                               >
                                 <Trash2 size={13} />
@@ -349,8 +356,8 @@ export const ContactsView: React.FC<ContactsViewProps> = ({
                       </td>
                     </tr>
                   );
-                })}
-              </tbody>
+                }}
+              />
             </table>
           </div>
         )}

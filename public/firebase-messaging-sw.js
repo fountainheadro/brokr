@@ -6,7 +6,7 @@ importScripts('https://www.gstatic.com/firebasejs/10.13.0/firebase-messaging-com
 // Initialize Firebase with the explicit project configuration
 firebase.initializeApp({
   projectId: "brokr-42038",
-  appId: "1:114574797752:web:53b476e74c775598ea7d4d",
+  appId: "1:114574797752:web:57e0a934e559d20dea7d4d",
   apiKey: "AIzaSyAzk6Xk0EoIVY82TrUQjVwJ1uOdv3B34wo",
   authDomain: "brokr-42038.firebaseapp.com",
   storageBucket: "brokr-42038.firebasestorage.app",

@@ -26,6 +26,8 @@ export interface CallSession {
   callSid: string;
   phoneNumber: string;
   prompt: string;
+  ownerUid?: string;
+  tenantId?: string;
   status: CallStatus;
   transcript: TranscriptItem[];
   notes: LiveNotes;
@@ -57,11 +59,19 @@ const ai = getGeminiClient();
 /**
  * Creates or gets an active call session
  */
-export function createSession(callSid: string, phoneNumber: string, prompt: string): CallSession {
+export function createSession(
+  callSid: string,
+  phoneNumber: string,
+  prompt: string,
+  ownerUid?: string,
+  tenantId?: string
+): CallSession {
   const session: CallSession = {
     callSid,
     phoneNumber,
     prompt,
+    ownerUid,
+    tenantId,
     status: "calling",
     transcript: [],
     notes: {
@@ -121,7 +131,7 @@ export function appendTranscript(session: CallSession, speaker: "assistant" | "u
 }
 
 /**
- * Calls Gemini 3.5-flash to extract structured JSON notes from the ongoing conversation transcript
+ * Calls Gemini 4 Hydrogen to extract structured JSON notes from the ongoing conversation transcript
  */
 async function triggerNotesExtraction(session: CallSession) {
   if (session.transcript.length === 0) return;
@@ -134,7 +144,7 @@ async function triggerNotesExtraction(session: CallSession) {
     console.log(`[CallSession ${session.callSid}] Extracting structured notes from transcript...`);
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-4-hydrogen",
       contents: [
         {
           role: "user",
