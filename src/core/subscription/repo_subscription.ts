@@ -100,14 +100,10 @@ const INITIAL_SUBSCRIPTIONS: AgencySubscriptionRecord[] = [
 ];
 
 function ensureSeeded(): Record<string, AgencySubscriptionRecord> {
-  const existing = PersistentStoreService.getAll<AgencySubscriptionRecord>(COL_SUBSCRIPTIONS);
-  if (Object.keys(existing).length === 0) {
-    for (const seed of INITIAL_SUBSCRIPTIONS) {
-      PersistentStoreService.set(COL_SUBSCRIPTIONS, seed.tenantId, { ...seed });
-      existing[seed.tenantId] = { ...seed };
-    }
-  }
-  return existing;
+  return PersistentStoreService.seedIfEmpty<AgencySubscriptionRecord>(
+    COL_SUBSCRIPTIONS,
+    INITIAL_SUBSCRIPTIONS.map((seed) => ({ id: seed.tenantId, value: { ...seed } }))
+  );
 }
 
 export class SubscriptionRepository {

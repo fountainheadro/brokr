@@ -4146,7 +4146,18 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
   // Global error handler
   app.use((err: any, req: any, res: any, next: any) => {
     console.error("Global crash handler:", err);
-    res.status(500).json({ error: "Internal server error", details: err.message });
+    const status = typeof err?.statusCode === "number" ? err.statusCode : 500;
+    const code = typeof err?.code === "string" ? err.code : "INTERNAL_ERROR";
+    const message = err?.message || "Internal server error";
+    res.status(status).json({
+      success: false,
+      error: {
+        code,
+        message,
+        timestamp: new Date().toISOString(),
+      },
+      details: message,
+    });
   });
 
   // Resolve dist directory across multiple potential locations (excluding source workspace root)

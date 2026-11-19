@@ -24,20 +24,15 @@ const DEFAULT_SETTINGS: PlatformSettingsRecord = {
 };
 
 function getOrSeedSettings(): PlatformSettingsRecord {
-  const existing = PersistentStoreService.get<PlatformSettingsRecord>(
+  return PersistentStoreService.seedDocumentIfMissing<PlatformSettingsRecord>(
     COL_PLATFORM_SETTINGS,
-    SETTINGS_DOC_ID
+    SETTINGS_DOC_ID,
+    {
+      ...DEFAULT_SETTINGS,
+      configuredRootDomain: getPlatformRootDomain(),
+      adminSubdomain: getPlatformAdminSubdomain(),
+    }
   );
-  if (existing) {
-    return existing;
-  }
-  const seeded: PlatformSettingsRecord = {
-    ...DEFAULT_SETTINGS,
-    configuredRootDomain: getPlatformRootDomain(),
-    adminSubdomain: getPlatformAdminSubdomain(),
-  };
-  PersistentStoreService.set(COL_PLATFORM_SETTINGS, SETTINGS_DOC_ID, seeded);
-  return seeded;
 }
 
 export class PlatformSettingsService {

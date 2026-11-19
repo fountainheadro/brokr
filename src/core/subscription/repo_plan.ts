@@ -138,14 +138,10 @@ const DEFAULT_PLANS: SubscriptionPlanRecord[] = [
 ];
 
 function ensureSeeded(): Record<string, SubscriptionPlanRecord> {
-  const existing = PersistentStoreService.getAll<SubscriptionPlanRecord>(COL_PLANS);
-  if (Object.keys(existing).length === 0) {
-    for (const p of DEFAULT_PLANS) {
-      PersistentStoreService.set(COL_PLANS, p.id, { ...p });
-      existing[p.id] = { ...p };
-    }
-  }
-  return existing;
+  return PersistentStoreService.seedIfEmpty<SubscriptionPlanRecord>(
+    COL_PLANS,
+    DEFAULT_PLANS.map((p) => ({ id: p.id, value: { ...p } }))
+  );
 }
 
 export class PlanRepository {

@@ -211,6 +211,71 @@ export class PersistentStoreService {
     return structuredClone(col[id]) as T;
   }
 
+  /**
+   * Seeds default records when a collection is empty.
+   * In production without server-side Firestore ADC configured, populates ONLY the
+   * in-memory cache (never writes to local disk) so read-only endpoints do not crash
+   * while real mutations via set()/setAsync() remain strictly protected.
+   */
+  public static seedIfEmpty<T = any>(
+    collectionName: string,
+    entries: Array<{ id: string; value: T }>
+  ): Record<string, T> {
+    const existing = this.getAll<T>(collectionName);
+    if (Object.keys(existing).length > 0) {
+      return existing;
+    }
+
+    const isProd = process.env.NODE_ENV === "production";
+    const canPersist = !isProd || this.isRemoteFirestoreConfigured();
+    const store = this.loadStore();
+    if (!store.collections[collectionName]) {
+      store.collections[collectionName] = {};
+    }
+
+    for (const entry of entries) {
+      const cloned = structuredClone(entry.value);
+      if (canPersist) {
+        this.set(collectionName, entry.id, cloned);
+      } else {
+        store.collections[collectionName][entry.id] = cloned;
+      }
+      existing[entry.id] = structuredClone(cloned);
+    }
+
+    return existing;
+  }
+
+  /**
+   * Seeds a single default document when missing.
+   * Uses in-memory read-only cache fallback in production if Firestore server ADC is absent.
+   */
+  public static seedDocumentIfMissing<T = any>(
+    collectionName: string,
+    id: string,
+    value: T
+  ): T {
+    const existing = this.get<T>(collectionName, id);
+    if (existing !== null) {
+      return existing;
+    }
+
+    const cloned = structuredClone(value);
+    const isProd = process.env.NODE_ENV === "production";
+    const canPersist = !isProd || this.isRemoteFirestoreConfigured();
+
+    if (canPersist) {
+      return this.set(collectionName, id, cloned);
+    }
+
+    const store = this.loadStore();
+    if (!store.collections[collectionName]) {
+      store.collections[collectionName] = {};
+    }
+    store.collections[collectionName][id] = cloned;
+    return structuredClone(cloned);
+  }
+
   public static set<T = any>(collectionName: string, id: string, value: T): T {
     const isProd = process.env.NODE_ENV === "production";
     const remoteConfigured = this.isRemoteFirestoreConfigured();

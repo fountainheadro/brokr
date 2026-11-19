@@ -157,15 +157,13 @@ const SEED_MEMBERSHIPS: TenantMembershipRecord[] = [
 ];
 
 function ensureMembershipsSeeded(): Record<string, TenantMembershipRecord> {
-  const existing = PersistentStoreService.getAll<TenantMembershipRecord>(COL_MEMBERSHIPS);
-  if (Object.keys(existing).length === 0) {
-    for (const m of SEED_MEMBERSHIPS) {
-      const k = getMembershipKey(m.tenantId, m.userId);
-      PersistentStoreService.set(COL_MEMBERSHIPS, k, { ...m });
-      existing[k] = { ...m };
-    }
-  }
-  return existing;
+  return PersistentStoreService.seedIfEmpty<TenantMembershipRecord>(
+    COL_MEMBERSHIPS,
+    SEED_MEMBERSHIPS.map((m) => ({
+      id: getMembershipKey(m.tenantId, m.userId),
+      value: { ...m },
+    }))
+  );
 }
 
 export class TenantMembershipService {

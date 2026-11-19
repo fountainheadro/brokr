@@ -86,8 +86,9 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
       }
 
       try {
+        setIsVerifying(true);
         const token = await user.getIdToken();
-        const res = await fetch("/api/platform/dashboard/stats", {
+        const res = await fetch("/api/platform/me", {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -101,9 +102,13 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
         } else {
           setIsSuperAdmin(false);
           const errData = await res.json().catch(() => ({}));
-          setAuthError(
+          const backendMsg =
             errData?.error?.message ||
-              "Acces refuzat: Acest cont nu deține privilegii de Super Admin de platformă."
+            errData?.details ||
+            (typeof errData?.error === "string" ? errData.error : null);
+          setAuthError(
+            backendMsg ||
+              `Acces refuzat (HTTP ${res.status}): Acest cont nu deține privilegii de Super Admin de platformă.`
           );
         }
       } catch (err: any) {
@@ -292,10 +297,16 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
             Acces Restricționat: Super Admin
           </h2>
 
-          <p className="text-xs text-gray-600 leading-relaxed mb-6">
+          <p className="text-xs text-gray-600 leading-relaxed mb-4">
             {authError ||
               "Pentru a accesa interfața de administrare a platformei, este necesară autentificarea cu un cont de Platform Super Admin. Rolurile de agenție nu conferă acces."}
           </p>
+
+          {user?.email && (
+            <p className="text-[11px] text-gray-400 mb-5">
+              Cont autentificat: <span className="font-medium text-gray-600">{user.email}</span>
+            </p>
+          )}
 
           <div className="w-full flex flex-col gap-2">
             {!user && (

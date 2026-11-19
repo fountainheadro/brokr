@@ -28,12 +28,9 @@ const SEED_CONVERSATION: AiConversationRecord = {
 };
 
 function ensureSeeded(): Record<string, AiConversationRecord> {
-  const existing = PersistentStoreService.getAll<AiConversationRecord>(COL_AI_CONVERSATIONS);
-  if (Object.keys(existing).length === 0) {
-    PersistentStoreService.set(COL_AI_CONVERSATIONS, SEED_CONVERSATION.id, { ...SEED_CONVERSATION });
-    existing[SEED_CONVERSATION.id] = { ...SEED_CONVERSATION };
-  }
-  return existing;
+  return PersistentStoreService.seedIfEmpty<AiConversationRecord>(COL_AI_CONVERSATIONS, [
+    { id: SEED_CONVERSATION.id, value: { ...SEED_CONVERSATION } },
+  ]);
 }
 
 export class AiConversationRepository {

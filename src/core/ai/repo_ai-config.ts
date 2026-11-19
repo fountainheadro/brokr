@@ -73,12 +73,10 @@ const SEED_CONFIGS: AgencyAiConfigRecord[] = [
 ];
 
 function ensureConfigsSeeded(): void {
-  const existing = PersistentStoreService.getAll<AgencyAiConfigRecord>(COL_AI_CONFIGS);
-  if (Object.keys(existing).length === 0) {
-    for (const seed of SEED_CONFIGS) {
-      PersistentStoreService.set(COL_AI_CONFIGS, seed.tenantId, { ...seed });
-    }
-  }
+  PersistentStoreService.seedIfEmpty<AgencyAiConfigRecord>(
+    COL_AI_CONFIGS,
+    SEED_CONFIGS.map((seed) => ({ id: seed.tenantId, value: { ...seed } }))
+  );
 }
 
 export class AiConfigRepository {

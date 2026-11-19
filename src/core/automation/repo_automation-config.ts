@@ -66,8 +66,11 @@ export class AutomationConfigRepository {
       updatedBy: "system",
       updatedAt: new Date().toISOString(),
     };
-    PersistentStoreService.set(COL_AUTOMATION_CONFIGS, PLATFORM_DEFAULT_AUTOMATION_KEY, seeded);
-    return seeded;
+    return PersistentStoreService.seedDocumentIfMissing(
+      COL_AUTOMATION_CONFIGS,
+      PLATFORM_DEFAULT_AUTOMATION_KEY,
+      seeded
+    );
   }
 
   public static savePlatformDefaultTitleRule(

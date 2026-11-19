@@ -39,16 +39,12 @@ const SEED_AUDIT_LOGS: PlatformAuditLogEntry[] = [
 ];
 
 function getAuditEntries(): PlatformAuditLogEntry[] {
-  const doc = PersistentStoreService.get<{ entries: PlatformAuditLogEntry[] }>(
+  const doc = PersistentStoreService.seedDocumentIfMissing<{ entries: PlatformAuditLogEntry[] }>(
     COL_AUDIT_LOGS,
-    AUDIT_DOC_ID
+    AUDIT_DOC_ID,
+    { entries: [...SEED_AUDIT_LOGS] }
   );
-  if (doc && Array.isArray(doc.entries)) {
-    return doc.entries;
-  }
-  const seeded = [...SEED_AUDIT_LOGS];
-  PersistentStoreService.set(COL_AUDIT_LOGS, AUDIT_DOC_ID, { entries: seeded });
-  return seeded;
+  return Array.isArray(doc?.entries) ? doc.entries : [...SEED_AUDIT_LOGS];
 }
 
 export class PlatformAuditLogRepository {

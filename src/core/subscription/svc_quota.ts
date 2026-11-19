@@ -57,12 +57,13 @@ const INITIAL_USAGE: Record<string, TenantUsageState> = {
 };
 
 function ensureUsageSeeded(): void {
-  const all = PersistentStoreService.getAll<TenantUsageState>(COL_TENANT_USAGE);
-  if (Object.keys(all).length === 0) {
-    for (const [tenantId, state] of Object.entries(INITIAL_USAGE)) {
-      PersistentStoreService.set(COL_TENANT_USAGE, tenantId, { ...state });
-    }
-  }
+  PersistentStoreService.seedIfEmpty<TenantUsageState>(
+    COL_TENANT_USAGE,
+    Object.entries(INITIAL_USAGE).map(([tenantId, state]) => ({
+      id: tenantId,
+      value: { ...state },
+    }))
+  );
 }
 
 function getUsageValue(
