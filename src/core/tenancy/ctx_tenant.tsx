@@ -21,6 +21,7 @@ export interface TenantContextState {
   isLoading: boolean;
   isAccessDenied: boolean;
   accessDeniedReason: string | null;
+  isPlatformAdminHost: boolean;
   previewSession: ActivePreviewInfo | null;
   refreshTenant: () => Promise<void>;
   startPreview: (tenantId: string, simulatedRole?: UserRole) => Promise<ActivePreviewInfo>;
@@ -38,6 +39,9 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isAccessDenied, setIsAccessDenied] = useState<boolean>(false);
   const [accessDeniedReason, setAccessDeniedReason] = useState<string | null>(null);
+  const [isPlatformAdminHost, setIsPlatformAdminHost] = useState<boolean>(() =>
+    typeof window !== "undefined" && window.location.hostname.toLowerCase().startsWith("admin.")
+  );
   const [previewSession, setPreviewSession] = useState<ActivePreviewInfo | null>(null);
 
   const resolveTenant = useCallback(async () => {
@@ -130,9 +134,16 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       }
 
       const json = await res.json();
+      let resolvedPlatformAdmin = false;
       if (json.success && json.data) {
         const resolvedData = json.data;
-        if (resolvedData.tenantId) {
+        if (resolvedData.type === "platform_admin") {
+          resolvedPlatformAdmin = true;
+          setIsPlatformAdminHost(true);
+          setTenant(null);
+          setTenantContext(null);
+        } else if (resolvedData.tenantId) {
+          setIsPlatformAdminHost(false);
           const loadedTenant: TenantRecord = {
             id: resolvedData.tenantId,
             subdomain: resolvedData.subdomain || "default",
@@ -153,13 +164,15 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
             return;
           }
         } else {
+          setIsPlatformAdminHost(false);
           setTenant(DEFAULT_DEV_TENANT);
         }
       } else {
+        setIsPlatformAdminHost(false);
         setTenant(DEFAULT_DEV_TENANT);
       }
 
-      if (user) {
+      if (user && !resolvedPlatformAdmin) {
         try {
           const token = await user.getIdToken();
           const meRes = await fetch("/api/tenant/me", {
@@ -324,6 +337,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       isLoading: isLoading || isAuthLoading,
       isAccessDenied,
       accessDeniedReason,
+      isPlatformAdminHost,
       previewSession,
       refreshTenant: resolveTenant,
       startPreview,
@@ -338,6 +352,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       isAuthLoading,
       isAccessDenied,
       accessDeniedReason,
+      isPlatformAdminHost,
       previewSession,
       resolveTenant,
       startPreview,

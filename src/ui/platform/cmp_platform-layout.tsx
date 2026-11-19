@@ -26,6 +26,7 @@ import {
 import { TplPlatformDashboard } from "../templates/platform/tpl_platform-dashboard";
 import { NavGroup } from "../organisms/common/org_navigation-sidebar";
 import { useAuth } from "../../core/auth/ctx_auth";
+import { useTenantContext } from "../../core/tenancy/ctx_tenant";
 
 export interface PlatformLayoutProps {
   title?: string;
@@ -40,11 +41,35 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
 }) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, isLoading: isAuthLoading, logout } = useAuth();
+  const { user, isLoading: isAuthLoading, loginWithGoogle, logout } = useAuth();
+  const { isPlatformAdminHost } = useTenantContext();
+  const [isLoggingIn, setIsLoggingIn] = useState<boolean>(false);
 
   const [isVerifying, setIsVerifying] = useState<boolean>(true);
   const [isSuperAdmin, setIsSuperAdmin] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  const handleGoToAgencyCrm = () => {
+    if (isPlatformAdminHost && typeof window !== "undefined") {
+      const host = window.location.hostname.toLowerCase();
+      const rootDomain = host.startsWith("admin.") ? host.slice("admin.".length) : "highline.ro";
+      window.location.href = `${window.location.protocol}//agency.${rootDomain}/`;
+      return;
+    }
+    navigate("/");
+  };
+
+  const handleAdminLogin = async () => {
+    setIsLoggingIn(true);
+    setAuthError(null);
+    try {
+      await loginWithGoogle();
+    } catch (err: any) {
+      setAuthError(err?.message || "Autentificarea a eșuat. Încercați din nou.");
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
 
   useEffect(() => {
     let isMounted = true;
@@ -235,7 +260,7 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
         {
           id: "back-crm",
           label: "Înapoi la CRM Agenție",
-          onClick: () => navigate("/"),
+          onClick: handleGoToAgencyCrm,
           icon: <ArrowLeft size={16} />,
         },
       ],
@@ -273,13 +298,30 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
           </p>
 
           <div className="w-full flex flex-col gap-2">
-            <Link
-              to="/"
-              className="w-full h-10 bg-[#051D35] hover:bg-[#0a2b4a] text-white transition-colors rounded-md font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+            {!user && (
+              <button
+                type="button"
+                disabled={isLoggingIn}
+                onClick={handleAdminLogin}
+                className="w-full h-10 bg-[#051D35] hover:bg-[#0a2b4a] disabled:opacity-60 text-white transition-colors rounded-md font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-2xs"
+              >
+                {isLoggingIn ? <Loader2 size={14} className="animate-spin" /> : <UserCheck size={14} />}
+                <span>{isLoggingIn ? "Se autentifică..." : "Autentificare cu Google (Super Admin)"}</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleGoToAgencyCrm}
+              className={`w-full h-10 transition-colors rounded-md font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-2xs ${
+                !user
+                  ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                  : "bg-[#051D35] hover:bg-[#0a2b4a] text-white"
+              }`}
             >
               <ArrowLeft size={14} />
               <span>Mergi la CRM Agenție</span>
-            </Link>
+            </button>
 
             {user && (
               <button

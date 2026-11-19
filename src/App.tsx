@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { NotificationManager } from "./components/NotificationManager";
 import { NotificationProvider } from "./components/NotificationProvider";
 import { AuthProvider } from "./core/auth/ctx_auth";
-import { TenantProvider } from "./core/tenancy/ctx_tenant";
+import { TenantProvider, useTenantContext } from "./core/tenancy/ctx_tenant";
 
 // Route-level lazy loading for performance & modular architecture
 const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
@@ -49,6 +49,19 @@ const RouteLoadingFallback = () => (
   </div>
 );
 
+const RootRouteElement = () => {
+  const { isPlatformAdminHost } = useTenantContext();
+  if (isPlatformAdminHost) {
+    return <Navigate to="/platform/dashboard" replace />;
+  }
+  return (
+    <>
+      <NotificationManager />
+      <Home />
+    </>
+  );
+};
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -58,15 +71,7 @@ export default function App() {
             <MolPreviewBanner />
             <Suspense fallback={<RouteLoadingFallback />}>
               <Routes>
-                <Route
-                  path="/"
-                  element={
-                    <>
-                      <NotificationManager />
-                      <Home />
-                    </>
-                  }
-                />
+                <Route path="/" element={<RootRouteElement />} />
                 <Route
                   path="/leads/:id"
                   element={
