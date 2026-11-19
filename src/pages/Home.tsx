@@ -32,7 +32,6 @@ import { extractData, extractBasicData } from "../services/geminiService";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { toast } from "react-hot-toast";
 import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
-import { importPropertyFromCrawl } from "../utils/importPropertyFromCrawl";
 import { automationSettingsService } from "../services/automationSettingsService";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { 
@@ -65,7 +64,6 @@ import {
   Phone,
   Clock,
   Calendar,
-  Info,
   Layout,
   MessageSquare,
   Filter,
@@ -76,10 +74,8 @@ import {
   Building2,
   ClipboardList,
   SlidersHorizontal,
-  Timer,
   Edit3,
-  ShieldAlert,
-  AlertCircle
+  ShieldAlert
 } from "lucide-react";
 import { getPublicShareUrl } from "../utils/shareUtils";
 import { auth } from "../lib/firebase";
@@ -92,13 +88,7 @@ import { ViewingDetailsModal } from "../components/ViewingDetailsModal";
 import { NevalidataUrlList } from "../components/NevalidataUrlList";
 import { NevalidataDetailsModal } from "../components/NevalidataDetailsModal";
 import { CalificataDetailsModal } from "../components/CalificataDetailsModal";
-import {
-  OlxLeadDrawer,
-  OLX_MAX_AGE_STEPS,
-  DEFAULT_OLX_MIN_AD_AGE_HOURS,
-  DEFAULT_OLX_MAX_AD_AGE_HOURS,
-  type OlxLeadDrawerMode,
-} from "../components/OlxLeadDrawer";
+import { OlxLeadDrawer } from "../components/OlxLeadDrawer";
 import {
   OlxLeadFilters,
   DEFAULT_OLX_LEAD_FILTERS,
@@ -397,62 +387,8 @@ export const Home: React.FC = () => {
   }, [location.state]);
 
   const [categoryFilter, setCategoryFilter] = useState<string>('Toate');
-  const [olxDrawerMode, setOlxDrawerMode] = useState<OlxLeadDrawerMode | null>(null);
+  const [isOlxFilterOpen, setIsOlxFilterOpen] = useState<boolean>(false);
   const [olxFilters, setOlxFilters] = useState<OlxLeadFilters>(DEFAULT_OLX_LEAD_FILTERS);
-  const [olxAutoScanFilters, setOlxAutoScanFilters] = useState<OlxLeadFilters>(() => {
-    try {
-      const saved = localStorage.getItem("brokr_olx_autoscan_filters");
-      if (!saved) return DEFAULT_OLX_LEAD_FILTERS;
-      const parsed = JSON.parse(saved);
-      return {
-        ...DEFAULT_OLX_LEAD_FILTERS,
-        ...parsed,
-        zones: Array.isArray(parsed?.zones) ? parsed.zones : [],
-      };
-    } catch {
-      return DEFAULT_OLX_LEAD_FILTERS;
-    }
-  });
-  const [olxScanIntervalMinutes, setOlxScanIntervalMinutes] = useState<number>(() => {
-    try {
-      const saved = Number(localStorage.getItem("brokr_olx_scan_interval") || 0);
-      return [0, 1, 5, 15, 30, 60].includes(saved) ? saved : 0;
-    } catch {
-      return 0;
-    }
-  });
-  const [olxScanLimit, setOlxScanLimit] = useState<number>(() => {
-    try {
-      const saved = Number(localStorage.getItem("brokr_olx_scan_limit") || 3);
-      return [3, 6, 9, 12, 24, 48].includes(saved) ? saved : 3;
-    } catch {
-      return 3;
-    }
-  });
-  const [olxMinAdAgeHours, setOlxMinAdAgeHours] = useState<number>(() => {
-    try {
-      const saved = Number(localStorage.getItem("brokr_olx_min_ad_age_hours") || DEFAULT_OLX_MIN_AD_AGE_HOURS);
-      return OLX_MAX_AGE_STEPS.some((s) => s.hours === saved) ? saved : DEFAULT_OLX_MIN_AD_AGE_HOURS;
-    } catch {
-      return DEFAULT_OLX_MIN_AD_AGE_HOURS;
-    }
-  });
-  const [olxMaxAdAgeHours, setOlxMaxAdAgeHours] = useState<number>(() => {
-    try {
-      const saved = Number(localStorage.getItem("brokr_olx_max_ad_age_hours") || DEFAULT_OLX_MAX_AD_AGE_HOURS);
-      return OLX_MAX_AGE_STEPS.some((s) => s.hours === saved && s.hours > 0) ? saved : DEFAULT_OLX_MAX_AD_AGE_HOURS;
-    } catch {
-      return DEFAULT_OLX_MAX_AD_AGE_HOURS;
-    }
-  });
-  const [isOlxAutoScanning, setIsOlxAutoScanning] = useState<boolean>(false);
-  const [lastOlxScanAt, setLastOlxScanAt] = useState<number | null>(null);
-  const [olxScanNotice, setOlxScanNotice] = useState<{
-    type: "info" | "error";
-    title: string;
-    message: string;
-    timestamp: number;
-  } | null>(null);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [personal, setPersonal] = useState<PersonalMember[]>([]);
@@ -839,56 +775,6 @@ export const Home: React.FC = () => {
     }
   }, [user]);
 
-  // 1-Click Bookmarklet receiver (?importBridge=1): receives live DOM HTML via postMessage from OLX/Storia/Imobiliare
-  const bookmarkletImportHandledRef = useRef(false);
-  useEffect(() => {
-    if (!user || typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (params.get("importBridge") !== "1") return;
-
-    const handleMessage = async (event: MessageEvent) => {
-      const data = event.data;
-      if (!data || data.type !== "BROKR_IMPORT_PAYLOAD") return;
-      if (typeof data.url !== "string" || typeof data.html !== "string") return;
-      if (bookmarkletImportHandledRef.current) return;
-      bookmarkletImportHandledRef.current = true;
-
-      // Clean ?importBridge=1 from URL bar
-      try {
-        const cleanUrl = new URL(window.location.href);
-        cleanUrl.searchParams.delete("importBridge");
-        window.history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
-      } catch {}
-
-      const toastId = toast.loading("Se importă proprietatea din browser...");
-      try {
-        const imported = await importPropertyFromCrawl({
-          url: data.url,
-          html: data.html,
-          onStatus: (st) => toast.loading(st, { id: toastId }),
-        });
-        toast.success(`Proprietate importată: ${imported.title}`, { id: toastId });
-        if (imported.leadId) {
-          navigate(`/leads/${imported.leadId}`);
-        }
-      } catch (err: any) {
-        console.error("[Bookmarklet Import] Error:", err);
-        toast.error(err?.message || "Importul din browser a eșuat.", { id: toastId });
-      }
-    };
-
-    window.addEventListener("message", handleMessage);
-    if (window.opener && !window.opener.closed) {
-      try {
-        window.opener.postMessage({ type: "BROKR_IMPORT_READY" }, "*");
-      } catch {}
-    }
-
-    return () => {
-      window.removeEventListener("message", handleMessage);
-    };
-  }, [user, navigate]);
-
   useEffect(() => {
     if (selectedLead?.id && user) {
       const unsub = viewingsService.subscribeToPropertyViewings(selectedLead.id, (v) => {
@@ -1134,222 +1020,6 @@ export const Home: React.FC = () => {
       setExtractionStatus("");
     }
   }, []);
-
-  const leadsRef = useRef<Lead[]>([]);
-  const olxAutoScanFiltersRef = useRef<OlxLeadFilters>(olxAutoScanFilters);
-  const olxScanLimitRef = useRef<number>(olxScanLimit);
-  const olxMinAdAgeHoursRef = useRef<number>(olxMinAdAgeHours);
-  const olxMaxAdAgeHoursRef = useRef<number>(olxMaxAdAgeHours);
-  const isOlxAutoScanningRef = useRef<boolean>(false);
-  const seenOlxScanUrlsRef = useRef<Set<string>>(new Set());
-
-  useEffect(() => {
-    leadsRef.current = leads;
-    leads.forEach((l) => {
-      if (l.url) seenOlxScanUrlsRef.current.add(l.url.split("?")[0].trim().toLowerCase());
-    });
-  }, [leads]);
-
-  useEffect(() => {
-    olxAutoScanFiltersRef.current = olxAutoScanFilters;
-    try {
-      localStorage.setItem("brokr_olx_autoscan_filters", JSON.stringify(olxAutoScanFilters));
-    } catch {}
-  }, [olxAutoScanFilters]);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("brokr_olx_scan_interval", String(olxScanIntervalMinutes));
-    } catch {}
-  }, [olxScanIntervalMinutes]);
-
-  useEffect(() => {
-    olxScanLimitRef.current = olxScanLimit;
-    try {
-      localStorage.setItem("brokr_olx_scan_limit", String(olxScanLimit));
-    } catch {}
-  }, [olxScanLimit]);
-
-  useEffect(() => {
-    olxMinAdAgeHoursRef.current = olxMinAdAgeHours;
-    try {
-      localStorage.setItem("brokr_olx_min_ad_age_hours", String(olxMinAdAgeHours));
-    } catch {}
-  }, [olxMinAdAgeHours]);
-
-  useEffect(() => {
-    olxMaxAdAgeHoursRef.current = olxMaxAdAgeHours;
-    try {
-      localStorage.setItem("brokr_olx_max_ad_age_hours", String(olxMaxAdAgeHours));
-    } catch {}
-  }, [olxMaxAdAgeHours]);
-
-  const runOlxNewAdsScan = React.useCallback(async (isManual = false) => {
-    if (isOlxAutoScanningRef.current) return;
-    if (!auth.currentUser) return;
-    isOlxAutoScanningRef.current = true;
-    setIsOlxAutoScanning(true);
-    try {
-      const authHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
-      const existingUrls = Array.from(
-        new Set([
-          ...leadsRef.current.map((l) => l.url).filter(Boolean),
-          ...Array.from(seenOlxScanUrlsRef.current),
-        ])
-      );
-      const activeTitleRule = automationSettingsService.getCachedTitleRule();
-      const res = await fetch("/api/crawl-olx-leads", {
-        method: "POST",
-        headers: authHeaders,
-        body: JSON.stringify({
-          filters: olxAutoScanFiltersRef.current,
-          page: 1,
-          existingUrls,
-          limit: olxScanLimitRef.current,
-          minAgeHours: olxMinAdAgeHoursRef.current,
-          maxAgeHours: olxMaxAdAgeHoursRef.current,
-          titleAutomationRule: activeTitleRule,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data?.error || `Eroare HTTP ${res.status}`);
-      }
-
-      setLastOlxScanAt(Date.now());
-      const crawledItems: any[] = Array.isArray(data?.items) ? data.items : [];
-      if (crawledItems.length === 0) {
-        setOlxScanIntervalMinutes(0);
-        if (data?.warning) {
-          setOlxScanNotice({
-            type: "error",
-            title: "Eroare la scanarea automată OLX.ro",
-            message: String(data.warning),
-            timestamp: Date.now(),
-          });
-          if (isManual) {
-            toast.error(String(data.warning));
-          }
-        } else {
-          const emptyMsg =
-            data?.emptyReason === "all_seen"
-              ? "Toate anunțurile de pe OLX.ro care corespund filtrelor autocrawler au fost deja preluate în aplicație."
-              : "Nu mai există anunțuri pe OLX.ro care să corespundă filtrelor și intervalului selectat în autocrawler.";
-          setOlxScanNotice({
-            type: "info",
-            title: "Niciun anunț nou potrivit filtrelor autocrawler",
-            message: emptyMsg,
-            timestamp: Date.now(),
-          });
-          if (isManual) {
-            toast(emptyMsg);
-          }
-        }
-        return;
-      }
-
-      const currentUser = auth.currentUser;
-      const creatorName = currentUser?.displayName || (currentUser?.email ? currentUser.email.split("@")[0] : "Consilier Imobiliar");
-      const creatorEmail = currentUser?.email || "";
-
-      let addedCount = 0;
-      const saveErrors: string[] = [];
-      for (const item of crawledItems) {
-        const cleanKey = String(item.url || "").split("?")[0].trim().toLowerCase();
-        if (cleanKey && seenOlxScanUrlsRef.current.has(cleanKey)) continue;
-        try {
-          await leadsService.addLead({
-            url: item.url,
-            title: item.title,
-            zone: item.zone || "București",
-            price: item.price || "N/A",
-            ownerName: item.ownerName || "Proprietar OLX",
-            ownerPhone: item.ownerPhone || "Nespecificat",
-            transactionType: item.transactionType === "Vânzare" ? "Vânzare" : "Închiriere",
-            categoria: item.categoria || "Apartament",
-            status: "Noi",
-            leadType: item.leadType || "Proprietar",
-            coverImage: item.coverImage || undefined,
-            images: Array.isArray(item.images) ? item.images : [],
-            notes: item.notes || "",
-            extractedData: item.extractedData || undefined,
-            createdByName: creatorName,
-            createdByEmail: creatorEmail,
-            author: creatorName,
-            agent: creatorName,
-          });
-          if (cleanKey) seenOlxScanUrlsRef.current.add(cleanKey);
-          addedCount++;
-        } catch (saveErr: any) {
-          console.warn("[Home] Failed saving scanned OLX lead:", saveErr);
-          saveErrors.push(saveErr?.message || "Eroare la salvarea anunțului în baza de date.");
-        }
-      }
-
-      if (saveErrors.length > 0 && addedCount === 0) {
-        const errMsg = `Nu s-au putut salva anunțurile găsite: ${saveErrors[0]}`;
-        setOlxScanIntervalMinutes(0);
-        setOlxScanNotice({
-          type: "error",
-          title: "Eroare la salvarea lead-urilor autocrawler",
-          message: errMsg,
-          timestamp: Date.now(),
-        });
-        if (isManual) toast.error(errMsg);
-      } else if (saveErrors.length > 0 && addedCount > 0) {
-        const partialMsg = `${addedCount} anunțuri salvate, însă ${saveErrors.length} nu au putut fi salvate: ${saveErrors[0]}`;
-        setOlxScanIntervalMinutes(0);
-        setOlxScanNotice({
-          type: "error",
-          title: "Eroare parțială la salvarea lead-urilor",
-          message: partialMsg,
-          timestamp: Date.now(),
-        });
-        toast.success(`${addedCount} anunțuri noi adăugate în Noi`);
-      } else if (addedCount > 0) {
-        setOlxScanNotice(null);
-        toast.success(`${addedCount} ${addedCount === 1 ? "anunț nou găsit" : "anunțuri noi găsite"} pe OLX.ro și adăugate în Noi`);
-      } else {
-        const emptyMsg = "Toate anunțurile găsite care corespund filtrelor autocrawler au fost deja preluate anterior.";
-        setOlxScanIntervalMinutes(0);
-        setOlxScanNotice({
-          type: "info",
-          title: "Niciun anunț nou potrivit filtrelor autocrawler",
-          message: emptyMsg,
-          timestamp: Date.now(),
-        });
-        if (isManual) {
-          toast(emptyMsg);
-        }
-      }
-    } catch (err: any) {
-      const errMsg = err?.message || "Eroare necunoscută la scanarea anunțurilor de pe OLX.ro";
-      setOlxScanIntervalMinutes(0);
-      setOlxScanNotice({
-        type: "error",
-        title: "Eroare autocrawler OLX.ro",
-        message: errMsg,
-        timestamp: Date.now(),
-      });
-      if (isManual) {
-        toast.error(errMsg);
-      } else {
-        console.warn("[Home] OLX auto-scan error:", errMsg);
-      }
-    } finally {
-      isOlxAutoScanningRef.current = false;
-      setIsOlxAutoScanning(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (olxScanIntervalMinutes <= 0) return;
-    const intervalMs = olxScanIntervalMinutes * 60 * 1000;
-    const timerId = window.setInterval(() => {
-      void runOlxNewAdsScan(false);
-    }, intervalMs);
-    return () => window.clearInterval(timerId);
-  }, [olxScanIntervalMinutes, runOlxNewAdsScan]);
 
   const groupedLeads = React.useMemo(() => {
     const filtered = leads
@@ -2409,36 +2079,14 @@ export const Home: React.FC = () => {
 
                     {/* Action buttons per section */}
                     {activeSidebarItem === 'Lead-uri' && (
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setOlxDrawerMode((prev) => (prev === "autoScan" ? null : "autoScan"))}
-                          title={
-                            olxScanIntervalMinutes > 0
-                              ? `Scanare automată OLX.ro activă (la ${olxScanIntervalMinutes} min)`
-                              : "Scanare automată OLX.ro (timer)"
-                          }
-                          className={`relative h-8 px-3 flex items-center gap-2 text-xs font-semibold rounded-md border transition-colors cursor-pointer shrink-0 shadow-xs ${
-                            olxDrawerMode === "autoScan"
-                              ? "bg-gray-100 text-[#051D35] border-gray-300"
-                              : "bg-white hover:bg-gray-50 text-[#051D35] border-gray-200 hover:border-gray-300"
-                          }`}
-                        >
-                          <Timer size={14} className={olxScanIntervalMinutes > 0 ? "text-[#BE9662]" : "text-gray-500"} />
-                          <span>Auto Crawl</span>
-                          {olxScanIntervalMinutes > 0 && (
-                            <span className="w-2 h-2 rounded-full bg-emerald-500 border border-white shrink-0" />
-                          )}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setIsModalOpen(true)}
-                          className="h-8 px-3 flex items-center gap-2 text-xs font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
-                        >
-                          <Plus size={14} className="text-[#BE9662]" />
-                          <span>Adaugă Lead</span>
-                        </button>
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsModalOpen(true)}
+                        className="h-8 px-3 flex items-center gap-2 text-xs font-semibold bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md transition-colors cursor-pointer shrink-0 shadow-xs"
+                      >
+                        <Plus size={14} className="text-[#BE9662]" />
+                        <span>Adaugă Lead</span>
+                      </button>
                     )}
 
                     {(activeSidebarItem === 'Proprietati' || activeSidebarItem === 'Imobile' || activeSidebarItem === 'Proprietăți') && (
@@ -2628,10 +2276,10 @@ export const Home: React.FC = () => {
                     {activeSidebarItem === 'Lead-uri' && (
                       <button
                         type="button"
-                        onClick={() => setOlxDrawerMode((prev) => (prev === "filter" ? null : "filter"))}
+                        onClick={() => setIsOlxFilterOpen((prev) => !prev)}
                         title="Filtrare anunțuri OLX.ro"
                         className={`h-7 px-2 flex items-center justify-center gap-1.5 rounded-md border text-xs transition-colors cursor-pointer shrink-0 ${
-                          olxDrawerMode === "filter" || hasActiveOlxFilters(olxFilters)
+                          isOlxFilterOpen || hasActiveOlxFilters(olxFilters)
                             ? "bg-[#051D35] text-white border-[#051D35]"
                             : "bg-gray-50 text-gray-600 border-gray-200 hover:text-[#051D35] hover:bg-gray-100"
                         }`}
@@ -2649,61 +2297,12 @@ export const Home: React.FC = () => {
 
                 {activeSidebarItem === 'Lead-uri' && (
                   <OlxLeadDrawer
-                    isOpen={olxDrawerMode !== null}
-                    mode={olxDrawerMode || "filter"}
-                    onClose={() => setOlxDrawerMode(null)}
-                    filters={olxDrawerMode === "autoScan" ? olxAutoScanFilters : olxFilters}
-                    onChange={(next) => {
-                      if (olxDrawerMode === "autoScan") {
-                        setOlxAutoScanFilters(next);
-                      } else {
-                        setOlxFilters(next);
-                      }
-                    }}
-                    onReset={() => {
-                      if (olxDrawerMode === "autoScan") {
-                        setOlxAutoScanFilters(DEFAULT_OLX_LEAD_FILTERS);
-                        setOlxScanIntervalMinutes(0);
-                        setOlxScanLimit(3);
-                        setOlxMinAdAgeHours(DEFAULT_OLX_MIN_AD_AGE_HOURS);
-                        setOlxMaxAdAgeHours(DEFAULT_OLX_MAX_AD_AGE_HOURS);
-                        setOlxScanNotice(null);
-                      } else {
-                        setOlxFilters(DEFAULT_OLX_LEAD_FILTERS);
-                      }
-                    }}
-                    scanIntervalMinutes={olxScanIntervalMinutes}
-                    onScanIntervalChange={(mins) => {
-                      setOlxScanIntervalMinutes(mins);
-                      if (mins > 0) {
-                        void runOlxNewAdsScan(true);
-                      }
-                    }}
-                    scanLimit={olxScanLimit}
-                    onScanLimitChange={setOlxScanLimit}
-                    minAdAgeHours={olxMinAdAgeHours}
-                    onMinAdAgeChange={(hours) => {
-                      const minIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === hours);
-                      const maxIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === olxMaxAdAgeHours);
-                      if (minIdx >= 0 && maxIdx >= 1) {
-                        const clampedIdx = Math.min(minIdx, maxIdx - 1);
-                        setOlxMinAdAgeHours(OLX_MAX_AGE_STEPS[clampedIdx].hours);
-                      } else {
-                        setOlxMinAdAgeHours(hours);
-                      }
-                    }}
-                    maxAdAgeHours={olxMaxAdAgeHours}
-                    onMaxAdAgeChange={(hours) => {
-                      const maxIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === hours);
-                      const minIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === olxMinAdAgeHours);
-                      if (maxIdx >= 0 && minIdx >= 0) {
-                        const clampedIdx = Math.max(maxIdx, minIdx + 1);
-                        setOlxMaxAdAgeHours(OLX_MAX_AGE_STEPS[clampedIdx].hours);
-                      } else {
-                        setOlxMaxAdAgeHours(hours);
-                      }
-                    }}
-                    lastScanAt={lastOlxScanAt}
+                    isOpen={isOlxFilterOpen}
+                    mode="filter"
+                    onClose={() => setIsOlxFilterOpen(false)}
+                    filters={olxFilters}
+                    onChange={setOlxFilters}
+                    onReset={() => setOlxFilters(DEFAULT_OLX_LEAD_FILTERS)}
                   />
                 )}
 
@@ -2726,64 +2325,6 @@ export const Home: React.FC = () => {
                   }}
                   quickViewLabel={activeSidebarItem === 'Lead-uri' || activeSidebarItem === 'Cereri' ? 'Vezi rapid' : 'Detalii'}
                   compactTypography={activeSidebarItem === 'Lead-uri' || activeSidebarItem === 'Cereri'}
-                  header={
-                    activeSidebarItem === 'Lead-uri' && olxScanNotice ? (
-                      <div
-                        role={olxScanNotice.type === "error" ? "alert" : "status"}
-                        className={`flex items-start justify-between gap-3 px-3.5 py-2.5 rounded-lg border text-xs ${
-                          olxScanNotice.type === "error"
-                            ? "bg-red-50 border-red-200 text-red-900"
-                            : "bg-amber-50/80 border-amber-200/90 text-[#051D35]"
-                        }`}
-                      >
-                        <div className="flex items-start gap-2.5 min-w-0">
-                          {olxScanNotice.type === "error" ? (
-                            <AlertCircle size={15} className="text-red-600 shrink-0 mt-0.5" />
-                          ) : (
-                            <Info size={15} className="text-[#BE9662] shrink-0 mt-0.5" />
-                          )}
-                          <div className="min-w-0 space-y-0.5">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-semibold text-[12px]">
-                                {olxScanNotice.title}
-                              </span>
-                              <span
-                                className={`text-[10px] font-normal tabular-nums ${
-                                  olxScanNotice.type === "error" ? "text-red-600/80" : "text-gray-500"
-                                }`}
-                              >
-                                {new Date(olxScanNotice.timestamp).toLocaleTimeString("ro-RO", {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                  second: "2-digit",
-                                })}
-                              </span>
-                            </div>
-                            <p
-                              className={`text-[11px] font-normal leading-snug ${
-                                olxScanNotice.type === "error" ? "text-red-800" : "text-gray-600"
-                              }`}
-                            >
-                              {olxScanNotice.message}
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setOlxScanNotice(null)}
-                          className={`p-1 rounded transition-colors cursor-pointer shrink-0 ${
-                            olxScanNotice.type === "error"
-                              ? "text-red-500 hover:text-red-800 hover:bg-red-100"
-                              : "text-gray-400 hover:text-[#051D35] hover:bg-amber-100/70"
-                          }`}
-                          title="Închide mesajul"
-                          aria-label="Închide mesajul"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ) : undefined
-                  }
                 />
               )}
             </div>

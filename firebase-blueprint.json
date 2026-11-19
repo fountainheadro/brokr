@@ -202,9 +202,67 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "tenantId", "titleRule", "updatedAt"]
+    },
+    "SharedLead": {
+      "title": "Global Shared Auto-Crawled Lead",
+      "description": "Real estate lead imported by Super Admin Auto Crawl and automatically displayed identically in every agency's Leads section",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "url": { "type": "string", "maxLength": 2048 },
+        "title": { "type": "string", "maxLength": 500 },
+        "zone": { "type": "string", "maxLength": 200 },
+        "price": { "type": "string", "maxLength": 100 },
+        "ownerName": { "type": "string", "maxLength": 200 },
+        "ownerPhone": { "type": "string", "maxLength": 100 },
+        "transactionType": { "type": "string", "enum": ["Vânzare", "Închiriere"] },
+        "categoria": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 64 },
+        "leadType": { "type": "string", "maxLength": 64 },
+        "coverImage": { "type": "string", "maxLength": 2048 },
+        "images": { "type": "array" },
+        "notes": { "type": "string", "maxLength": 10000 },
+        "extractedData": { "type": "object" },
+        "isSharedLead": { "type": "boolean" },
+        "source": { "type": "string", "maxLength": 64 },
+        "createdByName": { "type": "string", "maxLength": 200 },
+        "createdByEmail": { "type": "string", "maxLength": 200 },
+        "author": { "type": "string", "maxLength": 200 },
+        "agent": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastMovedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["url", "title", "status", "isSharedLead", "createdAt", "updatedAt"]
+    },
+    "PlatformAutoCrawlConfig": {
+      "title": "Super Admin Auto Crawl Configuration",
+      "description": "Global platform configuration for automated OLX lead crawling filters, schedule, limit, and age bounds",
+      "type": "object",
+      "properties": {
+        "filters": { "type": "object" },
+        "scanIntervalMinutes": { "type": "number" },
+        "scanLimit": { "type": "number" },
+        "minAdAgeHours": { "type": "number" },
+        "maxAdAgeHours": { "type": "number" },
+        "lastScanAt": { "type": "number" },
+        "lastScanNotice": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["filters", "scanIntervalMinutes", "scanLimit", "updatedAt"]
     }
   },
   "firestore": {
+    "platform_shared_leads/{leadId}": {
+      "schema": { "$ref": "SharedLead" },
+      "description": "Global auto-crawled leads managed by Super Admin and visible to all agencies"
+    },
+    "platform_auto_crawl/{configId}": {
+      "schema": { "$ref": "PlatformAutoCrawlConfig" },
+      "description": "Super Admin auto-crawl schedule and filter settings"
+    },
     "tenants/{tenantId}": {
       "schema": { "$ref": "Tenant" },
       "description": "Root agency tenant document"

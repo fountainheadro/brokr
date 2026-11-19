@@ -22,6 +22,7 @@ import {
   FlaskConical,
   Database,
   Workflow,
+  Radar,
 } from "lucide-react";
 import { TplPlatformDashboard } from "../templates/platform/tpl_platform-dashboard";
 import { NavGroup } from "../organisms/common/org_navigation-sidebar";
@@ -207,6 +208,13 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
           onClick: () => navigate("/platform/domains"),
           icon: <Globe size={16} />,
           active: location.pathname === "/platform/domains",
+        },
+        {
+          id: "auto-crawl",
+          label: "Auto Crawl",
+          onClick: () => navigate("/platform/auto-crawl"),
+          icon: <Radar size={16} />,
+          active: location.pathname === "/platform/auto-crawl",
         },
       ],
     },

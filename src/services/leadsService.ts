@@ -8,6 +8,7 @@ import {
 } from '../core/crm/svc_crm-normalizer';
 import { automationSettingsService } from './automationSettingsService';
 import { buildTitleFromAutomationRule } from '../utils/titleAutomationEngine';
+import { platformAutoCrawlService, normalizeCrawlUrl } from './platformAutoCrawlService';
 
 export { toCanonicalLeadStatus, toDisplayLeadStatus, type CanonicalLeadStatus };
 
@@ -132,12 +133,44 @@ export interface Lead {
   createdByEmail?: string;
   author?: string;
   agent?: string;
+  isSharedLead?: boolean;
+  sharedLeadId?: string;
+  source?: string;
   createdAt: any;
   updatedAt: any;
   lastMovedAt?: any;
 }
 
 const LEADS_COLLECTION = 'leads';
+
+function getLeadTimeMs(lead: Lead): number {
+  const raw = lead.updatedAt || lead.createdAt;
+  if (!raw) return 0;
+  if (typeof raw?.toMillis === 'function') return raw.toMillis();
+  if (typeof raw === 'number') return raw;
+  const parsed = Date.parse(String(raw));
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+async function updateOrForkSharedLead(leadId: string, patch: Record<string, any>): Promise<void> {
+  try {
+    await crmApiClient.update<Lead>(LEADS_COLLECTION, leadId, patch);
+  } catch (err: any) {
+    // If this is a shared platform lead not yet copied into this agency's tenant store,
+    // create an agency-local copy preserving the same ID so other agencies stay unaffected.
+    const shared = await platformAutoCrawlService.getSharedLeadById(leadId);
+    if (!shared) {
+      throw err;
+    }
+    const { isSharedLead: _ignored, ...rest } = shared;
+    await crmApiClient.create<Lead>(LEADS_COLLECTION, {
+      ...rest,
+      ...patch,
+      id: leadId,
+      sharedLeadId: shared.id || leadId,
+    });
+  }
+}
 
 export const leadsService = {
   addLead: async (leadData: Omit<Lead, 'id' | 'createdAt' | 'updatedAt' | 'lastMovedAt'>) => {
@@ -200,34 +233,91 @@ export const leadsService = {
   },
 
   updateLeadStatus: async (leadId: string, newStatus: LeadStatus) => {
-    await crmApiClient.update<Lead>(LEADS_COLLECTION, leadId, { status: newStatus });
+    await updateOrForkSharedLead(leadId, { status: newStatus });
   },
 
   updateLeadData: async (leadId: string, data: Partial<Lead>) => {
-    await crmApiClient.update<Lead>(LEADS_COLLECTION, leadId, data);
+    await updateOrForkSharedLead(leadId, data);
   },
 
   updateNestedField: async (leadId: string, fieldPath: string, value: any) => {
-    await crmApiClient.update<Lead>(LEADS_COLLECTION, leadId, { [fieldPath]: value });
+    await updateOrForkSharedLead(leadId, { [fieldPath]: value });
   },
 
   subscribeToLeads: (callback: (leads: Lead[]) => void) => {
-    return crmApiClient.subscribe<Lead>(LEADS_COLLECTION, callback, {
-      transform: (leads) =>
-        leads.map((data) => ({
-          ...data,
-          status: mapStatus(data.status || ''),
-        })),
+    let agencyLeads: Lead[] = [];
+    let sharedLeads: Lead[] = [];
+
+    const emitMerged = () => {
+      const overriddenIds = new Set<string>();
+      const overriddenUrls = new Set<string>();
+
+      for (const l of agencyLeads) {
+        if (l.id) overriddenIds.add(l.id);
+        if (l.sharedLeadId) overriddenIds.add(l.sharedLeadId);
+        if (l.url) {
+          const norm = normalizeCrawlUrl(l.url);
+          if (norm) overriddenUrls.add(norm);
+        }
+      }
+
+      const merged: Lead[] = [...agencyLeads];
+      for (const s of sharedLeads) {
+        const sid = s.id || '';
+        const normUrl = s.url ? normalizeCrawlUrl(s.url) : '';
+        if ((sid && overriddenIds.has(sid)) || (normUrl && overriddenUrls.has(normUrl))) {
+          continue;
+        }
+        merged.push({
+          ...s,
+          status: mapStatus(s.status || 'Noi'),
+        });
+      }
+
+      merged.sort((a, b) => getLeadTimeMs(b) - getLeadTimeMs(a));
+      callback(merged);
+    };
+
+    const unsubAgency = crmApiClient.subscribe<Lead>(
+      LEADS_COLLECTION,
+      (items) => {
+        agencyLeads = items;
+        emitMerged();
+      },
+      {
+        transform: (leads) =>
+          leads.map((data) => ({
+            ...data,
+            status: mapStatus(data.status || ''),
+          })),
+      }
+    );
+
+    const unsubShared = platformAutoCrawlService.subscribeToSharedLeads((items) => {
+      sharedLeads = items;
+      emitMerged();
     });
+
+    return () => {
+      unsubAgency();
+      unsubShared();
+    };
   },
 
   getLead: async (leadId: string): Promise<Lead | null> => {
     try {
       const found = await crmApiClient.getById<Lead>(LEADS_COLLECTION, leadId);
-      if (!found) return null;
+      if (found) {
+        return {
+          ...found,
+          status: mapStatus(found.status || ''),
+        };
+      }
+      const shared = await platformAutoCrawlService.getSharedLeadById(leadId);
+      if (!shared) return null;
       return {
-        ...found,
-        status: mapStatus(found.status || ''),
+        ...shared,
+        status: mapStatus(shared.status || 'Noi'),
       };
     } catch (error) {
       console.warn(`[leadsService] getLead failed for ${leadId}:`, error);
@@ -236,7 +326,21 @@ export const leadsService = {
   },
 
   deleteLead: async (leadId: string) => {
-    await crmApiClient.remove(LEADS_COLLECTION, leadId);
+    try {
+      await crmApiClient.remove(LEADS_COLLECTION, leadId);
+    } catch (err) {
+      // If deleting a shared platform lead from an agency view, mark it deleted locally
+      // for this agency only so all other agencies keep access to the global shared lead.
+      const shared = await platformAutoCrawlService.getSharedLeadById(leadId);
+      if (!shared) throw err;
+      const { isSharedLead: _ignored, ...rest } = shared;
+      await crmApiClient.create<Lead>(LEADS_COLLECTION, {
+        ...rest,
+        id: leadId,
+        sharedLeadId: shared.id || leadId,
+        status: 'Sterse',
+      });
+    }
   },
 
   wipeAllLeads: async () => {

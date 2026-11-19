@@ -78,6 +78,34 @@ service cloud.firestore {
       }
     }
 
+    // --- Platform Global Auto-Crawl & Shared Leads ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isValidSharedLead(data) {
+      return data.keys().hasAll(['url', 'title', 'status', 'isSharedLead', 'createdAt', 'updatedAt']) &&
+        data.url is string && data.url.size() >= 1 && data.url.size() <= 2048 &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 500 &&
+        data.status is string && data.status.size() >= 1 && data.status.size() <= 64 &&
+        data.isSharedLead == true &&
+        data.createdAt is string && data.createdAt.size() <= 64 &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('images' in data) || (data.images is list && data.images.size() <= 100));
+    }
+
+    match /platform_shared_leads/{leadId} {
+      allow get: if isSignedIn() && isValidId(leadId);
+      allow list: if isSignedIn();
+      allow create, update: if isPlatformAdmin() && isValidId(leadId) && isValidSharedLead(request.resource.data);
+      allow delete: if isPlatformAdmin() && isValidId(leadId);
+    }
+
+    match /platform_auto_crawl/{configId} {
+      allow read: if isPlatformAdmin();
+      allow create, update, delete: if isPlatformAdmin() && isValidId(configId);
+    }
+
     // --- Server-Managed Persistent State Collections (Client SDK Read/Write Denied) ---
     match /platform_admins/{adminUid} {
       allow read: if isPlatformAdmin();

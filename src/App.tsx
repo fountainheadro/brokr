@@ -30,6 +30,7 @@ const PgPlatformUsage = lazy(() => import("./pages/platform/pg_platform-usage").
 const PgPlatformBilling = lazy(() => import("./pages/platform/pg_platform-billing").then((m) => ({ default: m.PgPlatformBilling })));
 const PgPlatformMigration = lazy(() => import("./pages/platform/pg_platform-migration").then((m) => ({ default: m.PgPlatformMigration })));
 const PgPlatformAutomatizare = lazy(() => import("./pages/platform/pg_platform-automatizare").then((m) => ({ default: m.PgPlatformAutomatizare })));
+const PgPlatformAutoCrawl = lazy(() => import("./pages/platform/pg_platform-auto-crawl").then((m) => ({ default: m.PgPlatformAutoCrawl })));
 const PgAgencyAdminBoundary = lazy(() => import("./pages/platform/pg_agency-admin-boundary").then((m) => ({ default: m.PgAgencyAdminBoundary })));
 const PgAgencyAdminSettings = lazy(() => import("./pages/agency/pg_agency-admin-settings").then((m) => ({ default: m.PgAgencyAdminSettings })));
 const PgAgencyAdminMembers = lazy(() => import("./pages/agency/pg_agency-admin-members").then((m) => ({ default: m.PgAgencyAdminMembers })));
@@ -115,6 +116,7 @@ export default function App() {
                 <Route path="/platform/billing" element={<PgPlatformBilling />} />
                 <Route path="/platform/migration" element={<PgPlatformMigration />} />
                 <Route path="/platform/automatizare" element={<PgPlatformAutomatizare />} />
+                <Route path="/platform/auto-crawl" element={<PgPlatformAutoCrawl />} />
 
                 {/* Agency Administration Boundaries */}
                 <Route path="/agency/admin" element={<PgAgencyAdminBoundary />} />
