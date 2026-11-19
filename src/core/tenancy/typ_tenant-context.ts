@@ -63,7 +63,7 @@ export interface ResolvedTenantDomain {
 
 export const DEFAULT_DEV_TENANT: TenantRecord = {
   id: "ten_brokr_default",
-  subdomain: "brokr",
+  subdomain: "agency",
   name: "Brokr Real Estate",
   status: "active",
   planId: "plan_enterprise",

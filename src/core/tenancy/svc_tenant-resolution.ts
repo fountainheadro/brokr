@@ -14,13 +14,14 @@ export function setPlatformAdminSubdomain(subdomain: string): void {
   runtimeAdminSubdomain = subdomain;
 }
 
+export const DEFAULT_PLATFORM_ROOT_DOMAIN = "highline.ro";
+
 export function getPlatformRootDomain(): string | null {
   if (runtimePlatformRootDomain !== undefined) return runtimePlatformRootDomain;
-  return (
-    envConfig.platformRootDomain ||
-    (typeof process !== "undefined" ? process.env?.PLATFORM_ROOT_DOMAIN : undefined) ||
-    null
-  );
+  const configured =
+    envConfig.platformRootDomain?.trim() ||
+    (typeof process !== "undefined" ? process.env?.PLATFORM_ROOT_DOMAIN?.trim() : undefined);
+  return configured || DEFAULT_PLATFORM_ROOT_DOMAIN;
 }
 
 export function getPlatformAdminSubdomain(): string {
@@ -107,6 +108,8 @@ const KNOWN_TENANTS = new Map<string, TenantRecord>([
 ]);
 
 const CUSTOM_DOMAINS = new Map<string, string>([
+  ["agency.highline.ro", DEFAULT_DEV_TENANT.id],
+  ["app.highline.ro", DEFAULT_DEV_TENANT.id],
   ["crm.brokr.ro", DEFAULT_DEV_TENANT.id],
   ["crm.agency-alpha.ro", "ten_agency_a"],
   ["crm.agency-beta.ro", "ten_agency_b"],
@@ -178,15 +181,30 @@ export class TenantResolutionService {
     if (rootDomain && host.endsWith(`.${rootDomain}`)) {
       const subdomain = host.replace(`.${rootDomain}`, "");
       const tenant = this.findTenantBySubdomain(subdomain);
-      if (!tenant) {
-        throw new TenantError(`Domeniul de agenție "${host}" nu a fost găsit.`, "TENANT_NOT_FOUND");
+      if (tenant) {
+        return {
+          type: "agency_crm",
+          tenantId: tenant.id,
+          subdomain,
+          isCustomDomain: false,
+        };
       }
-      return {
-        type: "agency_crm",
-        tenantId: tenant.id,
-        subdomain,
-        isCustomDomain: false,
-      };
+
+      const customUnderRootTenantId = CUSTOM_DOMAINS.get(host);
+      if (customUnderRootTenantId) {
+        const customTenant = KNOWN_TENANTS.get(customUnderRootTenantId);
+        if (customTenant) {
+          return {
+            type: "agency_crm",
+            tenantId: customTenant.id,
+            subdomain: customTenant.subdomain,
+            customDomain: host,
+            isCustomDomain: true,
+          };
+        }
+      }
+
+      throw new TenantError(`Domeniul de agenție "${host}" nu a fost găsit.`, "TENANT_NOT_FOUND");
     }
 
     const customTenantId = CUSTOM_DOMAINS.get(host);
@@ -230,6 +248,9 @@ export class TenantResolutionService {
       if (tenant.subdomain.toLowerCase() === clean) {
         return tenant;
       }
+    }
+    if (clean === "brokr") {
+      return KNOWN_TENANTS.get(DEFAULT_DEV_TENANT.id) || null;
     }
     return null;
   }

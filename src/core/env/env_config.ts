@@ -28,7 +28,9 @@ export function getEnvConfig(): AppEnvConfig {
       geminiApiKey: "",
       googleMapsKey: (typeof process !== "undefined" && (process.env?.GOOGLE_MAPS_PLATFORM_KEY || process.env?.VITE_GOOGLE_MAPS_API_KEY)) || "",
       firebaseVapidKey: typeof process !== "undefined" ? process.env?.VITE_FIREBASE_VAPID_KEY : undefined,
-      platformRootDomain: typeof process !== "undefined" ? process.env?.PLATFORM_ROOT_DOMAIN : undefined,
+      platformRootDomain:
+        (typeof process !== "undefined" ? process.env?.PLATFORM_ROOT_DOMAIN : undefined) ||
+        "highline.ro",
       platformAdminSubdomain: typeof process !== "undefined" ? process.env?.PLATFORM_ADMIN_SUBDOMAIN || "admin" : "admin",
       platformPublicUrl: typeof process !== "undefined" ? process.env?.PLATFORM_PUBLIC_URL : undefined,
     };
@@ -41,7 +43,7 @@ export function getEnvConfig(): AppEnvConfig {
     geminiApiKey: process.env.GEMINI_API_KEY || "",
     googleMapsKey: process.env.GOOGLE_MAPS_PLATFORM_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || "",
     firebaseVapidKey: process.env.VITE_FIREBASE_VAPID_KEY,
-    platformRootDomain: process.env.PLATFORM_ROOT_DOMAIN,
+    platformRootDomain: process.env.PLATFORM_ROOT_DOMAIN || "highline.ro",
     platformAdminSubdomain: process.env.PLATFORM_ADMIN_SUBDOMAIN || "admin",
     platformPublicUrl: process.env.PLATFORM_PUBLIC_URL,
     twilio: {

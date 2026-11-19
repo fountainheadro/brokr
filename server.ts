@@ -575,7 +575,7 @@ async function startServer() {
       ? forwardedProto.split(',')[0].trim()
       : (req.secure ? 'https' : (req.protocol || 'https'));
 
-    const rawHost = req.headers['x-forwarded-host'] || req.get('host') || 'app.highline.ro';
+    const rawHost = req.headers['x-forwarded-host'] || req.get('host') || 'agency.highline.ro';
     const cleanHost = (Array.isArray(rawHost) ? rawHost[0] : rawHost).trim();
 
     // If running in development on localhost, keep http; otherwise force https for live domain
