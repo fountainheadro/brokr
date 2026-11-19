@@ -1990,53 +1990,84 @@ Returnează un JSON strict cu următoarele chei:
     ];
     const userAgents = crawlHeaderProfiles.map((profile) => profile["User-Agent"]);
 
+    const rawProvidedHtml = typeof req.body?.html === "string" ? req.body.html.trim() : "";
+    if (rawProvidedHtml.length > 15_000_000) {
+      return res.status(413).json({ error: "Codul HTML furnizat este prea mare (maxim 15 MB)." });
+    }
+    const hasProvidedHtml = rawProvidedHtml.length >= 100;
+    const crawlRelayUrl = (process.env.CRAWL_RELAY_URL || "").trim();
+
     let lastError: any = null;
     let lastUpstreamStatus: number | null = null;
 
-    // Fast, resilient crawling with controlled timeouts & HTTP/2 fallback
-    for (let i = 0; i < crawlHeaderProfiles.length; i++) {
+    // Fast, resilient crawling with controlled timeouts, optional browser-captured HTML, and optional relay fallback
+    const totalAttempts = hasProvidedHtml
+      ? 1
+      : crawlHeaderProfiles.length + (crawlRelayUrl ? 1 : 0);
+
+    for (let i = 0; i < totalAttempts; i++) {
       try {
-        logger.info(`Fetching URL (attempt ${i + 1})`, {
-          module: "crawler",
-          meta: { attempt: i + 1, host: new URL(url).hostname },
-        });
-        const response = await safeFetchExternal(url, {
-          headers: crawlHeaderProfiles[i],
-          timeout: 8000,
-          responseType: "text",
-        });
-
-        if (
-          response.status === 403 ||
-          response.status === 429 ||
-          response.status === 502 ||
-          response.status === 503 ||
-          response.status === 504
-        ) {
-          lastUpstreamStatus = response.status;
-          lastError = new Error(`Site returned ${response.status}`);
-          logger.warn(`Target site returned ${response.status} on crawl attempt ${i + 1}`, {
+        let html = "";
+        if (hasProvidedHtml) {
+          logger.info("Using browser-captured HTML for /api/crawl", {
             module: "crawler",
-            meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
+            meta: { host: new URL(url).hostname, htmlLength: rawProvidedHtml.length },
           });
-          if (i < crawlHeaderProfiles.length - 1) {
-            await new Promise(r => setTimeout(r, 600));
-            continue;
+          html = rawProvidedHtml;
+        } else {
+          const isRelayAttempt = i >= crawlHeaderProfiles.length && Boolean(crawlRelayUrl);
+          const fetchTarget = isRelayAttempt
+            ? crawlRelayUrl.includes("{url}")
+              ? crawlRelayUrl.replace("{url}", encodeURIComponent(url))
+              : `${crawlRelayUrl}${crawlRelayUrl.includes("?") ? "&" : "?"}url=${encodeURIComponent(url)}`
+            : url;
+          const headers = isRelayAttempt
+            ? { Accept: "text/html,application/xhtml+xml,*/*;q=0.8" }
+            : crawlHeaderProfiles[i];
+
+          logger.info(`Fetching URL (attempt ${i + 1}${isRelayAttempt ? " via relay" : ""})`, {
+            module: "crawler",
+            meta: { attempt: i + 1, host: new URL(url).hostname, relay: isRelayAttempt },
+          });
+          const response = await safeFetchExternal(fetchTarget, {
+            headers,
+            timeout: isRelayAttempt ? 15000 : 8000,
+            responseType: "text",
+          });
+
+          if (
+            response.status === 403 ||
+            response.status === 429 ||
+            response.status === 502 ||
+            response.status === 503 ||
+            response.status === 504
+          ) {
+            lastUpstreamStatus = response.status;
+            lastError = new Error(`Site returned ${response.status}`);
+            logger.warn(`Target site returned ${response.status} on crawl attempt ${i + 1}`, {
+              module: "crawler",
+              meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
+            });
+            if (i < totalAttempts - 1) {
+              await new Promise(r => setTimeout(r, 600));
+              continue;
+            }
+            break;
           }
-          break;
+
+          if (response.status >= 400) {
+            lastUpstreamStatus = response.status;
+            lastError = new Error(`HTTP Error ${response.status}`);
+            logger.warn(`Target site returned HTTP ${response.status} on crawl attempt ${i + 1}`, {
+              module: "crawler",
+              meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
+            });
+            break;
+          }
+
+          html = typeof response.data === "string" ? response.data : String(response.data || "");
         }
 
-        if (response.status >= 400) {
-          lastUpstreamStatus = response.status;
-          lastError = new Error(`HTTP Error ${response.status}`);
-          logger.warn(`Target site returned HTTP ${response.status} on crawl attempt ${i + 1}`, {
-            module: "crawler",
-            meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
-          });
-          break;
-        }
-
-        const html = typeof response.data === "string" ? response.data : String(response.data || "");
         if (isBotChallengePage(html)) {
           lastUpstreamStatus = 403;
           lastError = new Error("Site-ul extern a afișat o pagină de verificare anti-bot / Cookie check.");
@@ -2044,7 +2075,7 @@ Returnează un JSON strict cu următoarele chei:
             module: "crawler",
             meta: { attempt: i + 1, host: new URL(url).hostname },
           });
-          if (i < crawlHeaderProfiles.length - 1) {
+          if (i < totalAttempts - 1) {
             await new Promise(r => setTimeout(r, 600));
             continue;
           }

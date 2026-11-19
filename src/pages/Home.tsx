@@ -32,6 +32,7 @@ import { extractData, extractBasicData } from "../services/geminiService";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { toast } from "react-hot-toast";
 import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
+import { importPropertyFromCrawl } from "../utils/importPropertyFromCrawl";
 import { automationSettingsService } from "../services/automationSettingsService";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { 
@@ -837,6 +838,56 @@ export const Home: React.FC = () => {
       void automationSettingsService.fetchTitleRule().catch(() => {});
     }
   }, [user]);
+
+  // 1-Click Bookmarklet receiver (?importBridge=1): receives live DOM HTML via postMessage from OLX/Storia/Imobiliare
+  const bookmarkletImportHandledRef = useRef(false);
+  useEffect(() => {
+    if (!user || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("importBridge") !== "1") return;
+
+    const handleMessage = async (event: MessageEvent) => {
+      const data = event.data;
+      if (!data || data.type !== "BROKR_IMPORT_PAYLOAD") return;
+      if (typeof data.url !== "string" || typeof data.html !== "string") return;
+      if (bookmarkletImportHandledRef.current) return;
+      bookmarkletImportHandledRef.current = true;
+
+      // Clean ?importBridge=1 from URL bar
+      try {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete("importBridge");
+        window.history.replaceState({}, "", cleanUrl.pathname + cleanUrl.search + cleanUrl.hash);
+      } catch {}
+
+      const toastId = toast.loading("Se importă proprietatea din browser...");
+      try {
+        const imported = await importPropertyFromCrawl({
+          url: data.url,
+          html: data.html,
+          onStatus: (st) => toast.loading(st, { id: toastId }),
+        });
+        toast.success(`Proprietate importată: ${imported.title}`, { id: toastId });
+        if (imported.leadId) {
+          navigate(`/leads/${imported.leadId}`);
+        }
+      } catch (err: any) {
+        console.error("[Bookmarklet Import] Error:", err);
+        toast.error(err?.message || "Importul din browser a eșuat.", { id: toastId });
+      }
+    };
+
+    window.addEventListener("message", handleMessage);
+    if (window.opener && !window.opener.closed) {
+      try {
+        window.opener.postMessage({ type: "BROKR_IMPORT_READY" }, "*");
+      } catch {}
+    }
+
+    return () => {
+      window.removeEventListener("message", handleMessage);
+    };
+  }, [user, navigate]);
 
   useEffect(() => {
     if (selectedLead?.id && user) {

@@ -1,15 +1,16 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Globe, Loader2, Building2, User, Phone, Euro, Plus } from "lucide-react";
+import { X, Globe, Loader2, Building2, User, Phone, Euro, Plus, Bookmark, Code2, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { leadsService } from "../services/leadsService";
 import { notificationsService } from "../services/notificationsService";
-import { auth } from "../lib/firebase";
 import { ZONA_OPTIONS, CATEGORIA_OPTIONS } from "../constants";
 import toast from "react-hot-toast";
 import { CETATENIE_OPTIONS } from "./AddCerereModal";
-import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
-import { automationSettingsService } from "../services/automationSettingsService";
-import { getApiAuthHeaders } from "../lib/apiAuth";
+import {
+  importPropertyFromCrawl,
+  buildImportBookmarkletCode,
+  CrawlBlockedError,
+} from "../utils/importPropertyFromCrawl";
 
 interface AddLeadModalProps {
   isOpen: boolean;
@@ -18,10 +19,25 @@ interface AddLeadModalProps {
 
 export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) => {
   const [url, setUrl] = useState("");
+  const [pastedHtml, setPastedHtml] = useState("");
+  const [showHtmlFallback, setShowHtmlFallback] = useState(false);
+  const [wasBlocked, setWasBlocked] = useState(false);
   const [leadRole, setLeadRole] = useState<'Proprietar' | 'Chirias' | 'Cumparator'>('Proprietar');
   const [categoria, setCategoria] = useState("Apartament");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
+  const bookmarkletRef = useRef<HTMLAnchorElement>(null);
+
+  const bookmarkletCode = useMemo(() => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "https://agency.highline.ro";
+    return buildImportBookmarkletCode(origin);
+  }, []);
+
+  useEffect(() => {
+    if (bookmarkletRef.current) {
+      bookmarkletRef.current.setAttribute("href", bookmarkletCode);
+    }
+  }, [bookmarkletCode, isOpen, leadRole]);
 
   // Seeker / Tenant form state
   const [clientName, setClientName] = useState("");
@@ -74,135 +90,18 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
       if (!url.trim()) return;
 
       setLoading(true);
-      setStatus("Accesare URL...");
+      setStatus(pastedHtml.trim() ? "Procesare pagină capturată..." : "Accesare URL...");
       try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 45000);
-
-        let crawlRes: Response;
-        try {
-          const authHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
-          const activeTitleRule = automationSettingsService.getCachedTitleRule();
-          crawlRes = await fetch("/api/crawl", {
-            method: "POST",
-            headers: authHeaders,
-            body: JSON.stringify({ url: url.trim(), titleAutomationRule: activeTitleRule }),
-            signal: controller.signal
-          });
-        } finally {
-          clearTimeout(timeoutId);
-        }
-        
-        if (!crawlRes.ok) {
-          const errorText = await crawlRes.text();
-          let parsedMsg = "";
-          try {
-            parsedMsg = JSON.parse(errorText).error;
-          } catch {}
-          throw new Error(parsedMsg || `Crawl failed with status ${crawlRes.status}`);
-        }
-
-        const contentTypeHeader = crawlRes.headers.get("content-type");
-        if (!contentTypeHeader || !contentTypeHeader.includes("application/json")) {
-          const textStr = await crawlRes.text();
-          console.warn("Expected JSON but got:", textStr.substring(0, 100));
-          throw new Error("Server returned an invalid response (HTML instead of JSON)");
-        }
-
-        const crawlData = await crawlRes.json();
-        const { title, price, zone, ownerName, ownerPhone, transactionType: crawledTrans, categoria: crawledCat, crmData, coverImage } = crawlData;
-
-        setStatus("Salvare...");
-        const currentUser = auth.currentUser;
-        const creatorName = currentUser?.displayName || (currentUser?.email ? currentUser.email.split('@')[0] : "Consilier Imobiliar");
-        const creatorEmail = currentUser?.email || "";
-
-        const activeRuleForFallback = automationSettingsService.getCachedTitleRule();
-        const finalTitle = title || crmData?.descriere?.titlu || generateStandardAdTitle({
-          transactionType: crawledTrans,
-          categoria: crawledCat || "Apartament",
-          camere: crmData?.caracteristici?.detalii?.camere,
-          suprafataUtila: crmData?.caracteristici?.suprafete?.utila,
-          etaj: crmData?.caracteristici?.detalii?.etaj,
-          zona: zone,
-          compartimentare: crmData?.caracteristici?.detalii?.compartimentare,
-          rawTitle: title,
-          rawText: crawlData.description || crawlData.text || "",
-          titleRule: activeRuleForFallback,
-        });
-
-        let resolvedPrice = price || "N/A";
-        if (resolvedPrice !== "N/A" && (resolvedPrice.toLowerCase().includes("ron") || resolvedPrice.toLowerCase().includes("lei"))) {
-          const digits = parseFloat(resolvedPrice.replace(/[^0-9.,]/g, "").replace(",", "."));
-          if (!isNaN(digits) && digits > 0) {
-            const inEur = Math.round(digits / 4.97);
-            const isRentTrans = (crawledTrans || "").toLowerCase().includes("inchir");
-            resolvedPrice = `${inEur.toLocaleString("ro-RO")} €${isRentTrans ? " / lună" : ""}`;
-          }
-        }
-
-        const toCleanUrl = (u: string | undefined | null) => {
-          if (!u || typeof u !== "string") return "";
-          const normalized = u.trim().startsWith("//") ? "https:" + u.trim() : u.trim();
-          if (normalized.startsWith("http") && !normalized.includes("/api/proxy-image")) {
-            return `/api/proxy-image?url=${encodeURIComponent(normalized)}`;
-          }
-          return normalized;
-        };
-
-        const cleanCover = coverImage ? toCleanUrl(coverImage) : null;
-        const rawImages = Array.isArray(crawlData.images) && crawlData.images.length > 0 
-          ? crawlData.images 
-          : (coverImage ? [coverImage] : []);
-        const cleanImages = rawImages.map((u: string) => toCleanUrl(u)).filter(Boolean);
-
-        if (crmData?.imagini) {
-          const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
-          categories.forEach(cat => {
-            if (Array.isArray(crmData.imagini[cat])) {
-              crmData.imagini[cat] = crmData.imagini[cat].map((item: any) => {
-                if (typeof item === "string") return toCleanUrl(item);
-                if (item && item.original) return { ...item, original: toCleanUrl(item.original) };
-                return item;
-              });
-            }
-          });
-        }
-
-        await leadsService.addLead({
+        await importPropertyFromCrawl({
           url: url.trim(),
-          title: finalTitle,
-          zone: zone || "Nespecificat",
-          price: resolvedPrice,
-          ownerName: ownerName || "Nespecificat",
-          ownerPhone: ownerPhone || "Nespecificat",
-          transactionType: (crawledTrans as any) || 'Vânzare',
-          categoria: crawledCat || "Apartament",
-          status: "Noi",
-          leadType: 'Proprietar',
-          coverImage: cleanCover,
-          images: cleanImages,
-          createdByName: creatorName,
-          createdByEmail: creatorEmail,
-          author: creatorName,
-          agent: creatorName,
-          extractedData: crmData ? {
-            crmData: crmData,
-            presentationSections: crawlData.presentationSections || null,
-            automationSource: crawlData.automationSource || null,
-            markdownMarketing: crmData.descriere?.continut || "",
-            summary: crawlData.presentationSections?.introducere?.summary || `${crawledCat || "Proprietate"} ${crmData.caracteristici?.detalii?.camere || "2"} camere în ${zone || "București"}, ${price || "N/A"}`,
-            originalDescription: crawlData.description || crawlData.text || crmData.descriere?.continut || ""
-          } : null
-        });
-
-        await notificationsService.addNotification({
-          title: 'Proprietate Nouă Adăugată',
-          message: `Proprietatea din ${zone || "zonă nespecificată"} a fost extrasă și adăugată cu succes.`,
-          type: 'lead'
+          html: pastedHtml.trim() || undefined,
+          onStatus: setStatus,
         });
 
         setUrl("");
+        setPastedHtml("");
+        setWasBlocked(false);
+        setShowHtmlFallback(false);
         onClose();
         toast.success("Proprietatea a fost adăugată cu succes!");
       } catch (error: any) {
@@ -210,7 +109,11 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
         setStatus("Eroare la adăugare");
         const isAbort = error?.name === "AbortError";
         const isFetchError = error instanceof TypeError || error?.message?.includes("fetch");
-        if (isAbort) {
+        if (error instanceof CrawlBlockedError) {
+          setWasBlocked(true);
+          setShowHtmlFallback(true);
+          toast.error("Site-ul a blocat accesul automat (403). Folosește butonul din bara de marcaje sau lipește sursa paginii mai jos.");
+        } else if (isAbort) {
           toast.error("Conectarea la site-ul extern a durat prea mult. Verificați link-ul și reîncercați.");
         } else if (isFetchError) {
           toast.error("Nu s-a putut accesa link-ul extern sau conexiunea a fost întreruptă. Verificați link-ul și reîncercați.");
@@ -378,13 +281,95 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
                             required
                             placeholder="https://www.storia.ro/... sau olx.ro, imobiliare.ro"
                             value={url}
-                            onChange={(e) => setUrl(e.target.value)}
+                            onChange={(e) => {
+                              setUrl(e.target.value);
+                              if (wasBlocked) setWasBlocked(false);
+                            }}
                             className="w-full h-8 pl-8 pr-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
                           />
                         </div>
                         <p className="text-[11px] text-gray-400 font-normal mt-2 leading-relaxed">
                           Crawlerul va extrage automat detaliile, imaginile, prețul, categoria și contactul.
                         </p>
+                      </div>
+
+                      {/* 1-Click Browser Bookmarklet + Paste HTML fallback (free, never blocked by OLX/Storia) */}
+                      <div
+                        className={`rounded-lg border p-3.5 space-y-2.5 transition-colors ${
+                          wasBlocked
+                            ? "bg-amber-50/80 border-amber-300"
+                            : "bg-gray-50/90 border-gray-200"
+                        }`}
+                      >
+                        <div className="flex items-start gap-2">
+                          {wasBlocked ? (
+                            <AlertTriangle size={14} className="text-amber-600 shrink-0 mt-0.5" />
+                          ) : (
+                            <Bookmark size={14} className="text-[#051D35] shrink-0 mt-0.5" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-semibold text-[#051D35]">
+                              {wasBlocked
+                                ? "Site-ul a blocat serverul (HTTP 403) — Importă direct din browser"
+                                : "Import rapid 1-Click din browser (Anti-blocare OLX)"}
+                            </p>
+                            <p className="text-[11px] text-gray-600 leading-relaxed mt-0.5">
+                              Trage butonul de mai jos în bara de marcaje Chrome (o singură dată). Apoi apasă-l direct când ești pe orice anunț OLX, Storia sau Imobiliare.ro:
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <a
+                            ref={bookmarkletRef}
+                            draggable
+                            onClick={(e) => {
+                              e.preventDefault();
+                              toast("Trage acest buton în bara de marcaje (Bookmarks Bar) din Chrome, apoi apasă-l pe un anunț OLX/Storia.", {
+                                icon: "📌",
+                              });
+                            }}
+                            className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-[11px] font-semibold cursor-grab active:cursor-grabbing shadow-2xs select-none"
+                            title="Trage în bara de marcaje Chrome"
+                          >
+                            <Bookmark size={12} className="text-[#BE9662]" />
+                            <span>Importă în CRM</span>
+                          </a>
+                          <span className="text-[10px] text-gray-500">
+                            ← Trage în bara de marcaje (Ctrl+Shift+B)
+                          </span>
+                        </div>
+
+                        <div className="pt-1 border-t border-gray-200/80">
+                          <button
+                            type="button"
+                            onClick={() => setShowHtmlFallback((v) => !v)}
+                            className="w-full flex items-center justify-between text-[11px] font-medium text-gray-600 hover:text-[#051D35] py-1 cursor-pointer"
+                          >
+                            <span className="flex items-center gap-1.5">
+                              <Code2 size={12} />
+                              <span>Sau lipește sursa paginii (Ctrl+U → Ctrl+A → Ctrl+C)</span>
+                            </span>
+                            {showHtmlFallback ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                          </button>
+
+                          {showHtmlFallback && (
+                            <div className="mt-1.5 space-y-1">
+                              <textarea
+                                rows={3}
+                                value={pastedHtml}
+                                onChange={(e) => setPastedHtml(e.target.value)}
+                                placeholder="Deschide anunțul OLX în browser, apasă Ctrl+U, apoi Ctrl+A, Ctrl+C și lipește aici..."
+                                className="w-full px-2.5 py-2 text-[11px] font-mono bg-white border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] resize-none"
+                              />
+                              {pastedHtml.trim().length > 0 && (
+                                <p className="text-[10px] text-emerald-700 font-medium">
+                                  Sursă HTML pregătită ({Math.round(pastedHtml.length / 1024)} KB) — apasă „Adaugă Proprietar”.
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {loading && status && (
