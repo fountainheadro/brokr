@@ -1541,7 +1541,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
         {/* Footer Status & Actions */}
         <div className="px-4 py-3 bg-white border border-gray-200 rounded-xl flex flex-wrap items-center justify-between gap-2 shadow-2xs">
           <span className="text-[11px] text-gray-400 font-semibold">
-            Status: <span className="text-gray-700 font-normal">{lead.status === "ListaMea" ? "Lista Mea" : lead.status}</span>
+            Status: <span className="text-gray-700 font-normal">{lead.status === "ListaMea" ? "Selectate" : lead.status === "Noi" ? "Listate" : lead.status}</span>
           </span>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -1565,7 +1565,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 ) : (
                   <Bookmark size={12} className="text-[#BE9662]" />
                 )}
-                <span>{addingToMyList ? "Se adaugă..." : "Adaugă în lista mea"}</span>
+                <span>{addingToMyList ? "Se adaugă..." : "Adaugă în Selectate"}</span>
               </button>
             )}
 
@@ -1591,7 +1591,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 }}
                 className="h-8 px-3 rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition-colors cursor-pointer"
               >
-                Reactivează ca Nou
+                Reactivează în Listate
               </button>
             )}
 

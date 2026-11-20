@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from "react";
 import { Search, X } from "lucide-react";
 import {
   OlxLeadFilters,
+  PropertyFilterPageContext,
+  LEAD_ROLE_FILTER_OPTIONS,
   OLX_CATEGORY_OPTIONS,
   OLX_ROOM_OPTIONS,
   OLX_COMPARTIMENTARE_OPTIONS,
@@ -14,6 +16,7 @@ import { ZONA_OPTIONS } from "../constants";
 interface OlxLeadFilterFormProps {
   filters: OlxLeadFilters;
   onChange: (next: OlxLeadFilters) => void;
+  pageContext?: PropertyFilterPageContext;
 }
 
 const MultiSelectChips: React.FC<{
@@ -56,6 +59,7 @@ const MultiSelectChips: React.FC<{
 export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
   filters,
   onChange,
+  pageContext = "autoScan",
 }) => {
   const [currentZoneInput, setCurrentZoneInput] = useState("");
   const [showZoneDropdown, setShowZoneDropdown] = useState(false);
@@ -115,6 +119,19 @@ export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
     onChange({ ...filters, [key]: next });
   };
 
+  const transactionOptions =
+    pageContext === "Cereri"
+      ? ([
+          { value: "", label: "Toate" },
+          { value: "Cumpărare", label: "Cumpărare" },
+          { value: "Închiriere", label: "Închiriere" },
+        ] as const)
+      : ([
+          { value: "", label: "Toate" },
+          { value: "Vânzare", label: "Vânzare" },
+          { value: "Închiriere", label: "Închiriere" },
+        ] as const);
+
   return (
     <div className="space-y-4">
       {/* Text de căutat */}
@@ -146,19 +163,38 @@ export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
         </div>
       </div>
 
+      {/* Tip Lead (exclusiv pentru secțiunea Lead-uri) */}
+      {pageContext === "Lead-uri" && (
+        <div className="space-y-1.5">
+          <span className="block text-[12px] font-semibold text-[#051D35]">
+            Tip lead
+          </span>
+          <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md h-8">
+            {LEAD_ROLE_FILTER_OPTIONS.map((opt) => (
+              <button
+                key={opt.label}
+                type="button"
+                onClick={() => onChange({ ...filters, leadRole: opt.value })}
+                className={`flex-1 h-6 text-[11px] rounded transition-all cursor-pointer truncate px-1 ${
+                  (filters.leadRole || "") === opt.value
+                    ? "bg-[#051D35] text-white font-semibold shadow-xs"
+                    : "text-gray-600 hover:text-[#051D35] hover:bg-white/70 font-normal"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Tip tranzacție */}
       <div className="space-y-1.5">
         <span className="block text-[12px] font-semibold text-[#051D35]">
           Tip tranzacție
         </span>
         <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md h-8">
-          {(
-            [
-              { value: "", label: "Toate" },
-              { value: "Vânzare", label: "Vânzare" },
-              { value: "Închiriere", label: "Închiriere" },
-            ] as const
-          ).map((opt) => (
+          {transactionOptions.map((opt) => (
             <button
               key={opt.label}
               type="button"

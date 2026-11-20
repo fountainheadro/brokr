@@ -647,6 +647,23 @@ export const platformAutoCrawlService = {
           originalTitle,
           originalDescription,
           markdownMarketing: originalDescription,
+          ...(finalExtractedData.olxMeta || item.publishedAt || item.publishedAtLabel
+            ? {
+                olxMeta: {
+                  ...(finalExtractedData.olxMeta || {}),
+                  originalTitle,
+                  publishedAt:
+                    item.publishedAt ||
+                    finalExtractedData.olxMeta?.publishedAt ||
+                    finalExtractedData.olxMeta?.createdTime ||
+                    null,
+                  publishedAtLabel:
+                    item.publishedAtLabel ||
+                    finalExtractedData.olxMeta?.publishedAtLabel ||
+                    "",
+                },
+              }
+            : {}),
           ...(finalExtractedData.crmData?.descriere
             ? {
                 crmData: {

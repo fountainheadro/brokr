@@ -1,6 +1,10 @@
+export type PropertyFilterPageContext = "Lead-uri" | "Cereri" | "Proprietati" | "autoScan";
+export type LeadRoleFilterValue = "" | "Proprietari" | "Cumparatori" | "Chiriasi";
+
 export interface OlxLeadFilters {
   searchText: string;
-  transactionType: "" | "Vânzare" | "Închiriere";
+  leadRole?: LeadRoleFilterValue;
+  transactionType: "" | "Vânzare" | "Închiriere" | "Cumpărare";
   categories: string[];
   rooms: string[];
   compartimentare: string[];
@@ -15,6 +19,7 @@ export interface OlxLeadFilters {
 
 export const DEFAULT_OLX_LEAD_FILTERS: OlxLeadFilters = {
   searchText: "",
+  leadRole: "",
   transactionType: "",
   categories: [],
   rooms: [],
@@ -27,6 +32,13 @@ export const DEFAULT_OLX_LEAD_FILTERS: OlxLeadFilters = {
   floors: [],
   zones: [],
 };
+
+export const LEAD_ROLE_FILTER_OPTIONS: Array<{ value: LeadRoleFilterValue; label: string }> = [
+  { value: "", label: "Toate" },
+  { value: "Proprietari", label: "Proprietari" },
+  { value: "Cumparatori", label: "Cumpărători" },
+  { value: "Chiriasi", label: "Chiriași" },
+];
 
 export interface FilterOption {
   value: string;
@@ -97,6 +109,7 @@ export function hasActiveOlxFilters(filters: OlxLeadFilters): boolean {
 export function countActiveOlxFilters(filters: OlxLeadFilters): number {
   let count = 0;
   if (filters.searchText.trim()) count++;
+  if (filters.leadRole) count++;
   if (filters.transactionType) count++;
   if (filters.categories.length > 0) count++;
   if (filters.rooms.length > 0) count++;
@@ -112,6 +125,7 @@ export function countActiveOlxFilters(filters: OlxLeadFilters): number {
 export function getOlxFilterSignature(filters: OlxLeadFilters): string {
   return JSON.stringify({
     searchText: filters.searchText.trim().toLowerCase(),
+    leadRole: filters.leadRole || "",
     transactionType: filters.transactionType,
     categories: [...filters.categories].sort(),
     rooms: [...filters.rooms].sort(),
@@ -124,6 +138,145 @@ export function getOlxFilterSignature(filters: OlxLeadFilters): string {
     floors: [...filters.floors].sort(),
     zones: [...(filters.zones || [])].sort(),
   });
+}
+
+export interface ActiveFilterTag {
+  id: string;
+  label: string;
+  remove: (prev: OlxLeadFilters) => OlxLeadFilters;
+}
+
+/**
+ * Returns one removable tag per selected filter value, suitable for displaying
+ * inline to the left of the Filter button in the property sub-header bar.
+ */
+export function getActiveFilterTags(filters: OlxLeadFilters): ActiveFilterTag[] {
+  const tags: ActiveFilterTag[] = [];
+
+  if (filters.leadRole) {
+    const roleLabel =
+      LEAD_ROLE_FILTER_OPTIONS.find((opt) => opt.value === filters.leadRole)?.label ||
+      filters.leadRole;
+    tags.push({
+      id: `leadRole:${filters.leadRole}`,
+      label: roleLabel,
+      remove: (prev) => ({ ...prev, leadRole: "" }),
+    });
+  }
+
+  if (filters.transactionType) {
+    tags.push({
+      id: `tx:${filters.transactionType}`,
+      label: filters.transactionType,
+      remove: (prev) => ({ ...prev, transactionType: "" }),
+    });
+  }
+
+  for (const cat of filters.categories) {
+    const opt = OLX_CATEGORY_OPTIONS.find((o) => o.value === cat);
+    tags.push({
+      id: `cat:${cat}`,
+      label: opt?.label || cat,
+      remove: (prev) => ({
+        ...prev,
+        categories: prev.categories.filter((v) => v !== cat),
+      }),
+    });
+  }
+
+  for (const room of filters.rooms) {
+    const opt = OLX_ROOM_OPTIONS.find((o) => o.value === room);
+    tags.push({
+      id: `room:${room}`,
+      label: opt?.label || `${room} camere`,
+      remove: (prev) => ({
+        ...prev,
+        rooms: prev.rooms.filter((v) => v !== room),
+      }),
+    });
+  }
+
+  for (const comp of filters.compartimentare) {
+    const opt = OLX_COMPARTIMENTARE_OPTIONS.find((o) => o.value === comp);
+    tags.push({
+      id: `comp:${comp}`,
+      label: opt?.label || comp,
+      remove: (prev) => ({
+        ...prev,
+        compartimentare: prev.compartimentare.filter((v) => v !== comp),
+      }),
+    });
+  }
+
+  const pMin = filters.priceMin.trim();
+  const pMax = filters.priceMax.trim();
+  if (pMin || pMax) {
+    const label =
+      pMin && pMax ? `${pMin}–${pMax} €` : pMin ? `≥ ${pMin} €` : `≤ ${pMax} €`;
+    tags.push({
+      id: `price:${pMin}-${pMax}`,
+      label,
+      remove: (prev) => ({ ...prev, priceMin: "", priceMax: "" }),
+    });
+  }
+
+  const sMin = filters.surfaceMin.trim();
+  const sMax = filters.surfaceMax.trim();
+  if (sMin || sMax) {
+    const label =
+      sMin && sMax ? `${sMin}–${sMax} mp` : sMin ? `≥ ${sMin} mp` : `≤ ${sMax} mp`;
+    tags.push({
+      id: `surface:${sMin}-${sMax}`,
+      label,
+      remove: (prev) => ({ ...prev, surfaceMin: "", surfaceMax: "" }),
+    });
+  }
+
+  for (const cons of filters.constructie) {
+    const opt = OLX_CONSTRUCTIE_OPTIONS.find((o) => o.value === cons);
+    tags.push({
+      id: `cons:${cons}`,
+      label: opt?.label || cons,
+      remove: (prev) => ({
+        ...prev,
+        constructie: prev.constructie.filter((v) => v !== cons),
+      }),
+    });
+  }
+
+  for (const fl of filters.floors) {
+    const opt = OLX_FLOOR_OPTIONS.find((o) => o.value === fl);
+    tags.push({
+      id: `floor:${fl}`,
+      label: opt?.label || fl,
+      remove: (prev) => ({
+        ...prev,
+        floors: prev.floors.filter((v) => v !== fl),
+      }),
+    });
+  }
+
+  for (const zone of filters.zones || []) {
+    if (!zone) continue;
+    tags.push({
+      id: `zone:${zone}`,
+      label: zone,
+      remove: (prev) => ({
+        ...prev,
+        zones: (prev.zones || []).filter((v) => v !== zone),
+      }),
+    });
+  }
+
+  if (filters.searchText.trim()) {
+    tags.push({
+      id: `search:${filters.searchText.trim()}`,
+      label: `"${filters.searchText.trim()}"`,
+      remove: (prev) => ({ ...prev, searchText: "" }),
+    });
+  }
+
+  return tags;
 }
 
 function slugifySearchQuery(text: string): string {
@@ -512,13 +665,37 @@ export function matchesOlxLeadFilter(lead: any, filters: OlxLeadFilters): boolea
     if (!queryTokens.every((t) => haystack.includes(t))) return false;
   }
 
+  // 1b. Tip Lead (Proprietari / Cumpărători / Chiriași — only active on Lead-uri page)
+  if (filters.leadRole) {
+    const rawRole = normalizeRoText(lead?.leadType || "");
+    const rawTx = normalizeRoText(lead?.transactionType || "");
+    const isProprietar =
+      rawRole === "proprietar" ||
+      rawRole === "proprietari" ||
+      (!rawRole && Boolean(lead?.url) && !lead?.isCerere);
+    const isCumparator =
+      rawRole === "cumparator" ||
+      rawRole === "cumparatori" ||
+      (!isProprietar && !rawRole && (rawTx.includes("cump") || rawTx.includes("vanz")));
+    const isChirias =
+      rawRole === "chirias" ||
+      rawRole === "chiriasi" ||
+      (!isProprietar && !isCumparator && rawTx.includes("inchir"));
+
+    if (filters.leadRole === "Proprietari" && !isProprietar) return false;
+    if (filters.leadRole === "Cumparatori" && !isCumparator) return false;
+    if (filters.leadRole === "Chiriasi" && !isChirias) return false;
+  }
+
   // 2. Tip tranzacție
   if (filters.transactionType) {
     const filterTx = normalizeRoText(filters.transactionType);
     const leadTx = normalizeRoText(
       lead?.transactionType || lead?.extractedData?.crmData?.detaliiGenerale?.tranzactie || ""
     );
+    if (!leadTx) return false;
     if (filterTx.includes("inchir") && !leadTx.includes("inchir")) return false;
+    if (filterTx.includes("cump") && !(leadTx.includes("cump") || leadTx.includes("vanz"))) return false;
     if (filterTx.includes("vanz") && !leadTx.includes("vanz")) return false;
   }
 

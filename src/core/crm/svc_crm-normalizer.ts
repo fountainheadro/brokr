@@ -84,8 +84,11 @@ export function toCanonicalLeadStatus(status?: string | null): CanonicalLeadStat
     return ROMANIAN_TO_CANONICAL_STATUS[trimmed];
   }
   const lower = trimmed.toLowerCase();
-  if (lower === "lista mea" || lower === "listamea") {
+  if (lower === "lista mea" || lower === "listamea" || lower === "selectate") {
     return "my_list";
+  }
+  if (lower === "lista piata" || lower === "listate") {
+    return "new_lead";
   }
   if (CANONICAL_STATUS_SET.has(lower)) {
     return lower as CanonicalLeadStatus;
@@ -101,8 +104,11 @@ export function toDisplayLeadStatus(status?: string | null): string | undefined 
     return trimmed;
   }
   const lower = trimmed.toLowerCase();
-  if (lower === "lista mea" || lower === "listamea") {
+  if (lower === "lista mea" || lower === "listamea" || lower === "selectate") {
     return "ListaMea";
+  }
+  if (lower === "lista piata" || lower === "listate") {
+    return "Noi";
   }
   const canonicalKey = lower as CanonicalLeadStatus;
   if (canonicalKey in CANONICAL_TO_DISPLAY_STATUS) {

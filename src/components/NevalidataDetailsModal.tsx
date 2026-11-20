@@ -265,7 +265,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("Eroare la adăugarea în Lista Mea!");
+      toast.error("Eroare la adăugarea în Selectate!");
     } finally {
       setSaving(false);
     }
@@ -297,7 +297,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       } else {
         await onSaveLead(lead.id!, { status: 'Noi' });
       }
-      toast.success("Leadul a fost reactivat ca Nou.");
+      toast.success("Leadul a fost reactivat în Listate.");
       onClose();
     } catch (e) {
       console.error(e);
@@ -353,7 +353,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                       ? 'bg-rose-50 text-rose-700 border-rose-200' 
                       : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   }`}>
-                    STATUS: {lead.status === 'Pierdute' ? 'PIERDUT' : 'NOU'}
+                    STATUS: {lead.status === 'Pierdute' ? 'PIERDUT' : lead.status === 'ListaMea' ? 'SELECTAT' : 'LISTAT'}
                   </span>
                 </div>
               </div>
@@ -654,10 +654,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   onClick={handleAddToMyList}
                   disabled={saving}
                   className="h-8 px-3 bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
-                  title="Mută leadul în Lista Mea"
+                  title="Mută leadul în Selectate"
                 >
                   <Bookmark size={12} className="text-[#BE9662]" />
-                  <span>Adaugă în lista mea</span>
+                  <span>Adaugă în Selectate</span>
                 </button>
               )}
 
@@ -667,10 +667,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   onClick={handleReactivate}
                   disabled={saving}
                   className="h-8 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
-                  title="Re-activează leadul ca Nou"
+                  title="Re-activează leadul în Listate"
                 >
                   <RotateCcw size={12} className="text-amber-600" />
-                  <span>Reactivează ca Nou</span>
+                  <span>Reactivează în Listate</span>
                 </button>
               ) : (
                 <button

@@ -91,13 +91,22 @@ import { NevalidataUrlList } from "../components/NevalidataUrlList";
 import { NevalidataDetailsModal } from "../components/NevalidataDetailsModal";
 import { CalificataDetailsModal } from "../components/CalificataDetailsModal";
 import { OlxLeadDrawer } from "../components/OlxLeadDrawer";
+import { ActiveFilterTagsBar } from "../components/ActiveFilterTagsBar";
 import {
   OlxLeadFilters,
   DEFAULT_OLX_LEAD_FILTERS,
   countActiveOlxFilters,
   hasActiveOlxFilters,
   matchesOlxLeadFilter,
+  getActiveFilterTags,
 } from "../utils/olxFilterUtils";
+import {
+  AgencyMemberSummary,
+  buildLeadAgentFilterOptions,
+  hasRealLeadAgent,
+  matchesLeadAgentFilter,
+  resolveCurrentAgentIdentity,
+} from "../utils/leadAgentFilterUtils";
 
 const TABS: LeadStatus[] = [
   "Noi",
@@ -128,8 +137,8 @@ const CERERI_TABS: LeadStatus[] = ["Noua", "Calificare", "Matching", "Vizionare"
 const PROPRIETATI_TABS: LeadStatus[] = ["Noua", "Prospectare", "Colaborare", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
 const STATUS_LABELS: Record<string, string> = {
-  "Noi": "Noi",
-  "ListaMea": "Lista Mea",
+  "Noi": "Listate",
+  "ListaMea": "Selectate",
   "Pierdute": "Pierdute",
   "Nevalidata": "Nevalidate",
   "Calificata": "Calificate",
@@ -155,8 +164,7 @@ const pageSlideTransition: Transition = {
 };
 
 type SortOption = 'newest' | 'oldest' | 'expensive' | 'cheap';
-type TransactionFilter = 'Toate' | 'Vânzare' | 'Închiriere' | 'Cumpărare';
-type LeadRoleFilter = 'Toate' | 'Proprietari' | 'Cumparatori' | 'Chiriasi' | 'Proprietar' | 'Chirias' | 'Cumparator';
+type PropertyFilterSection = 'Lead-uri' | 'Cereri' | 'Proprietati';
 
 const parsePrice = (priceStr: string): number => {
   if (!priceStr) return 0;
@@ -347,8 +355,6 @@ export const Home: React.FC = () => {
     }
   });
   const [sortOption, setSortOption] = useState<SortOption>('newest');
-  const [transactionFilter, setTransactionFilter] = useState<TransactionFilter>('Toate');
-  const [leadRoleFilter, setLeadRoleFilter] = useState<LeadRoleFilter>('Toate');
   const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Proprietati');
   const location = useLocation();
   const navigate = useNavigate();
@@ -366,17 +372,15 @@ export const Home: React.FC = () => {
     if (selectedContact) {
       setSelectedContact(null);
     }
+    setIsOlxFilterOpen(false);
     const normalized = subItem === 'Imobile' || subItem === 'Proprietăți' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
       setActiveTab('Noi');
-      setLeadRoleFilter('Toate');
     } else if (normalized === 'Cereri') {
       setActiveTab('Noua');
-      setTransactionFilter('Toate');
     } else if (normalized === 'Proprietati') {
       setActiveTab('Noua');
-      setTransactionFilter('Toate');
     }
   };
 
@@ -390,9 +394,30 @@ export const Home: React.FC = () => {
     }
   }, [location.state]);
 
-  const [categoryFilter, setCategoryFilter] = useState<string>('Toate');
   const [isOlxFilterOpen, setIsOlxFilterOpen] = useState<boolean>(false);
-  const [olxFilters, setOlxFilters] = useState<OlxLeadFilters>(DEFAULT_OLX_LEAD_FILTERS);
+  const [sectionFilters, setSectionFilters] = useState<Record<PropertyFilterSection, OlxLeadFilters>>({
+    "Lead-uri": { ...DEFAULT_OLX_LEAD_FILTERS },
+    "Cereri": { ...DEFAULT_OLX_LEAD_FILTERS },
+    "Proprietati": { ...DEFAULT_OLX_LEAD_FILTERS },
+  });
+  const currentFilterSection: PropertyFilterSection =
+    activeSidebarItem === "Lead-uri"
+      ? "Lead-uri"
+      : activeSidebarItem === "Cereri"
+        ? "Cereri"
+        : "Proprietati";
+  const activeFilters = sectionFilters[currentFilterSection];
+  const setActiveFilters = React.useCallback(
+    (updater: OlxLeadFilters | ((prev: OlxLeadFilters) => OlxLeadFilters)) => {
+      setSectionFilters((prev) => ({
+        ...prev,
+        [currentFilterSection]:
+          typeof updater === "function" ? updater(prev[currentFilterSection]) : updater,
+      }));
+    },
+    [currentFilterSection]
+  );
+  const activeFilterTags = useMemo(() => getActiveFilterTags(activeFilters), [activeFilters]);
   const [leads, setLeads] = useState<Lead[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [personal, setPersonal] = useState<PersonalMember[]>([]);
@@ -487,9 +512,70 @@ export const Home: React.FC = () => {
   const [isExtractionRulesOpen, setIsExtractionRulesOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const { user, isLoading: authLoading, loginWithGoogle, logout } = useAuth();
-  const { tenant, platformRootDomain, isAccessDenied, accessDeniedReason, isLoading: isTenantLoading, startPreview } = useTenantContext();
+  const { tenant, tenantContext, platformRootDomain, isAccessDenied, accessDeniedReason, isLoading: isTenantLoading, startPreview } = useTenantContext();
   const [loginError, setLoginError] = useState<string | null>(null);
   const [copiedDomain, setCopiedDomain] = useState<string | null>(null);
+  const [agencyMembers, setAgencyMembers] = useState<AgencyMemberSummary[]>([]);
+  const [selectedLeadAgent, setSelectedLeadAgent] = useState<string>("all");
+
+  useEffect(() => {
+    if (!user || !tenant?.id) {
+      setAgencyMembers([]);
+      return;
+    }
+    let cancelled = false;
+    const loadMembers = async () => {
+      try {
+        const headers = await getApiAuthHeaders();
+        const res = await fetch("/api/tenant/members", { headers });
+        if (!res.ok) return;
+        const json = await res.json();
+        if (!cancelled && json?.success && Array.isArray(json.data)) {
+          setAgencyMembers(json.data);
+        }
+      } catch (err) {
+        console.warn("[Home] Could not fetch agency members:", err);
+      }
+    };
+    void loadMembers();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, tenant?.id]);
+
+  const currentAgentIdentity = useMemo(
+    () =>
+      resolveCurrentAgentIdentity({
+        user,
+        tenantContext,
+        agencyMembers,
+        personal,
+      }),
+    [user, tenantContext, agencyMembers, personal]
+  );
+
+  const leadAgentOptions = useMemo(
+    () =>
+      buildLeadAgentFilterOptions({
+        user,
+        tenantContext,
+        agencyMembers,
+        personal,
+        leads,
+      }),
+    [user, tenantContext, agencyMembers, personal, leads]
+  );
+
+  const selectedLeadAgentOption = useMemo(
+    () => leadAgentOptions.find((opt) => opt.id === selectedLeadAgent) || leadAgentOptions[0],
+    [leadAgentOptions, selectedLeadAgent]
+  );
+
+  useEffect(() => {
+    if (selectedLeadAgent !== "all" && !leadAgentOptions.some((opt) => opt.id === selectedLeadAgent)) {
+      setSelectedLeadAgent("all");
+    }
+  }, [leadAgentOptions, selectedLeadAgent]);
 
   useEffect(() => {
     if (location.search.includes('calendar=true')) {
@@ -1069,12 +1155,12 @@ export const Home: React.FC = () => {
           if (isCerereLead(lead)) return false;
           if (lead.status === 'Sterse') return false;
           if (activeTab === 'Pierdute') {
-            return lead.status === 'Pierdute';
+            return lead.status === 'Pierdute' && matchesLeadAgentFilter(lead, selectedLeadAgentOption);
           }
           if (activeTab === 'ListaMea') {
-            return lead.status === 'ListaMea';
+            return lead.status === 'ListaMea' && matchesLeadAgentFilter(lead, selectedLeadAgentOption);
           }
-          // Default tab 'Noi' (includes newly added leads and legacy unpromoted leads)
+          // Default tab 'Noi' (Listate / global unprocessed list from super admin - never filtered by agent)
           return lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata';
         }
         // Proprietăți: exclude cereri and non-property items
@@ -1100,64 +1186,8 @@ export const Home: React.FC = () => {
         return titleMatch || zoneMatch || priceMatch || nameMatch || phoneMatch || idMatch || catMatch || notesMatch || urlMatch;
       })
       .filter(lead => {
-        if (activeSidebarItem === 'Lead-uri') {
-          if (leadRoleFilter === 'Toate') return true;
-          const r = getLeadRole(lead);
-          if (leadRoleFilter === 'Proprietari' || leadRoleFilter === 'Proprietar') return r === 'Proprietar';
-          if (leadRoleFilter === 'Cumparatori' || leadRoleFilter === 'Cumparator') return r === 'Cumparator';
-          if (leadRoleFilter === 'Chiriasi' || leadRoleFilter === 'Chirias') return r === 'Chirias';
-          return true;
-        }
-        if (transactionFilter === 'Toate') return true;
-        const type = String(lead.transactionType || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        if (!type) return false;
-
-        if (activeSidebarItem === 'Cereri') {
-          if (transactionFilter === 'Cumpărare' || (transactionFilter as string) === 'Cumparare' || transactionFilter === 'Vânzare') {
-            return type.includes('cump') || type.includes('vanz');
-          }
-          if (transactionFilter === 'Închiriere' || (transactionFilter as string) === 'Inchiriere') {
-            return type.includes('inchir');
-          }
-        }
-
-        // Imobile / Proprietăți
-        if (transactionFilter === 'Închiriere' || (transactionFilter as string) === 'Inchiriere') {
-          return type.includes('inchir');
-        }
-        if (transactionFilter === 'Vânzare' || (transactionFilter as string) === 'Vanzare') {
-          return type.includes('vanz');
-        }
-        return true;
-      })
-      .filter(lead => {
-        if (categoryFilter === 'Toate') return true;
-        // Check top-level lead.categoria first, fallback to extractedData
-        const leadCat = lead.categoria || lead.extractedData?.crmData?.detaliiGenerale?.categoria;
-        if (!leadCat) return false;
-        
-        // Robust check for singular/plural mismatch
-        const normalizedLead = String(leadCat || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        const normalizedFilter = String(categoryFilter || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        
-        if (normalizedLead === normalizedFilter) return true;
-        
-        // Basic singular/plural check (e.g., "spatiu comercial" vs "spatii comerciale")
-        // This is a bit complex in Romanian, but let's at least handle the common patterns
-        const isCommMatch = (normalizedFilter.includes("comercial") && normalizedLead.includes("comercial"));
-        const isOfficeMatch = (normalizedFilter.includes("birou") && normalizedLead.includes("birou"));
-        const isIndMatch = (normalizedFilter.includes("industrial") && normalizedLead.includes("industrial"));
-        const isDepMatch = (normalizedFilter.includes("depozitare") && normalizedLead.includes("depozitare"));
-        const isHaleMatch = (normalizedFilter.includes("hale") && normalizedLead.includes("hale"));
-        const isAppMatch = (normalizedFilter.includes("apartament") && normalizedLead.includes("apartament"));
-        const isHouseMatch = (normalizedFilter.includes("casa") && normalizedLead.includes("casa"));
-        const isLandMatch = (normalizedFilter.includes("teren") && normalizedLead.includes("teren"));
-
-        return isCommMatch || isOfficeMatch || isIndMatch || isDepMatch || isHaleMatch || isAppMatch || isHouseMatch || isLandMatch;
-      })
-      .filter(lead => {
-        if (activeSidebarItem === 'Lead-uri' && hasActiveOlxFilters(olxFilters)) {
-          return matchesOlxLeadFilter(lead, olxFilters);
+        if (hasActiveOlxFilters(activeFilters)) {
+          return matchesOlxLeadFilter(lead, activeFilters);
         }
         return true;
       });
@@ -1199,7 +1229,7 @@ export const Home: React.FC = () => {
     });
 
     return groups;
-  }, [leads, activeTab, activeSidebarItem, sortOption, transactionFilter, leadRoleFilter, categoryFilter, searchQuery, olxFilters]);
+  }, [leads, activeTab, activeSidebarItem, sortOption, searchQuery, activeFilters, selectedLeadAgentOption]);
 
   const handleLeadClick = React.useCallback((lead: Lead) => {
     closingDetailRouteRef.current = false;
@@ -1816,11 +1846,19 @@ export const Home: React.FC = () => {
 
   const handleAddToMyList = async (leadId: string) => {
     try {
+      const agentAttribution: Partial<Lead> = {
+        agent: currentAgentIdentity.name,
+        agentEmail: currentAgentIdentity.email,
+        agentUid: currentAgentIdentity.uid,
+        createdByName: currentAgentIdentity.name,
+        createdByEmail: currentAgentIdentity.email,
+        author: currentAgentIdentity.name,
+      };
       const leadObj = leads.find(l => l.id === leadId) || (selectedLead?.id === leadId ? selectedLead : undefined);
       if (!leadObj) {
-        await leadsService.updateLeadStatus(leadId, 'ListaMea');
-        setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'ListaMea' } : l));
-        toast.success("Leadul a fost adăugat în Lista Mea.");
+        await leadsService.updateLeadData(leadId, { status: 'ListaMea', ...agentAttribution });
+        setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'ListaMea', ...agentAttribution } : l));
+        toast.success("Leadul a fost adăugat în Selectate.");
         return;
       }
 
@@ -1835,6 +1873,7 @@ export const Home: React.FC = () => {
       });
 
       const finalPayload: Partial<Lead> = {
+        ...agentAttribution,
         status: 'ListaMea' as LeadStatus,
         title: formattedTitle,
         notes: formattedDescription,
@@ -1845,18 +1884,35 @@ export const Home: React.FC = () => {
       await leadsService.updateLeadData(leadId, finalPayload);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
       setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...finalPayload } : prev);
-      toast.success("Leadul a fost adăugat în Lista Mea cu titlul și descrierea formatate!");
+      toast.success("Leadul a fost adăugat în Selectate cu titlul și descrierea formatate!");
     } catch (e) {
-      console.error("Failed to add lead to Lista Mea:", e);
-      toast.error("Eroare la adăugarea în Lista Mea!");
+      console.error("Failed to add lead to Selectate:", e);
+      toast.error("Eroare la adăugarea în Selectate!");
       throw e;
     }
   };
 
   const handleMarkAsLost = async (leadId: string) => {
     try {
-      await leadsService.updateLeadStatus(leadId, 'Pierdute');
-      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'Pierdute' } : l));
+      const leadObj = leads.find(l => l.id === leadId) || (selectedLead?.id === leadId ? selectedLead : undefined);
+      const shouldStampCurrentAgent =
+        !leadObj || leadObj.status !== 'ListaMea' || !hasRealLeadAgent(leadObj);
+      const lostPayload: Partial<Lead> = {
+        status: 'Pierdute' as LeadStatus,
+        ...(shouldStampCurrentAgent
+          ? {
+              agent: currentAgentIdentity.name,
+              agentEmail: currentAgentIdentity.email,
+              agentUid: currentAgentIdentity.uid,
+              createdByName: currentAgentIdentity.name,
+              createdByEmail: currentAgentIdentity.email,
+              author: currentAgentIdentity.name,
+            }
+          : {}),
+      };
+      await leadsService.updateLeadData(leadId, lostPayload);
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...lostPayload } : l));
+      setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...lostPayload } : prev);
       toast.success("Leadul a fost marcat ca Pierdut.");
     } catch (e) {
       console.error("Failed to mark lead as lost:", e);
@@ -1869,7 +1925,7 @@ export const Home: React.FC = () => {
     try {
       await leadsService.updateLeadStatus(leadId, 'Noi');
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'Noi' } : l));
-      toast.success("Leadul a fost reactivat ca Nou.");
+      toast.success("Leadul a fost reactivat în Listate.");
     } catch (e) {
       console.error("Failed to reactivate lead:", e);
       toast.error("Eroare la reactivarea leadului!");
@@ -2119,16 +2175,16 @@ export const Home: React.FC = () => {
                 </div>
 
                 {/* Sub-header Filter Tabs / Menu (same style as Clienți) */}
-                <div className="bg-transparent border-b border-gray-200 shrink-0 px-6 h-[42px] min-h-[42px] max-h-[42px] box-border flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
+                <div className="bg-transparent border-b border-gray-200 shrink-0 px-6 h-[42px] min-h-[42px] max-h-[42px] box-border flex items-center justify-between gap-3 overflow-hidden">
                   {/* Left: Filter Tabs with counts */}
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex items-center gap-2 shrink-0 overflow-x-auto no-scrollbar max-w-[60%]">
                     {sectionTabs.map((tab) => {
                       const tabCount = leads.filter(l => {
                         if (activeSidebarItem === 'Lead-uri') {
                           if (isCerereLead(l)) return false;
                           if (l.status === 'Sterse') return false;
-                          if (tab === 'Pierdute') return l.status === 'Pierdute';
-                          if (tab === 'ListaMea') return l.status === 'ListaMea';
+                          if (tab === 'Pierdute') return l.status === 'Pierdute' && matchesLeadAgentFilter(l, selectedLeadAgentOption);
+                          if (tab === 'ListaMea') return l.status === 'ListaMea' && matchesLeadAgentFilter(l, selectedLeadAgentOption);
                           return l.status === 'Noi' || l.status === 'Nevalidata' || l.status === 'Calificata';
                         }
                         if (activeSidebarItem === 'Cereri') {
@@ -2146,7 +2202,13 @@ export const Home: React.FC = () => {
                       const hasNew = leads.some(lead => {
                         let isMatch = false;
                         if (activeSidebarItem === 'Lead-uri') {
-                          isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && (tab === 'Pierdute' ? lead.status === 'Pierdute' : tab === 'ListaMea' ? lead.status === 'ListaMea' : (lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata'));
+                          isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && (
+                            tab === 'Pierdute'
+                              ? (lead.status === 'Pierdute' && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
+                              : tab === 'ListaMea'
+                                ? (lead.status === 'ListaMea' && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
+                                : (lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata')
+                          );
                         } else if (activeSidebarItem === 'Cereri') {
                           isMatch = isCerereLead(lead) && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'AreInteres' : lead.status === tab);
                         } else {
@@ -2162,7 +2224,7 @@ export const Home: React.FC = () => {
                         <button
                           key={tab}
                           onClick={() => setActiveTab(tab)}
-                          className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+                          className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer shrink-0 ${
                             isSelected
                               ? "bg-[#051D35] text-white font-semibold shadow-xs"
                               : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100 font-semibold"
@@ -2182,90 +2244,64 @@ export const Home: React.FC = () => {
                     })}
                   </div>
 
-                  {/* Right: Lead Role pills (in Lead-uri) or Transaction pills (Imobile/Cereri), Category & Sort dropdowns */}
-                  <div className="flex items-center gap-2 shrink-0">
-                    {activeSidebarItem === 'Lead-uri' ? (
-                      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
-                        {([
-                          { id: 'Toate', label: 'Toate' },
-                          { id: 'Proprietari', label: 'Proprietari' },
-                          { id: 'Cumparatori', label: 'Cumpărători' },
-                          { id: 'Chiriasi', label: 'Chiriași' }
-                        ] as const).map((roleItem) => (
-                          <button
-                            key={roleItem.id}
-                            type="button"
-                            onClick={() => setLeadRoleFilter(roleItem.id)}
-                            className={`h-6 px-3 text-[11px] font-semibold rounded transition-all cursor-pointer ${
-                              leadRoleFilter === roleItem.id
-                                ? "bg-[#051D35] text-white shadow-xs"
-                                : "text-gray-600 hover:text-[#051D35] hover:bg-white/70"
-                            }`}
-                          >
-                            {roleItem.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : activeSidebarItem === 'Cereri' ? (
-                      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
-                        {([
-                          { id: 'Toate', label: 'Toate' },
-                          { id: 'Cumpărare', label: 'Cumpărare' },
-                          { id: 'Închiriere', label: 'Închiriere' }
-                        ] as const).map((typeItem) => (
-                          <button
-                            key={typeItem.id}
-                            type="button"
-                            onClick={() => setTransactionFilter(typeItem.id as any)}
-                            className={`h-6 px-2 text-[11px] font-semibold rounded transition-all cursor-pointer ${
-                              transactionFilter === typeItem.id
-                                ? "bg-[#051D35] text-white shadow-xs"
-                                : "text-gray-600 hover:text-[#051D35] hover:bg-white/70"
-                            }`}
-                          >
-                            {typeItem.label}
-                          </button>
-                        ))}
-                      </div>
-                    ) : (
-                      /* Imobile (sau Proprietăți) */
-                      <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-md">
-                        {([
-                          { id: 'Toate', label: 'Toate' },
-                          { id: 'Vânzare', label: 'Vânzare' },
-                          { id: 'Închiriere', label: 'Închiriere' }
-                        ] as const).map((typeItem) => (
-                          <button
-                            key={typeItem.id}
-                            type="button"
-                            onClick={() => setTransactionFilter(typeItem.id as any)}
-                            className={`h-6 px-2 text-[11px] font-semibold rounded transition-all cursor-pointer ${
-                              transactionFilter === typeItem.id
-                                ? "bg-[#051D35] text-white shadow-xs"
-                                : "text-gray-600 hover:text-[#051D35] hover:bg-white/70"
-                            }`}
-                          >
-                            {typeItem.label}
-                          </button>
-                        ))}
+                  {/* Right: Active Filter Tags (left of Filter button, with ellipsis overflow), Filter button, and Sort dropdown */}
+                  <div className="flex items-center justify-end gap-2 flex-1 min-w-0">
+                    <ActiveFilterTagsBar
+                      tags={activeFilterTags}
+                      onRemoveTag={(tag) => setActiveFilters((prev) => tag.remove(prev))}
+                      onOpenDrawer={() => setIsOlxFilterOpen(true)}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={() => setIsOlxFilterOpen((prev) => !prev)}
+                      title={
+                        currentFilterSection === "Cereri"
+                          ? "Filtrare cereri"
+                          : currentFilterSection === "Proprietati"
+                            ? "Filtrare proprietăți"
+                            : "Filtrare lead-uri"
+                      }
+                      className={`h-7 px-2.5 flex items-center justify-center gap-1.5 rounded-md border text-xs transition-colors cursor-pointer shrink-0 ${
+                        isOlxFilterOpen || hasActiveOlxFilters(activeFilters)
+                          ? "bg-[#051D35] text-white border-[#051D35]"
+                          : "bg-gray-50 text-gray-600 border-gray-200 hover:text-[#051D35] hover:bg-gray-100"
+                      }`}
+                    >
+                      <SlidersHorizontal size={13} />
+                      <span>Filtre</span>
+                      {countActiveOlxFilters(activeFilters) > 0 && (
+                        <span className="text-[10px] font-semibold px-1 rounded bg-[#BE9662] text-white tabular-nums">
+                          {countActiveOlxFilters(activeFilters)}
+                        </span>
+                      )}
+                    </button>
+
+                    {activeSidebarItem === 'Lead-uri' && (
+                      <div className="relative shrink-0">
+                        <Users size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        <select
+                          aria-label="Filtrează după agent"
+                          title="Filtrează lead-urile din Selectate și Pierdute după agent"
+                          value={selectedLeadAgent}
+                          onChange={(e) => setSelectedLeadAgent(e.target.value)}
+                          className={`h-7 max-w-[180px] border rounded-md pl-7 pr-6 text-xs font-normal appearance-none focus:outline-none transition-colors cursor-pointer truncate ${
+                            selectedLeadAgent !== "all"
+                              ? "bg-[#051D35]/8 border-[#051D35]/30 text-[#051D35] font-medium focus:bg-white focus:border-[#051D35]"
+                              : "bg-gray-50 border-gray-200 text-gray-700 focus:bg-white focus:border-gray-400"
+                          }`}
+                        >
+                          {leadAgentOptions.map((opt) => (
+                            <option key={opt.id} value={opt.id}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                        <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                       </div>
                     )}
 
-                    <div className="relative">
-                      <select
-                        value={categoryFilter}
-                        onChange={(e) => setCategoryFilter(e.target.value)}
-                        className="h-7 bg-gray-50 border border-gray-200 rounded-md pl-3 pr-6 text-xs font-normal text-gray-700 appearance-none focus:outline-none focus:bg-white focus:border-gray-400 transition-colors cursor-pointer"
-                      >
-                        <option value="Toate">Toate categoriile</option>
-                        {CATEGORIA_OPTIONS.map(opt => (
-                          <option key={opt} value={opt}>{opt}</option>
-                        ))}
-                      </select>
-                      <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                    </div>
-
-                    <div className="relative">
+                    <div className="relative shrink-0">
                       <select
                         value={sortOption}
                         onChange={(e) => setSortOption(e.target.value as SortOption)}
@@ -2278,39 +2314,18 @@ export const Home: React.FC = () => {
                       </select>
                       <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                     </div>
-
-                    {activeSidebarItem === 'Lead-uri' && (
-                      <button
-                        type="button"
-                        onClick={() => setIsOlxFilterOpen((prev) => !prev)}
-                        title="Filtrare anunțuri OLX.ro"
-                        className={`h-7 px-2 flex items-center justify-center gap-1.5 rounded-md border text-xs transition-colors cursor-pointer shrink-0 ${
-                          isOlxFilterOpen || hasActiveOlxFilters(olxFilters)
-                            ? "bg-[#051D35] text-white border-[#051D35]"
-                            : "bg-gray-50 text-gray-600 border-gray-200 hover:text-[#051D35] hover:bg-gray-100"
-                        }`}
-                      >
-                        <SlidersHorizontal size={13} />
-                        {countActiveOlxFilters(olxFilters) > 0 && (
-                          <span className="text-[10px] font-semibold px-1 rounded bg-[#BE9662] text-white tabular-nums">
-                            {countActiveOlxFilters(olxFilters)}
-                          </span>
-                        )}
-                      </button>
-                    )}
                   </div>
                 </div>
 
-                {activeSidebarItem === 'Lead-uri' && (
-                  <OlxLeadDrawer
-                    isOpen={isOlxFilterOpen}
-                    mode="filter"
-                    onClose={() => setIsOlxFilterOpen(false)}
-                    filters={olxFilters}
-                    onChange={setOlxFilters}
-                    onReset={() => setOlxFilters(DEFAULT_OLX_LEAD_FILTERS)}
-                  />
-                )}
+                <OlxLeadDrawer
+                  isOpen={isOlxFilterOpen}
+                  mode="filter"
+                  pageContext={currentFilterSection}
+                  onClose={() => setIsOlxFilterOpen(false)}
+                  filters={activeFilters}
+                  onChange={setActiveFilters}
+                  onReset={() => setActiveFilters({ ...DEFAULT_OLX_LEAD_FILTERS })}
+                />
 
             {/* Content */}
             <div className="flex-1 overflow-hidden relative">

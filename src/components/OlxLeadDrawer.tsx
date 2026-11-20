@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { X, RotateCcw, SlidersHorizontal, Timer, Clock } from "lucide-react";
 import {
   OlxLeadFilters,
+  PropertyFilterPageContext,
   countActiveOlxFilters,
 } from "../utils/olxFilterUtils";
 import { OlxLeadFilterForm } from "./OlxLeadFilterPanel";
@@ -43,6 +44,7 @@ export const DEFAULT_OLX_MAX_AD_AGE_HOURS = 8760;
 interface OlxLeadDrawerProps {
   isOpen: boolean;
   mode: OlxLeadDrawerMode;
+  pageContext?: PropertyFilterPageContext;
   onClose: () => void;
   filters: OlxLeadFilters;
   onChange: (next: OlxLeadFilters) => void;
@@ -61,6 +63,7 @@ interface OlxLeadDrawerProps {
 export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
   isOpen,
   mode,
+  pageContext,
   onClose,
   filters,
   onChange,
@@ -77,6 +80,15 @@ export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
 }) => {
   const activeCount = countActiveOlxFilters(filters);
   const isAutoScan = mode === "autoScan";
+  const resolvedContext: PropertyFilterPageContext =
+    pageContext || (isAutoScan ? "autoScan" : "Lead-uri");
+  const drawerTitle = isAutoScan
+    ? "Scanare Automată OLX.ro"
+    : resolvedContext === "Cereri"
+      ? "Filtrare Cereri"
+      : resolvedContext === "Proprietati"
+        ? "Filtrare Proprietăți"
+        : "Filtrare Lead-uri";
 
   const lastIdx = OLX_MAX_AGE_STEPS.length - 1;
   const rawMinIdx = OLX_MAX_AGE_STEPS.findIndex((s) => s.hours === minAdAgeHours);
@@ -165,7 +177,7 @@ export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
                   {isAutoScan ? <Timer size={14} /> : <SlidersHorizontal size={14} />}
                 </span>
                 <h3 className="text-[13px] font-semibold text-[#051D35] truncate">
-                  {isAutoScan ? "Scanare Automată OLX.ro" : "Filtrare Lead-uri OLX.ro"}
+                  {drawerTitle}
                 </h3>
                 {activeCount > 0 && (
                   <span className="text-[11px] font-normal px-2 py-0.5 rounded bg-[#051D35]/10 text-[#051D35] tabular-nums shrink-0">
@@ -307,7 +319,7 @@ export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
                   </div>
 
                   <p className="text-[11px] font-normal text-gray-500 leading-relaxed">
-                    Scanează periodic pagina OLX.ro conform filtrelor și intervalului de vechime selectat, adăugând automat anunțurile noi în categoria <strong className="font-semibold text-[#051D35]">Noi</strong>.
+                    Scanează periodic pagina OLX.ro conform filtrelor și intervalului de vechime selectat, adăugând automat anunțurile noi în categoria <strong className="font-semibold text-[#051D35]">Listate</strong>.
                     {lastScanAt && (
                       <span className="block mt-1 text-[10px] text-gray-400">
                         Ultima scanare: {new Date(lastScanAt).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -317,7 +329,11 @@ export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
                 </div>
               )}
 
-              <OlxLeadFilterForm filters={filters} onChange={onChange} />
+              <OlxLeadFilterForm
+                filters={filters}
+                onChange={onChange}
+                pageContext={resolvedContext}
+              />
             </div>
 
             {/* Footer pinned at base */}

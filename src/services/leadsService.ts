@@ -72,8 +72,8 @@ export const isCerereLead = (l?: { status?: string; title?: string; notes?: stri
 };
 
 export const mapStatus = (status: string): LeadStatus => {
-  if (status === 'Lead-uri' || status === 'Intrata' || status === 'Nevalidate' || status === 'Nevalidata') return 'Noi';
-  if (status === 'Lista Mea' || status === 'ListaMea') return 'ListaMea';
+  if (status === 'Lead-uri' || status === 'Intrata' || status === 'Nevalidate' || status === 'Nevalidata' || status === 'Listate' || status === 'Lista Piata') return 'Noi';
+  if (status === 'Lista Mea' || status === 'ListaMea' || status === 'Selectate') return 'ListaMea';
   if (status === 'Publicare') return 'Noua';
   if (status === 'Cerere') return 'Noua';
   return (toDisplayLeadStatus(status) || status) as LeadStatus;
@@ -134,8 +134,11 @@ export interface Lead {
   extractedData?: ExtractionResult;
   createdByName?: string;
   createdByEmail?: string;
+  createdByUid?: string;
   author?: string;
   agent?: string;
+  agentEmail?: string;
+  agentUid?: string;
   isSharedLead?: boolean;
   sharedLeadId?: string;
   source?: string;

@@ -307,7 +307,7 @@ export const PgPlatformAutoCrawl: React.FC = () => {
                 )}
               </div>
               <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-                Toate anunțurile preluate aici sunt salvate o singură dată la nivel de platformă și apar automat, complet și identic în secțiunea <strong className="text-[#051D35]">Lead-uri → Noi</strong> pentru fiecare agenție.
+                Toate anunțurile preluate aici sunt salvate o singură dată la nivel de platformă și apar automat, complet și identic în secțiunea <strong className="text-[#051D35]">Lead-uri → Listate</strong> pentru fiecare agenție.
               </p>
             </div>
           </div>

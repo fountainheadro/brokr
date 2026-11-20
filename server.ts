@@ -2011,7 +2011,7 @@ Returnează un JSON strict cu următoarele chei:
     }
   });
 
-  // Dedicated OLX.ro DOM extraction helpers for exact title, description, and price
+  // Dedicated OLX.ro DOM extraction helpers for exact title, description, price, owner, posted date, and parameters
   function extractOlxDomTitle($: ReturnType<typeof cheerio.load>): string {
     const selectors = [
       'div[data-cy="offer_title"] h4',
@@ -2032,18 +2032,34 @@ Returnează un JSON strict cu următoarele chei:
 
   function extractOlxDomDescription($: ReturnType<typeof cheerio.load>): string {
     const selectors = [
+      'div[data-cy="ad_description"] div.text-background-action-primary.leading-body-base.whitespace-pre-line',
+      'div[data-testid="ad_description"] div.text-background-action-primary.leading-body-base.whitespace-pre-line',
+      'div[data-cy="ad_description"] div.text-background-action-primary.whitespace-pre-line',
+      'div[data-testid="ad_description"] div.text-background-action-primary.whitespace-pre-line',
+      '[data-cy="ad_description"] div[class*="text-background-action-primary"][class*="whitespace-pre-line"]',
+      '[data-testid="ad_description"] div[class*="text-background-action-primary"][class*="whitespace-pre-line"]',
+      '[data-cy="ad_description"] div[class*="whitespace-pre-line"]',
+      '[data-testid="ad_description"] div[class*="whitespace-pre-line"]',
       'div.text-background-action-primary.leading-body-base.whitespace-pre-line',
       'div.text-background-action-primary.whitespace-pre-line',
       'div[class*="text-background-action-primary"][class*="whitespace-pre-line"]',
-      '[data-cy="ad_description"] div[class*="whitespace-pre-line"]',
-      '[data-cy="ad_description"] div',
-      '[data-cy="ad_description"]',
+      'div[data-cy="ad_description"]',
+      'div[data-testid="ad_description"]',
     ];
     for (const sel of selectors) {
       const el = $(sel).first();
       if (!el.length) continue;
       const $clone = el.clone();
       $clone.find("script, style, button").remove();
+      // If falling back to the outer ad_description container, strip the "Descriere" heading wrapper
+      if (sel.endsWith('[data-cy="ad_description"]') || sel.endsWith('[data-testid="ad_description"]')) {
+        $clone.find("h2, h3, [data-nx-name='NexusHeading']").each((_, heading) => {
+          const hTxt = $(heading).text().trim().toLowerCase();
+          if (hTxt === "descriere") {
+            $(heading).remove();
+          }
+        });
+      }
       $clone.find("br").replaceWith("\n");
       const cleaned = $clone
         .text()
@@ -2074,6 +2090,202 @@ Returnează un JSON strict cu următoarele chei:
     return "";
   }
 
+  function extractOlxDomOwner($: ReturnType<typeof cheerio.load>): string {
+    const selectors = [
+      'h4[data-testid="user-profile-user-name"]',
+      '[data-testid="user-profile-user-name"]',
+    ];
+    for (const sel of selectors) {
+      const txt = $(sel).first().text().replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      if (txt) return txt;
+    }
+    return "";
+  }
+
+  function parseRomanianPostedAtDate(rawText: string): string | null {
+    const cleaned = String(rawText || "")
+      .replace(/\u00A0/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!cleaned) return null;
+
+    const norm = cleaned
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+
+    const now = new Date();
+    const timeMatch = norm.match(/\b(\d{1,2}):(\d{2})\b/);
+    const hh = timeMatch ? Math.min(23, parseInt(timeMatch[1], 10)) : 0;
+    const mm = timeMatch ? Math.min(59, parseInt(timeMatch[2], 10)) : 0;
+
+    if (/\b(azi|astazi)\b/.test(norm)) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm, 0));
+      return d.toISOString();
+    }
+    if (/\bieri\b/.test(norm)) {
+      const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, hh, mm, 0));
+      return d.toISOString();
+    }
+
+    const months: Record<string, number> = {
+      ianuarie: 0, ian: 0,
+      februarie: 1, feb: 1,
+      martie: 2, mar: 2,
+      aprilie: 3, apr: 3,
+      mai: 4,
+      iunie: 5, iun: 5,
+      iulie: 6, iul: 6,
+      august: 7, aug: 7,
+      septembrie: 8, sep: 8, sept: 8,
+      octombrie: 9, oct: 9,
+      noiembrie: 10, noi: 10, nov: 10,
+      decembrie: 11, dec: 11,
+    };
+
+    const roDateMatch = norm.match(/\b(\d{1,2})\s+([a-z]+)\s+(\d{4})\b/);
+    if (roDateMatch) {
+      const day = parseInt(roDateMatch[1], 10);
+      const monthIdx = months[roDateMatch[2]];
+      const year = parseInt(roDateMatch[3], 10);
+      if (monthIdx !== undefined && day >= 1 && day <= 31 && year >= 2000 && year <= 2100) {
+        return new Date(Date.UTC(year, monthIdx, day, hh, mm, 0)).toISOString();
+      }
+    }
+
+    const dotDateMatch = norm.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b/);
+    if (dotDateMatch) {
+      const day = parseInt(dotDateMatch[1], 10);
+      const month = parseInt(dotDateMatch[2], 10) - 1;
+      const year = parseInt(dotDateMatch[3], 10);
+      if (month >= 0 && month <= 11 && day >= 1 && day <= 31 && year >= 2000 && year <= 2100) {
+        return new Date(Date.UTC(year, month, day, hh, mm, 0)).toISOString();
+      }
+    }
+
+    return null;
+  }
+
+  function extractOlxDomPostedAt($: ReturnType<typeof cheerio.load>): {
+    rawText: string;
+    cleanLabel: string;
+    isoDate: string | null;
+  } {
+    const selectors = [
+      'span[data-cy="ad-posted-at"]',
+      'span[data-testid="ad-posted-at"]',
+      '[data-cy="ad-posted-at"]',
+      '[data-testid="ad-posted-at"]',
+    ];
+    for (const sel of selectors) {
+      const el = $(sel).first();
+      if (!el.length) continue;
+      const rawText = el.text().replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      if (!rawText) continue;
+      const cleanLabel = rawText.replace(/^postat\s*:?\s*/i, "").trim() || rawText;
+      const isoDate = parseRomanianPostedAtDate(rawText);
+      return { rawText, cleanLabel, isoDate };
+    }
+    return { rawText: "", cleanLabel: "", isoDate: null };
+  }
+
+  interface OlxDomParametersResult {
+    hasContainer: boolean;
+    isPrivateSeller: boolean;
+    isAgency: boolean;
+    sellerType: "Persoana fizica" | "Agentie" | "";
+    suprafataUtila: string;
+    anConstructie: string;
+    etaj: string;
+    compartimentare: string;
+    camere: string;
+    rawItems: string[];
+  }
+
+  function extractOlxDomParameters($: ReturnType<typeof cheerio.load>): OlxDomParametersResult {
+    const result: OlxDomParametersResult = {
+      hasContainer: false,
+      isPrivateSeller: false,
+      isAgency: false,
+      sellerType: "",
+      suprafataUtila: "",
+      anConstructie: "",
+      etaj: "",
+      compartimentare: "",
+      camere: "",
+      rawItems: [],
+    };
+
+    const $container = $(
+      'div[data-testid="ad-parameters-container"], [data-testid="ad-parameters-container"]'
+    ).first();
+    if (!$container.length) {
+      return result;
+    }
+
+    result.hasContainer = true;
+    const $items = $container.find("p");
+    const elements = $items.length > 0 ? $items : $container.children();
+
+    elements.each((_, el) => {
+      const txt = $(el).text().replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      if (!txt) return;
+      result.rawItems.push(txt);
+
+      const norm = txt
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+
+      if (/\bpersoana\s+fizica\b/.test(norm)) {
+        result.isPrivateSeller = true;
+        result.sellerType = "Persoana fizica";
+      }
+
+      const surfMatch = txt.match(/suprafa[tțţ][aă]?\s*util[aă]?\s*:\s*([\d.,]+)/i);
+      if (surfMatch && !result.suprafataUtila) {
+        result.suprafataUtila = surfMatch[1].replace(",", ".");
+      }
+
+      const yearMatch = txt.match(/an\s+construc[tțţ]ie\s*:\s*(.+)$/i);
+      if (yearMatch && !result.anConstructie) {
+        result.anConstructie = yearMatch[1].trim();
+      }
+
+      const floorMatch = txt.match(/etaj\s*:\s*(.+)$/i);
+      if (floorMatch && !result.etaj) {
+        const fv = floorMatch[1].trim();
+        result.etaj = /^\d+$/.test(fv) ? `Etaj ${fv}` : fv;
+      }
+
+      const compMatch = txt.match(/compartimentare\s*:\s*(.+)$/i);
+      if (compMatch && !result.compartimentare) {
+        const cv = compMatch[1].toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        if (cv.includes("semidecomandat")) result.compartimentare = "Semidecomandat";
+        else if (cv.includes("nedecomandat")) result.compartimentare = "Nedecomandat";
+        else if (cv.includes("circular")) result.compartimentare = "Circular";
+        else if (cv.includes("decomandat")) result.compartimentare = "Decomandat";
+      }
+
+      const roomsMatch = txt.match(/(?:num[aă]r\s+camere|camere)\s*:\s*(.+)$/i);
+      if (roomsMatch && !result.camere) {
+        const rv = roomsMatch[1].toLowerCase();
+        if (rv.includes("garsonier")) result.camere = "1";
+        else {
+          const digits = rv.match(/\d+/);
+          if (digits) result.camere = digits[0];
+        }
+      }
+    });
+
+    if (result.rawItems.length > 0 && !result.isPrivateSeller) {
+      result.isAgency = true;
+      result.sellerType = "Agentie";
+    }
+
+    return result;
+  }
+
   function parseDomPriceString(priceStr: string): { value: number; currency: "EUR" | "RON" } {
     const cleaned = String(priceStr || "").replace(/\u00A0/g, " ").trim();
     const lower = cleaned.toLowerCase();
@@ -2098,7 +2310,7 @@ Returnează un JSON strict cu următoarele chei:
       .trim();
   }
 
-  // Helper to extract price, phone number, owner name, title, and description from storia.ro or olx.ro HTML snippets
+  // Helper to extract price, phone number, owner name, title, description, posted date, and seller type from storia.ro or olx.ro HTML snippets
   function extractListingDetails(html: string, url: string = "") {
     const $ = cheerio.load(html || "");
     
@@ -2107,7 +2319,7 @@ Returnează un JSON strict cu următoarele chei:
       source = "storia";
     } else if (
       url.includes("olx.ro") ||
-      $('[data-cy="offer_title"], [data-testid="offer_title"], [data-testid="ad-price-container"]').length > 0 ||
+      $('[data-cy="offer_title"], [data-testid="offer_title"], [data-testid="ad-price-container"], [data-testid="ad-parameters-container"]').length > 0 ||
       $('[data-testid*="ad"]').length > 0 ||
       $('[data-nx-name]').length > 0
     ) {
@@ -2127,6 +2339,11 @@ Returnează un JSON strict cu următoarele chei:
     let rawOwner: string | null = null;
     let rawTitle: string | null = null;
     let rawDescription: string | null = null;
+    let postedAtRaw: string | null = null;
+    let postedAtIso: string | null = null;
+    let isPrivateSeller: boolean | null = null;
+    let isAgency: boolean | null = null;
+    let olxParameters: OlxDomParametersResult | null = null;
 
     const normalizeText = (text: string | null | undefined): string | null => {
       if (!text) return null;
@@ -2183,18 +2400,26 @@ Returnează un JSON strict cu următoarele chei:
       const olxDesc = extractOlxDomDescription($);
       if (olxDesc) rawDescription = olxDesc;
 
-      // OLX Phone Rule:
-      // The seller phone resides inside:
-      // <button data-cy="ad-contact-phone" data-testid="ad-contact-phone" ...><span class="n-button-text-wrapper"><span>Suna vanzatorul</span></span></button>
-      // Initially it is masked ("Suna vanzatorul"); once clicked, the text is replaced with the real phone number.
-      // extractPhoneFromOlxHtml inspects the button's revealed text / .n-button-text-wrapper / tel: links and rejects masked labels.
       const revealedOlxPhone = extractPhoneFromOlxHtml(html);
       if (revealedOlxPhone) {
         rawPhone = revealedOlxPhone;
       }
 
-      const ownerEl = $('h4[data-testid="user-profile-user-name"]').first();
-      if (ownerEl.length) rawOwner = ownerEl.text();
+      const olxOwner = extractOlxDomOwner($);
+      if (olxOwner) rawOwner = olxOwner;
+
+      const olxPostedAt = extractOlxDomPostedAt($);
+      if (olxPostedAt.rawText) {
+        postedAtRaw = olxPostedAt.cleanLabel;
+        postedAtIso = olxPostedAt.isoDate;
+      }
+
+      const params = extractOlxDomParameters($);
+      olxParameters = params;
+      if (params.hasContainer) {
+        isPrivateSeller = params.isPrivateSeller;
+        isAgency = params.isAgency;
+      }
     }
 
     if (!rawPrice) {
@@ -2219,7 +2444,12 @@ Returnează un JSON strict cu următoarele chei:
       description: rawDescription,
       price: cleanPrice(rawPrice),
       phone_number: normalizeText(rawPhone),
-      owner_name: normalizeText(rawOwner)
+      owner_name: normalizeText(rawOwner),
+      posted_at: postedAtRaw,
+      posted_at_iso: postedAtIso,
+      is_private_seller: isPrivateSeller,
+      is_agency: isAgency,
+      parameters: olxParameters,
     };
   }
 
@@ -2368,62 +2598,71 @@ Returnează un JSON strict cu următoarele chei:
     let lastError: any = null;
     let lastUpstreamStatus: number | null = null;
 
+    const providedHtml =
+      typeof req.body?.html === "string" && req.body.html.trim().length > 50
+        ? req.body.html.trim()
+        : "";
+    const maxAttempts = providedHtml ? 1 : crawlHeaderProfiles.length;
+
     // Fast, resilient crawling with controlled timeouts & HTTP/2 fallback
-    for (let i = 0; i < crawlHeaderProfiles.length; i++) {
+    for (let i = 0; i < maxAttempts; i++) {
       try {
-        logger.info(`Fetching URL (attempt ${i + 1})`, {
-          module: "crawler",
-          meta: { attempt: i + 1, host: new URL(url).hostname },
-        });
-        const response = await safeFetchExternal(url, {
-          headers: crawlHeaderProfiles[i],
-          timeout: 8000,
-          responseType: "text",
-        });
-
-        if (
-          response.status === 403 ||
-          response.status === 429 ||
-          response.status === 502 ||
-          response.status === 503 ||
-          response.status === 504
-        ) {
-          lastUpstreamStatus = response.status;
-          lastError = new Error(`Site returned ${response.status}`);
-          logger.warn(`Target site returned ${response.status} on crawl attempt ${i + 1}`, {
-            module: "crawler",
-            meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
-          });
-          if (i < crawlHeaderProfiles.length - 1) {
-            await new Promise(r => setTimeout(r, 600));
-            continue;
-          }
-          break;
-        }
-
-        if (response.status >= 400) {
-          lastUpstreamStatus = response.status;
-          lastError = new Error(`HTTP Error ${response.status}`);
-          logger.warn(`Target site returned HTTP ${response.status} on crawl attempt ${i + 1}`, {
-            module: "crawler",
-            meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
-          });
-          break;
-        }
-
-        const html = typeof response.data === "string" ? response.data : String(response.data || "");
-        if (isBotChallengePage(html)) {
-          lastUpstreamStatus = 403;
-          lastError = new Error("Site-ul extern a afișat o pagină de verificare anti-bot / Cookie check.");
-          logger.warn(`Target site served bot challenge on attempt ${i + 1}`, {
+        let html = providedHtml;
+        if (!html) {
+          logger.info(`Fetching URL (attempt ${i + 1})`, {
             module: "crawler",
             meta: { attempt: i + 1, host: new URL(url).hostname },
           });
-          if (i < crawlHeaderProfiles.length - 1) {
-            await new Promise(r => setTimeout(r, 600));
-            continue;
+          const response = await safeFetchExternal(url, {
+            headers: crawlHeaderProfiles[i],
+            timeout: 8000,
+            responseType: "text",
+          });
+
+          if (
+            response.status === 403 ||
+            response.status === 429 ||
+            response.status === 502 ||
+            response.status === 503 ||
+            response.status === 504
+          ) {
+            lastUpstreamStatus = response.status;
+            lastError = new Error(`Site returned ${response.status}`);
+            logger.warn(`Target site returned ${response.status} on crawl attempt ${i + 1}`, {
+              module: "crawler",
+              meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
+            });
+            if (i < crawlHeaderProfiles.length - 1) {
+              await new Promise(r => setTimeout(r, 600));
+              continue;
+            }
+            break;
           }
-          break;
+
+          if (response.status >= 400) {
+            lastUpstreamStatus = response.status;
+            lastError = new Error(`HTTP Error ${response.status}`);
+            logger.warn(`Target site returned HTTP ${response.status} on crawl attempt ${i + 1}`, {
+              module: "crawler",
+              meta: { attempt: i + 1, upstreamStatus: response.status, host: new URL(url).hostname },
+            });
+            break;
+          }
+
+          html = typeof response.data === "string" ? response.data : String(response.data || "");
+          if (isBotChallengePage(html)) {
+            lastUpstreamStatus = 403;
+            lastError = new Error("Site-ul extern a afișat o pagină de verificare anti-bot / Cookie check.");
+            logger.warn(`Target site served bot challenge on attempt ${i + 1}`, {
+              module: "crawler",
+              meta: { attempt: i + 1, host: new URL(url).hostname },
+            });
+            if (i < crawlHeaderProfiles.length - 1) {
+              await new Promise(r => setTimeout(r, 600));
+              continue;
+            }
+            break;
+          }
         }
 
         const $ = cheerio.load(html);
@@ -2446,7 +2685,28 @@ Returnează un JSON strict cu următoarele chei:
         const olxBreadcrumbs: any[] = Array.isArray(olxState?.ad?.breadcrumbs) ? olxState.ad.breadcrumbs : [];
 
         const olxDomTitle = extractOlxDomTitle($);
-        const isOlxPage = url.toLowerCase().includes("olx.ro") || Boolean(olxDomTitle);
+        const olxDomOwner = extractOlxDomOwner($);
+        const olxDomPostedAt = extractOlxDomPostedAt($);
+        const olxDomParams = extractOlxDomParameters($);
+        const isOlxPage = url.toLowerCase().includes("olx.ro") || Boolean(olxDomTitle) || olxDomParams.hasContainer;
+
+        // OLX.ro Private Seller Rule:
+        // Verify "Persoana fizica" exists inside div[data-testid="ad-parameters-container"];
+        // otherwise the ad is published by an agency and must be rejected.
+        if (isOlxPage) {
+          const isConfirmedAgency = olxDomParams.hasContainer
+            ? !olxDomParams.isPrivateSeller
+            : olxAd?.business === true || olxAd?.user?.is_business === true;
+          if (isConfirmedAgency) {
+            res.status(422).json({
+              error: 'Anunțul OLX.ro este publicat de o agenție / firmă (nu conține „Persoana fizica”). Sunt acceptate doar anunțurile de la persoane fizice.',
+              code: "OLX_AGENCY_AD",
+              sellerType: "Agentie",
+            });
+            return;
+          }
+        }
+
         const ogTitle = $('meta[property="og:title"]').attr("content") || $('meta[name="twitter:title"]').attr("content") || "";
         const ogDescription = $('meta[property="og:description"]').attr("content") || $('meta[name="description"]').attr("content") || "";
         const title = String(
@@ -2795,18 +3055,22 @@ Returnează un JSON strict cu următoarele chei:
         const uniqueImages = await preCleanCrawlImages(dedupedImages);
         console.log(`Found ${dedupedImages.length} unique images (${uniqueImages.length} pre-checked & cleaned) for ${url}`);
 
-        // Extract seller name explicitly if possible (Storia, OLX, DOM patterns)
+        // Extract seller name explicitly if possible (OLX DOM user-profile-user-name -> Storia/OLX structured -> fallback DOM patterns)
         let sellerName = String(
+          (isOlxPage ? olxDomOwner : "") ||
           nextAdData?.owner?.name ||
           nextAdData?.contactDetails?.name ||
           olxAd?.contact?.name ||
           olxAd?.user?.name ||
+          olxDomOwner ||
           olxAd?.user?.company_name ||
           ""
         ).trim();
 
         if (!sellerName) {
           const sellerSelectors = [
+            'h4[data-testid="user-profile-user-name"]',
+            '[data-testid="user-profile-user-name"]',
             '[data-testid="user-profile-link"] h4',
             '[data-testid="user-info"] h4',
             'div[class*="User-profile"] h4',
@@ -3223,7 +3487,16 @@ Returnează un JSON strict cu următoarele chei:
           }
         }
 
-        // 5b. OLX params
+        // 5b. OLX DOM parameters container (div[data-testid="ad-parameters-container"])
+        if (olxDomParams.hasContainer) {
+          if (!suprafataUtila && olxDomParams.suprafataUtila) suprafataUtila = olxDomParams.suprafataUtila;
+          if (!anConstructie && olxDomParams.anConstructie) anConstructie = olxDomParams.anConstructie;
+          if (!etaj && olxDomParams.etaj) etaj = olxDomParams.etaj;
+          if (olxDomParams.compartimentare) compartimentare = olxDomParams.compartimentare;
+          if (!camere && olxDomParams.camere) camere = olxDomParams.camere;
+        }
+
+        // 5c. OLX structured params fallback
         if (olxParams.length > 0) {
           const pm = getOlxParam("m");
           const pr = getOlxParam("rooms");
@@ -3663,6 +3936,13 @@ Returnează un JSON strict cu următoarele chei:
         }
         const finalOwner = (sellerName && sellerName !== "Nespecificat") ? sellerName : (listingDetails.owner_name || "Nespecificat");
 
+        const publishedAtIso =
+          olxDomPostedAt.isoDate ||
+          olxAd?.createdTime ||
+          olxAd?.lastRefreshTime ||
+          null;
+        const publishedAtLabel = olxDomPostedAt.cleanLabel || "";
+
         res.json({
           title: originalTitle,
           originalTitle: originalTitle,
@@ -3674,6 +3954,9 @@ Returnează un JSON strict cu următoarele chei:
           transactionType: transactionType,
           categoria: categoria,
           description: originalDescription,
+          publishedAt: publishedAtIso,
+          publishedAtLabel: publishedAtLabel,
+          sellerType: olxDomParams.sellerType || (isOlxPage ? "Persoana fizica" : ""),
           specs: {
             utila: suprafataUtila || numUtila,
             construita: suprafataConstruita,
@@ -3869,8 +4152,10 @@ Returnează un JSON strict cu următoarele chei:
           transactionType = "Vânzare";
         } else if (catId === 909 || catId === 913 || catId === 1155 || catId === 1157 || catId === 1159 || catId === 1161 || catId === 2665 || alegeNorm.includes("inchir")) {
           transactionType = "Închiriere";
-        } else if (filters.transactionType) {
-          transactionType = filters.transactionType;
+        } else if (filters.transactionType === "Vânzare" || filters.transactionType === "Cumpărare") {
+          transactionType = "Vânzare";
+        } else if (filters.transactionType === "Închiriere") {
+          transactionType = "Închiriere";
         } else if (urlLower.includes("vanzare") || /\bv[aâ]nd\b|v[aâ]nzare/i.test(rawTitle)) {
           transactionType = "Vânzare";
         } else if (priceNum >= 20000) {
@@ -4177,6 +4462,8 @@ Returnează un JSON strict cu următoarele chei:
 
         for (const ad of allRawAds) {
           if (!ad || !ad.url) continue;
+          // Pre-filter out ads flagged as business/agency in OLX search listing state
+          if (ad.business === true || ad.user?.is_business === true) continue;
           const normUrl = normalizeAdUrl(ad.url);
           const slugId = extractOlxSlugId(ad.url);
           const numericKey = ad.id ? String(ad.id) : "";
@@ -4219,13 +4506,201 @@ Returnează un JSON strict cu următoarele chei:
         .map(mapOlxAdToLeadCandidate)
         .filter((candidate) => matchesOlxLeadFilter(candidate, filters));
 
-      const selectedBatch = matchedCandidates.slice(0, limit);
+      // Take a slightly wider candidate pool so if some listings turn out to be agencies
+      // upon inspecting div[data-testid="ad-parameters-container"] ("Persoana fizica"),
+      // we can still satisfy up to `limit` verified private-owner listings.
+      const candidatePool = matchedCandidates.slice(0, Math.min(matchedCandidates.length, Math.max(limit * 2, limit + 4)));
 
-      // Enrich phone numbers:
-      // 1. Try OLX's JSON phone endpoints quickly.
-      // 2. When OLX masks the phone behind <button data-cy="ad-contact-phone" data-testid="ad-contact-phone">...<span>Suna vanzatorul</span>...</button>,
-      //    open the listing page via Puppeteer, click that button to replace "Suna vanzatorul" with the real phone number, and copy the new text.
-      const enrichPhone = async (item: ReturnType<typeof mapOlxAdToLeadCandidate>) => {
+      // Enrich each candidate from its actual OLX.ro ad detail HTML page using the exact DOM rules:
+      // 1. Title: div[data-cy="offer_title"] h4 / div[data-testid="offer_title"] h4
+      // 2. Price: div[data-testid="ad-price-container"] h3
+      // 3. Description: div[data-cy="ad_description"] div.text-background-action-primary.whitespace-pre-line
+      // 4. Owner name: h4[data-testid="user-profile-user-name"]
+      // 5. Published date: span[data-cy="ad-posted-at"] / span[data-testid="ad-posted-at"]
+      // 6. Private seller check: div[data-testid="ad-parameters-container"] MUST contain "Persoana fizica" (otherwise drop agency ad)
+      // 7. Phone enrichment (JSON endpoints + click-to-reveal fallback)
+      const enrichCandidateWithDomAndPhone = async (
+        item: ReturnType<typeof mapOlxAdToLeadCandidate>
+      ): Promise<ReturnType<typeof mapOlxAdToLeadCandidate> | null> => {
+        if (item.url && item.url.toLowerCase().includes("olx.ro")) {
+          try {
+            await validateSafeExternalUrl(item.url);
+            const detailRes = await safeFetchExternal(item.url, {
+              headers: crawlHeaders,
+              timeout: 7500,
+              responseType: "text",
+            });
+            if (detailRes.status === 200 && typeof detailRes.data === "string" && !isBotChallengePage(detailRes.data)) {
+              const $detail = cheerio.load(detailRes.data);
+              const detailState = parseOlxPrerenderedState($detail);
+              const detailOlxAd: any = detailState?.ad?.ad || detailState?.ad || null;
+
+              const domParams = extractOlxDomParameters($detail);
+              const isConfirmedAgency = domParams.hasContainer
+                ? !domParams.isPrivateSeller
+                : detailOlxAd?.business === true || detailOlxAd?.user?.is_business === true;
+              if (isConfirmedAgency) {
+                logger.info(`Skipping OLX agency ad (missing "Persoana fizica"): ${item.url}`, { module: "crawler" });
+                return null;
+              }
+
+              const domTitle = extractOlxDomTitle($detail);
+              if (domTitle) {
+                item.title = domTitle;
+                if (item.extractedData) {
+                  item.extractedData.originalTitle = domTitle;
+                  if (item.extractedData.crmData?.descriere) {
+                    item.extractedData.crmData.descriere.titlu = domTitle;
+                  }
+                  if (item.extractedData.olxMeta) {
+                    item.extractedData.olxMeta.originalTitle = domTitle;
+                  }
+                  if (item.extractedData.automationSource) {
+                    item.extractedData.automationSource.rawTitle = domTitle;
+                  }
+                }
+              }
+
+              const domDesc = extractOlxDomDescription($detail);
+              if (domDesc) {
+                item.notes = domDesc;
+                if (item.extractedData) {
+                  item.extractedData.originalDescription = domDesc;
+                  item.extractedData.markdownMarketing = domDesc;
+                  if (item.extractedData.crmData?.descriere) {
+                    item.extractedData.crmData.descriere.continut = domDesc;
+                  }
+                  if (item.extractedData.automationSource) {
+                    item.extractedData.automationSource.rawText = `${item.title}\n${domDesc}`;
+                  }
+                }
+                if (!item.ownerPhone || item.ownerPhone === "Nespecificat") {
+                  const descPhone = extractPhoneFromVisibleText(domDesc);
+                  if (descPhone) {
+                    item.ownerPhone = descPhone;
+                    if (item.extractedData?.crmData?.detaliiGenerale) {
+                      item.extractedData.crmData.detaliiGenerale.contacteAditionale = descPhone;
+                    }
+                  }
+                }
+              }
+
+              const domPrice = extractOlxDomPrice($detail);
+              if (domPrice) {
+                const parsed = parseDomPriceString(domPrice);
+                if (parsed.value > 0) {
+                  const eurVal = parsed.currency === "RON" ? Math.round(parsed.value / 4.97) : parsed.value;
+                  const formatted = `${eurVal.toLocaleString("ro-RO")} €${item.transactionType === "Închiriere" ? " / lună" : ""}`;
+                  item.price = formatted;
+                  if (item.extractedData?.crmData?.pret?.detalii) {
+                    item.extractedData.crmData.pret.detalii.pret = formatted;
+                  }
+                  if (item.extractedData?.olxMeta) {
+                    item.extractedData.olxMeta.priceEur = eurVal;
+                  }
+                }
+              }
+
+              const domOwner = extractOlxDomOwner($detail);
+              if (domOwner) {
+                item.ownerName = domOwner;
+                if (item.extractedData?.crmData?.detaliiGenerale) {
+                  item.extractedData.crmData.detaliiGenerale.proprietar = domOwner;
+                }
+              }
+
+              const domPostedAt = extractOlxDomPostedAt($detail);
+              if (domPostedAt.rawText || domPostedAt.isoDate) {
+                if (domPostedAt.isoDate) {
+                  item.createdTime = domPostedAt.isoDate;
+                }
+                if (item.extractedData?.olxMeta) {
+                  (item.extractedData.olxMeta as any).publishedAt = domPostedAt.isoDate || item.extractedData.olxMeta.createdTime || null;
+                  (item.extractedData.olxMeta as any).publishedAtLabel = domPostedAt.cleanLabel || "";
+                  if (domPostedAt.isoDate) {
+                    item.extractedData.olxMeta.createdTime = domPostedAt.isoDate;
+                  }
+                }
+              }
+
+              if (domParams.hasContainer) {
+                if (item.extractedData?.olxMeta) {
+                  (item.extractedData.olxMeta as any).sellerType = domParams.sellerType || "Persoana fizica";
+                }
+                if (domParams.suprafataUtila) {
+                  const numU = parseFloat(domParams.suprafataUtila) || 0;
+                  const mult = item.categoria === "Apartament" || item.categoria === "Casa/Vila" ? 1.2 : 1.1;
+                  const constr = numU > 0 ? String(Math.round(numU * mult)) : "";
+                  if (item.extractedData?.crmData?.caracteristici?.suprafete) {
+                    item.extractedData.crmData.caracteristici.suprafete.utila = domParams.suprafataUtila;
+                    item.extractedData.crmData.caracteristici.suprafete.utilaTotala = domParams.suprafataUtila;
+                    if (constr) item.extractedData.crmData.caracteristici.suprafete.construita = constr;
+                  }
+                  if (item.extractedData?.automationSource) {
+                    item.extractedData.automationSource.suprafataUtila = domParams.suprafataUtila;
+                    if (constr) item.extractedData.automationSource.suprafataConstruita = constr;
+                  }
+                  if (item.extractedData?.olxMeta && numU > 0) {
+                    item.extractedData.olxMeta.surface = numU;
+                  }
+                }
+                if (domParams.anConstructie) {
+                  if (item.extractedData?.crmData?.caracteristici?.alteDetalii) {
+                    item.extractedData.crmData.caracteristici.alteDetalii.anConstructie = domParams.anConstructie;
+                  }
+                  if (item.extractedData?.olxMeta) {
+                    item.extractedData.olxMeta.constructie = domParams.anConstructie;
+                  }
+                }
+                if (domParams.etaj) {
+                  if (item.extractedData?.crmData?.caracteristici?.detalii) {
+                    item.extractedData.crmData.caracteristici.detalii.etaj = domParams.etaj;
+                  }
+                  if (item.extractedData?.automationSource) {
+                    item.extractedData.automationSource.etaj = domParams.etaj;
+                  }
+                  if (item.extractedData?.olxMeta) {
+                    item.extractedData.olxMeta.floor = domParams.etaj;
+                  }
+                }
+                if (domParams.compartimentare) {
+                  if (item.extractedData?.crmData?.caracteristici?.detalii) {
+                    item.extractedData.crmData.caracteristici.detalii.compartimentare = domParams.compartimentare;
+                  }
+                  if (item.extractedData?.automationSource) {
+                    item.extractedData.automationSource.compartimentare = domParams.compartimentare;
+                  }
+                  if (item.extractedData?.olxMeta) {
+                    item.extractedData.olxMeta.compartimentare = domParams.compartimentare;
+                  }
+                }
+                if (domParams.camere) {
+                  if (item.extractedData?.crmData?.caracteristici?.detalii) {
+                    item.extractedData.crmData.caracteristici.detalii.camere = domParams.camere;
+                  }
+                  if (item.extractedData?.automationSource) {
+                    item.extractedData.automationSource.camere = domParams.camere;
+                  }
+                  if (item.extractedData?.olxMeta) {
+                    item.extractedData.olxMeta.rooms = domParams.camere;
+                  }
+                }
+              }
+
+              // Re-check age window if detail DOM provided a more exact published date
+              if (domPostedAt.isoDate && (cutoffOldestMs || cutoffNewestMs)) {
+                const detailPostedMs = Date.parse(domPostedAt.isoDate) || 0;
+                if (detailPostedMs) {
+                  if (cutoffOldestMs && detailPostedMs < cutoffOldestMs) return null;
+                  if (cutoffNewestMs && detailPostedMs > cutoffNewestMs) return null;
+                }
+              }
+            }
+          } catch (detailErr: any) {
+            logger.warn(`OLX detail DOM fetch skipped for ${item.url}: ${detailErr?.message}`, { module: "crawler" });
+          }
+        }
+
         if (item.ownerPhone && item.ownerPhone !== "Nespecificat" && extractValidRoPhone(item.ownerPhone)) {
           return item;
         }
@@ -4280,13 +4755,19 @@ Returnează un JSON strict cu următoarele chei:
       };
 
       const enrichedItems: any[] = [];
-      for (let i = 0; i < selectedBatch.length; i += 3) {
-        const chunk = selectedBatch.slice(i, i + 3);
-        const settled = await Promise.allSettled(chunk.map(enrichPhone));
+      for (let i = 0; i < candidatePool.length && enrichedItems.length < limit; i += 3) {
+        const chunk = candidatePool.slice(i, i + 3);
+        const settled = await Promise.allSettled(chunk.map(enrichCandidateWithDomAndPhone));
         settled.forEach((r, idx) => {
+          if (enrichedItems.length >= limit) return;
           const item = r.status === "fulfilled" ? r.value : chunk[idx];
+          if (!item) return; // Filtered out as agency or outside age window
           const { olxAdId, createdTime, ...cleanItem } = item;
-          enrichedItems.push(cleanItem);
+          enrichedItems.push({
+            ...cleanItem,
+            publishedAt: (item.extractedData?.olxMeta as any)?.publishedAt || createdTime || null,
+            publishedAtLabel: (item.extractedData?.olxMeta as any)?.publishedAtLabel || "",
+          });
         });
       }
 

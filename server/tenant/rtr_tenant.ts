@@ -93,6 +93,30 @@ tenantRouter.get("/me", requireTenantContext, (req: Request, res: Response) => {
 });
 
 /**
+ * Protected: Lists active members of the authenticated user's agency (safe directory fields only).
+ */
+tenantRouter.get("/members", requireTenantContext, (req: Request, res: Response) => {
+  try {
+    const tenantId = req.tenantContext!.tenantId;
+    const members = TenantMembershipService.listTenantMembers(tenantId)
+      .filter((m) => m.status === "active")
+      .map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        name: m.name,
+        email: m.email,
+        role: m.role,
+        status: m.status,
+      }));
+    res.json(createSuccessResponse(members));
+  } catch (err: any) {
+    res
+      .status(500)
+      .json(createErrorResponse("INTERNAL_ERROR", err?.message || "Eroare la citirea echipei agenției."));
+  }
+});
+
+/**
  * Protected: Lists leads strictly scoped to the authenticated tenant.
  * Enforces: Tenant subscription must include the 'mod_leads' module.
  */

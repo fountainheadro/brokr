@@ -206,6 +206,16 @@ export async function importPropertyFromCrawl({
             crawlData.presentationSections?.introducere?.summary ||
             `${crawledCat || "Proprietate"} ${crmData.caracteristici?.detalii?.camere || "2"} camere în ${zone || "București"}, ${price || "N/A"}`,
           originalDescription: originalDescription,
+          ...(crawlData.publishedAt || crawlData.publishedAtLabel || crawlData.sellerType
+            ? {
+                olxMeta: {
+                  originalTitle: finalTitle,
+                  publishedAt: crawlData.publishedAt || null,
+                  publishedAtLabel: crawlData.publishedAtLabel || "",
+                  sellerType: crawlData.sellerType || "",
+                },
+              }
+            : {}),
         }
       : null,
   });
