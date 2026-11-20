@@ -52,7 +52,7 @@ import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { auth } from "../lib/firebase";
-import { ProtectedPropertyImage } from "./ProtectedPropertyImage";
+import { ProtectedPublicImage } from "./ProtectedPublicImage";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -790,12 +790,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             addClean(url);
           });
         }
-      });
-    }
-    if (images.length <= 1 && Array.isArray(lead?.images) && lead.images.length > 0) {
-      lead.images.forEach((item: any) => {
-        const url = typeof item === "string" ? item : item?.original;
-        addClean(url);
       });
     }
     return images;
@@ -1727,12 +1721,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
                   className="col-span-2 relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                 >
-                  <ProtectedPropertyImage
-                    src={getThumbnailImageUrl(allImages[0], 1000)}
-                    alt={`${displayTitle} - foto principală`}
-                    fit="cover"
-                    className="group-hover:scale-102 transition-transform duration-300"
-                  />
+                  {isPublicShared ? (
+                    <ProtectedPublicImage
+                      src={getThumbnailImageUrl(allImages[0], 1000)}
+                      alt={`${displayTitle} - foto principală`}
+                      fit="cover"
+                      className="group-hover:scale-102 transition-transform duration-300"
+                    />
+                  ) : (
+                    <img 
+                      src={getThumbnailImageUrl(allImages[0], 1000)} 
+                      alt={`${displayTitle} - foto principală`}
+                      decoding="async"
+                      className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                      referrerPolicy="no-referrer"
+                    />
+                  )}
                 </div>
 
                 {/* Col 2 (25% width) - 2 equal 50% height stacked photos aligned with Col 1 bottom */}
@@ -1741,23 +1745,43 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     onClick={() => { setSelectedPhotoIndex(1); setIsGalleryOpen(true); }}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
-                    <ProtectedPropertyImage
-                      src={getThumbnailImageUrl(allImages[1] || allImages[0], 560)}
-                      alt={`${displayTitle} - foto 2`}
-                      fit="cover"
-                      className="group-hover:scale-102 transition-transform duration-300"
-                    />
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[1] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 2`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[1] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 2`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                   </div>
                   <div 
                     onClick={() => { setSelectedPhotoIndex(2); setIsGalleryOpen(true); }}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
-                    <ProtectedPropertyImage
-                      src={getThumbnailImageUrl(allImages[2] || allImages[0], 560)}
-                      alt={`${displayTitle} - foto 3`}
-                      fit="cover"
-                      className="group-hover:scale-102 transition-transform duration-300"
-                    />
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[2] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 3`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[2] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 3`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                   </div>
                 </div>
 
@@ -1767,23 +1791,43 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     onClick={() => { setSelectedPhotoIndex(3); setIsGalleryOpen(true); }}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
-                    <ProtectedPropertyImage
-                      src={getThumbnailImageUrl(allImages[3] || allImages[0], 560)}
-                      alt={`${displayTitle} - foto 4`}
-                      fit="cover"
-                      className="group-hover:scale-102 transition-transform duration-300"
-                    />
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[3] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 4`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[3] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 4`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                   </div>
                   <div 
                     onClick={() => { setSelectedPhotoIndex(4); setIsGalleryOpen(true); }}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
-                    <ProtectedPropertyImage
-                      src={getThumbnailImageUrl(allImages[4] || allImages[0], 560)}
-                      alt={`${displayTitle} - foto 5`}
-                      fit="cover"
-                      className="group-hover:scale-102 transition-transform duration-300"
-                    />
+                    {isPublicShared ? (
+                      <ProtectedPublicImage
+                        src={getThumbnailImageUrl(allImages[4] || allImages[0], 560)}
+                        alt={`${displayTitle} - foto 5`}
+                        fit="cover"
+                        className="group-hover:scale-102 transition-transform duration-300"
+                      />
+                    ) : (
+                      <img 
+                        src={getThumbnailImageUrl(allImages[4] || allImages[0], 560)} 
+                        alt={`${displayTitle} - foto 5`}
+                        decoding="async"
+                        className="w-full h-full object-cover group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+                    )}
                     {/* Dark overlay showing total count & open lightbox link */}
                     <div className="absolute inset-0 bg-black/55 group-hover:bg-black/65 transition-colors flex flex-col items-center justify-center text-center p-2 cursor-pointer z-10">
                       <span className="text-white text-sm sm:text-base md:text-lg font-semibold underline underline-offset-4 decoration-2 font-sans tracking-wide">
@@ -2502,12 +2546,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 <div className="relative aspect-[4/3] bg-gray-100 rounded-lg group select-none overflow-hidden border border-gray-200">
                   {imagesList.length > 0 ? (
                     <>
-                      <ProtectedPropertyImage
-                        src={getThumbnailImageUrl(imagesList[carouselIndex] || imagesList[0], 720)}
+                      <img 
+                        src={getThumbnailImageUrl(imagesList[carouselIndex] || imagesList[0], 720)} 
                         alt={`${displayTitle} - foto ${carouselIndex + 1}`}
-                        fit="cover"
+                        decoding="async"
                         onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
-                        className="cursor-pointer group-hover:scale-102 transition-transform duration-300"
+                        className="w-full h-full object-cover cursor-pointer group-hover:scale-102 transition-transform duration-300" 
+                        referrerPolicy="no-referrer"
                       />
 
                       {/* Counter Badge & Actions */}
@@ -2662,10 +2707,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                             } ${isDragTarget ? "scale-105 ring-2 ring-[#051D35] border-[#051D35]" : ""}`}
                             title={`Foto ${actualIndex + 1} (Trage pentru rearanjare)`}
                           >
-                            <ProtectedPropertyImage
+                            <img
                               src={getThumbnailImageUrl(imgUrl, 180)}
                               alt={`Foto ${actualIndex + 1}`}
-                              fit="cover"
+                              loading="lazy"
+                              decoding="async"
+                              className="w-full h-full object-cover select-none"
+                              referrerPolicy="no-referrer"
                             />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
                             <span className="absolute bottom-1 left-1 px-1 py-0 rounded bg-black/60 text-white text-[9px] pointer-events-none tabular-nums">
@@ -2802,14 +2850,24 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           </div>
 
           <div className="flex-1 relative flex items-center justify-center p-4">
-            <div className="w-full h-[82vh] max-w-[90vw]">
-              <ProtectedPropertyImage
-                src={getThumbnailImageUrl(imagesList[selectedPhotoIndex] || imagesList[0], 1600)}
+            {isPublicShared ? (
+              <div className="w-full h-[82vh] max-w-[90vw]">
+                <ProtectedPublicImage
+                  src={getThumbnailImageUrl(imagesList[selectedPhotoIndex] || imagesList[0], 1600)}
+                  alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
+                  fit="contain"
+                  className="rounded shadow-2xl"
+                />
+              </div>
+            ) : (
+              <img 
+                src={getThumbnailImageUrl(imagesList[selectedPhotoIndex] || imagesList[0], 1600)} 
                 alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
-                fit="contain"
-                className="rounded shadow-2xl"
+                decoding="async"
+                className="max-h-[82vh] max-w-[90vw] object-contain rounded shadow-2xl transition-all"
+                referrerPolicy="no-referrer"
               />
-            </div>
+            )}
 
             {imagesList.length > 1 && (
               <button
@@ -2846,11 +2904,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     : "border-transparent opacity-50 hover:opacity-100"
                 }`}
               >
-                <ProtectedPropertyImage
-                  src={getThumbnailImageUrl(img, 140)}
-                  alt={`thumb-${idx}`}
-                  fit="cover"
-                />
+                {isPublicShared ? (
+                  <ProtectedPublicImage
+                    src={getThumbnailImageUrl(img, 140)}
+                    alt={`thumb-${idx}`}
+                    fit="cover"
+                  />
+                ) : (
+                  <img src={getThumbnailImageUrl(img, 140)} alt={`thumb-${idx}`} loading="lazy" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                )}
               </button>
             ))}
           </div>

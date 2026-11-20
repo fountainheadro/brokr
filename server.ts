@@ -432,7 +432,7 @@ async function fetchAndCleanExternalImage(
           maxContentLength: DEFAULT_MAX_EXTERNAL_BYTES,
           headers: {
             "User-Agent": userAgents[i % userAgents.length],
-            "Accept": "image/jpeg,image/png,image/webp,image/apng,image/*,*/*;q=0.8",
+            "Accept": "image/webp,image/apng,image/jpeg,image/png,image/*,*/*;q=0.8",
             "Referer": referer,
             "Accept-Language": "ro-RO,ro;q=0.9,en-US;q=0.8,en;q=0.7",
             "Cache-Control": "no-cache",
@@ -459,7 +459,6 @@ async function fetchAndCleanExternalImage(
         if (response.status >= 400) {
           const err: any = new Error(`Upstream HTTP Error ${response.status}`);
           err.isPermanentClientError = true;
-          err.upstreamStatus = response.status;
           throw err;
         }
 
@@ -1527,22 +1526,7 @@ Returnează un JSON strict cu următoarele chei:
       const viewerStamp = `${ipHash}-${nowTime}`;
       const propCode = String(property.propertyId || id).slice(0, 10).toUpperCase();
 
-      const tokenByNormalizedUrl = new Map<string, string>();
       const tokenizeImageUrl = (rawUrl: string): string => {
-        let canonical = rawUrl.trim();
-        if (canonical.includes("/api/proxy-image")) {
-          try {
-            const parsed = new URL(canonical, "https://placeholder.local");
-            const inner = parsed.searchParams.get("url");
-            if (inner) canonical = inner.trim();
-          } catch {
-            // keep original string
-          }
-        }
-        const dedupeKey = /^https?:\/\//i.test(canonical) ? normalizeCleanImageUrl(canonical) : canonical;
-        const existing = tokenByNormalizedUrl.get(dedupeKey);
-        if (existing) return existing;
-
         const token = createPublicImageToken({
           sourceUrl: rawUrl,
           propertyId: propCode,
@@ -1550,9 +1534,7 @@ Returnează un JSON strict cu următoarele chei:
           viewerStamp,
           ttlMs: 15 * 60 * 1000,
         });
-        const tokenized = `/api/public-image?token=${encodeURIComponent(token)}`;
-        tokenByNormalizedUrl.set(dedupeKey, tokenized);
-        return tokenized;
+        return `/api/public-image?token=${encodeURIComponent(token)}`;
       };
 
       const sanitized = sanitizePublicProperty(property, { tokenizeImageUrl });
@@ -1577,29 +1559,14 @@ Returnează un JSON strict cu următoarele chei:
   // Protected image endpoint strictly for public share canvas rendering (blocks direct tab opens, hotlinks, & reverse image search)
   app.get("/api/public-image", proxyImageLimiter, async (req, res) => {
     const token = typeof req.query.token === "string" ? req.query.token : "";
+    const secFetchSite = String(req.headers["sec-fetch-site"] || "").toLowerCase();
     const secFetchDest = String(req.headers["sec-fetch-dest"] || "").toLowerCase();
     const customPublicHeader = req.headers["x-brokr-public-view"];
-    const reqOrigin = String(req.headers.origin || "").trim();
-    const currentHost = String(req.headers["x-forwarded-host"] || req.headers.host || "")
-      .split(",")[0]
-      .trim()
-      .toLowerCase();
 
-    let isCrossOriginHeader = false;
-    if (reqOrigin && currentHost) {
-      try {
-        const originHost = new URL(reqOrigin).host.toLowerCase();
-        isCrossOriginHeader = originHost !== currentHost;
-      } catch {
-        isCrossOriginHeader = true;
-      }
-    }
-
-    // Block cross-origin callers and direct browser address-bar / <img> opens
-    // (Allow same-origin SPA fetch() even when previewed inside an embedded iframe.)
+    // Block cross-site hotlinks and direct browser address-bar / <img> opens
     if (
       customPublicHeader !== "1" ||
-      isCrossOriginHeader ||
+      secFetchSite === "cross-site" ||
       secFetchDest === "document"
     ) {
       return res.status(403).json({ error: "Acces direct interzis pentru imaginile protejate." });
@@ -1689,12 +1656,6 @@ Returnează un JSON strict cu următoarele chei:
       return res.send(protectedImg.buffer);
     } catch (err: any) {
       console.warn("[Server] /api/public-image error:", err?.message || err);
-      if (err?.upstreamStatus === 404 || err?.upstreamStatus === 410) {
-        return res.status(404).json({ error: "Source image is no longer available" });
-      }
-      if (err?.isPermanentClientError) {
-        return res.status(400).json({ error: err?.message || "Invalid source image" });
-      }
       return res.status(502).json({ error: "Failed to serve protected public image" });
     }
   });
