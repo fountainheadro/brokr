@@ -264,11 +264,14 @@ async function fetchImageBlobWithRetry(
 ): Promise<Blob> {
   let lastError: unknown = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const timeoutId = controller ? window.setTimeout(() => controller.abort(), 15000) : null;
     try {
       const response = await fetch(src, {
         credentials: "same-origin",
         headers,
         cache: "no-store",
+        signal: controller?.signal,
       });
       if (response.ok) {
         const blob = await response.blob();
@@ -276,16 +279,23 @@ async function fetchImageBlobWithRetry(
         lastError = new Error("Empty image response");
       } else {
         lastError = new Error(`HTTP ${response.status}`);
-        // Do not retry hard 400/403/404 responses
-        if (response.status === 400 || response.status === 403 || response.status === 404) {
+        // Do not retry hard 400/403/404/410 responses
+        if (
+          response.status === 400 ||
+          response.status === 403 ||
+          response.status === 404 ||
+          response.status === 410
+        ) {
           throw lastError;
         }
       }
     } catch (err) {
       lastError = err;
-      if (err instanceof Error && /^HTTP (400|403|404)$/.test(err.message)) {
+      if (err instanceof Error && /^HTTP (400|403|404|410)$/.test(err.message)) {
         throw err;
       }
+    } finally {
+      if (timeoutId !== null) window.clearTimeout(timeoutId);
     }
     if (attempt < maxAttempts) {
       await new Promise((r) => window.setTimeout(r, attempt === 1 ? 350 : 900));
