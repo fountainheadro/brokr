@@ -168,7 +168,7 @@ class SharedPovAnimationTicker {
 const sharedPovTicker = new SharedPovAnimationTicker();
 
 interface DecodedImageSource {
-  source: ImageBitmap | HTMLImageElement;
+  source: ImageBitmap | HTMLImageElement | HTMLCanvasElement;
   width: number;
   height: number;
 }
@@ -179,10 +179,13 @@ const inFlightImageLoads = new Map<string, Promise<DecodedImageSource>>();
 function loadHtmlImage(src: string, useCors: boolean): Promise<DecodedImageSource> {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    if (useCors) {
+    const isBlobOrData = src.startsWith("blob:") || src.startsWith("data:");
+    if (useCors && !isBlobOrData) {
       img.crossOrigin = "anonymous";
     }
-    img.referrerPolicy = "no-referrer";
+    if (!isBlobOrData) {
+      img.referrerPolicy = "no-referrer";
+    }
     img.decoding = "async";
     img.onload = () => {
       const width = img.naturalWidth || img.width;
@@ -198,6 +201,99 @@ function loadHtmlImage(src: string, useCors: boolean): Promise<DecodedImageSourc
   });
 }
 
+function snapshotImageToCanvas(img: HTMLImageElement, width: number, height: number): HTMLCanvasElement {
+  const c = document.createElement("canvas");
+  c.width = width;
+  c.height = height;
+  const ctx = c.getContext("2d");
+  if (ctx) {
+    ctx.drawImage(img, 0, 0, width, height);
+  }
+  return c;
+}
+
+function readBlobAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") resolve(reader.result);
+      else reject(new Error("FileReader returned non-string"));
+    };
+    reader.onerror = () => reject(new Error("FileReader failed"));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function decodeBlobToCanvasSource(blob: Blob): Promise<DecodedImageSource> {
+  if (typeof createImageBitmap === "function") {
+    try {
+      const bmp = await createImageBitmap(blob);
+      if (bmp.width > 0 && bmp.height > 0) {
+        return { source: bmp, width: bmp.width, height: bmp.height };
+      }
+    } catch {
+      // Fall back to HTMLImageElement + offscreen canvas snapshot below
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const loaded = await loadHtmlImage(objectUrl, false);
+    if (loaded.source instanceof HTMLImageElement) {
+      const snap = snapshotImageToCanvas(loaded.source, loaded.width, loaded.height);
+      return { source: snap, width: loaded.width, height: loaded.height };
+    }
+    return loaded;
+  } catch {
+    const dataUrl = await readBlobAsDataUrl(blob);
+    const loaded = await loadHtmlImage(dataUrl, false);
+    if (loaded.source instanceof HTMLImageElement) {
+      const snap = snapshotImageToCanvas(loaded.source, loaded.width, loaded.height);
+      return { source: snap, width: loaded.width, height: loaded.height };
+    }
+    return loaded;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function fetchImageBlobWithRetry(
+  src: string,
+  headers?: Record<string, string>,
+  maxAttempts = 3
+): Promise<Blob> {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch(src, {
+        credentials: "same-origin",
+        headers,
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const blob = await response.blob();
+        if (blob.size > 0) return blob;
+        lastError = new Error("Empty image response");
+      } else {
+        lastError = new Error(`HTTP ${response.status}`);
+        // Do not retry hard 400/403/404 responses
+        if (response.status === 400 || response.status === 403 || response.status === 404) {
+          throw lastError;
+        }
+      }
+    } catch (err) {
+      lastError = err;
+      if (err instanceof Error && /^HTTP (400|403|404)$/.test(err.message)) {
+        throw err;
+      }
+    }
+    if (attempt < maxAttempts) {
+      await new Promise((r) => window.setTimeout(r, attempt === 1 ? 350 : 900));
+    }
+  }
+  throw lastError || new Error("Image fetch failed");
+}
+
 async function loadImageForCanvas(src: string): Promise<DecodedImageSource> {
   const cached = decodedImageCache.get(src);
   if (cached) return cached;
@@ -208,51 +304,38 @@ async function loadImageForCanvas(src: string): Promise<DecodedImageSource> {
   const loadPromise = (async (): Promise<DecodedImageSource> => {
     let entry: DecodedImageSource;
 
-    if (src.startsWith("/api/public-image")) {
+    if (src.includes("/api/public-image")) {
       // Existing tokenized public-share URLs require the same-origin view header
-      const response = await fetch(src, {
-        credentials: "same-origin",
-        headers: { "X-Brokr-Public-View": "1" },
-        cache: "no-store",
+      const blob = await fetchImageBlobWithRetry(src, {
+        "X-Brokr-Public-View": "1",
+        Accept: "image/webp,image/apng,image/*,*/*;q=0.8",
       });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const blob = await response.blob();
-      if (typeof createImageBitmap === "function") {
-        const bmp = await createImageBitmap(blob);
-        entry = { source: bmp, width: bmp.width, height: bmp.height };
-      } else {
-        const objectUrl = URL.createObjectURL(blob);
-        try {
-          entry = await loadHtmlImage(objectUrl, false);
-        } finally {
-          URL.revokeObjectURL(objectUrl);
-        }
-      }
+      entry = await decodeBlobToCanvasSource(blob);
     } else {
-      // Pure client-side image loading with automatic non-CORS fallback
+      // Pure client-side image loading with automatic non-CORS and same-origin blob fallbacks
       const isExternalHttp =
         (src.startsWith("http://") || src.startsWith("https://")) &&
         (typeof window === "undefined" || !src.startsWith(window.location.origin));
       try {
         entry = await loadHtmlImage(src, isExternalHttp);
       } catch {
-        entry = await loadHtmlImage(src, false);
+        try {
+          entry = await loadHtmlImage(src, false);
+        } catch (imgErr) {
+          if (src.startsWith("/")) {
+            const blob = await fetchImageBlobWithRetry(src, undefined, 2);
+            entry = await decodeBlobToCanvasSource(blob);
+          } else {
+            throw imgErr;
+          }
+        }
       }
     }
 
     if (decodedImageCache.size >= 80) {
       const oldestKey = decodedImageCache.keys().next().value;
       if (oldestKey) {
-        const oldestEntry = decodedImageCache.get(oldestKey);
-        if (
-          oldestEntry &&
-          "close" in oldestEntry.source &&
-          typeof oldestEntry.source.close === "function"
-        ) {
-          oldestEntry.source.close();
-        }
+        // Let GC release evicted entries safely without closing bitmaps still referenced by mounted views
         decodedImageCache.delete(oldestKey);
       }
     }
@@ -362,9 +445,13 @@ export function bakeTransparentPovFrames(
   const srcCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
   if (!srcCtx) return null;
 
-  srcCtx.imageSmoothingEnabled = true;
-  srcCtx.imageSmoothingQuality = "high";
-  srcCtx.drawImage(entry.source, offsetX, offsetY, drawW, drawH);
+  try {
+    srcCtx.imageSmoothingEnabled = true;
+    srcCtx.imageSmoothingQuality = "high";
+    srcCtx.drawImage(entry.source, offsetX, offsetY, drawW, drawH);
+  } catch {
+    return null;
+  }
 
   let srcImageData: ImageData;
   try {
@@ -551,8 +638,9 @@ export const ProtectedPropertyImage: React.FC<ProtectedPropertyImageProps> = ({
         setEntry(loaded);
         setLoading(false);
       })
-      .catch(() => {
+      .catch((err) => {
         if (!active) return;
+        console.warn("[ProtectedPropertyImage] Failed to load image:", err);
         setFailed(true);
         setLoading(false);
       });

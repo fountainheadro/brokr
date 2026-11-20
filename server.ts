@@ -1559,14 +1559,29 @@ Returnează un JSON strict cu următoarele chei:
   // Protected image endpoint strictly for public share canvas rendering (blocks direct tab opens, hotlinks, & reverse image search)
   app.get("/api/public-image", proxyImageLimiter, async (req, res) => {
     const token = typeof req.query.token === "string" ? req.query.token : "";
-    const secFetchSite = String(req.headers["sec-fetch-site"] || "").toLowerCase();
     const secFetchDest = String(req.headers["sec-fetch-dest"] || "").toLowerCase();
     const customPublicHeader = req.headers["x-brokr-public-view"];
+    const reqOrigin = String(req.headers.origin || "").trim();
+    const currentHost = String(req.headers["x-forwarded-host"] || req.headers.host || "")
+      .split(",")[0]
+      .trim()
+      .toLowerCase();
 
-    // Block cross-site hotlinks and direct browser address-bar / <img> opens
+    let isCrossOriginHeader = false;
+    if (reqOrigin && currentHost) {
+      try {
+        const originHost = new URL(reqOrigin).host.toLowerCase();
+        isCrossOriginHeader = originHost !== currentHost;
+      } catch {
+        isCrossOriginHeader = true;
+      }
+    }
+
+    // Block cross-origin callers and direct browser address-bar / <img> opens
+    // (Allow same-origin SPA fetch() even when previewed inside an embedded iframe.)
     if (
       customPublicHeader !== "1" ||
-      secFetchSite === "cross-site" ||
+      isCrossOriginHeader ||
       secFetchDest === "document"
     ) {
       return res.status(403).json({ error: "Acces direct interzis pentru imaginile protejate." });

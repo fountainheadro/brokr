@@ -792,6 +792,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         }
       });
     }
+    if (images.length <= 1 && Array.isArray(lead?.images) && lead.images.length > 0) {
+      lead.images.forEach((item: any) => {
+        const url = typeof item === "string" ? item : item?.original;
+        addClean(url);
+      });
+    }
     return images;
   }, [lead]);
 
