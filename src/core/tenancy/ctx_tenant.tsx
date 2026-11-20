@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
 import { useAuth } from "../auth/ctx_auth";
 import { TenantRecord, TenantMembershipRecord, TenantContext, UserRole, DEFAULT_DEV_TENANT } from "./typ_tenant-context";
+import { DEFAULT_PLATFORM_ROOT_DOMAIN, extractRootDomainFromHost } from "./svc_tenant-resolution";
+import { setShareDomainContext } from "../../utils/shareUtils";
 
 export interface ActivePreviewInfo {
   token: string;
@@ -22,6 +24,7 @@ export interface TenantContextState {
   isAccessDenied: boolean;
   accessDeniedReason: string | null;
   isPlatformAdminHost: boolean;
+  platformRootDomain: string;
   previewSession: ActivePreviewInfo | null;
   refreshTenant: () => Promise<void>;
   startPreview: (tenantId: string, simulatedRole?: UserRole) => Promise<ActivePreviewInfo>;
@@ -42,6 +45,12 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   const [isPlatformAdminHost, setIsPlatformAdminHost] = useState<boolean>(() =>
     typeof window !== "undefined" && window.location.hostname.toLowerCase().startsWith("admin.")
   );
+  const [platformRootDomain, setPlatformRootDomain] = useState<string>(() => {
+    if (typeof window !== "undefined" && window.location?.hostname) {
+      return extractRootDomainFromHost(window.location.hostname) || DEFAULT_PLATFORM_ROOT_DOMAIN;
+    }
+    return DEFAULT_PLATFORM_ROOT_DOMAIN;
+  });
   const [previewSession, setPreviewSession] = useState<ActivePreviewInfo | null>(null);
 
   const resolveTenant = useCallback(async () => {
@@ -78,6 +87,9 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
             };
 
             setPreviewSession(previewInfo);
+            if (typeof previewJson.data?.platformRootDomain === "string" && previewJson.data.platformRootDomain.trim()) {
+              setPlatformRootDomain(previewJson.data.platformRootDomain.trim().toLowerCase());
+            }
 
             const simTenant: TenantRecord = {
               id: s.tenantId,
@@ -137,6 +149,9 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       let resolvedPlatformAdmin = false;
       if (json.success && json.data) {
         const resolvedData = json.data;
+        if (typeof resolvedData.platformRootDomain === "string" && resolvedData.platformRootDomain.trim()) {
+          setPlatformRootDomain(resolvedData.platformRootDomain.trim().toLowerCase());
+        }
         if (resolvedData.type === "platform_admin") {
           resolvedPlatformAdmin = true;
           setIsPlatformAdminHost(true);
@@ -248,6 +263,9 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       };
 
       setPreviewSession(previewInfo);
+      if (typeof s?.platformRootDomain === "string" && s.platformRootDomain.trim()) {
+        setPlatformRootDomain(s.platformRootDomain.trim().toLowerCase());
+      }
       await resolveTenant();
       return previewInfo;
     },
@@ -329,6 +347,13 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isAuthLoading, resolveTenant]);
 
+  useEffect(() => {
+    setShareDomainContext({
+      rootDomain: platformRootDomain,
+      agencySubdomain: previewSession?.subdomain || tenant?.subdomain || null,
+    });
+  }, [platformRootDomain, tenant?.subdomain, previewSession?.subdomain]);
+
   const value = useMemo<TenantContextState>(
     () => ({
       tenant,
@@ -338,6 +363,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       isAccessDenied,
       accessDeniedReason,
       isPlatformAdminHost,
+      platformRootDomain,
       previewSession,
       refreshTenant: resolveTenant,
       startPreview,
@@ -353,6 +379,7 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       isAccessDenied,
       accessDeniedReason,
       isPlatformAdminHost,
+      platformRootDomain,
       previewSession,
       resolveTenant,
       startPreview,

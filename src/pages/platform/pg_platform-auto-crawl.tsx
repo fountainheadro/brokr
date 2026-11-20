@@ -33,6 +33,7 @@ import {
   countActiveOlxFilters,
   type OlxLeadFilters,
 } from "../../utils/olxFilterUtils";
+import { resolveLeadDisplayArea } from "../../utils/zoneResolutionUtils";
 import {
   platformAutoCrawlService,
   DEFAULT_PLATFORM_AUTO_CRAWL_CONFIG,
@@ -83,9 +84,10 @@ export const PgPlatformAutoCrawl: React.FC = () => {
     };
   }, [user?.uid]);
 
-  // Subscribe to global shared leads in real time
+  // Subscribe to global shared leads in real time & repair any legacy non-sequential IDs (e.g. L-XXXXX -> L1, L2...)
   useEffect(() => {
     if (!user) return;
+    void platformAutoCrawlService.normalizeLegacySharedLeadIds().catch(() => {});
     const unsub = platformAutoCrawlService.subscribeToSharedLeads((items) => {
       setSharedLeads(items);
     });
@@ -668,15 +670,15 @@ export const PgPlatformAutoCrawl: React.FC = () => {
 
                         <div className="flex items-center gap-3 flex-wrap mt-2 text-[11px] text-gray-500">
                           <span className="inline-flex items-center gap-1">
-                            <MapPin size={11} className="text-gray-400" />
-                            <span className="truncate max-w-[160px]">{lead.zone || "Nespecificată"}</span>
+                            <MapPin size={11} className="text-[#BE9662]" />
+                            <span className="truncate max-w-[160px]">{resolveLeadDisplayArea(lead)}</span>
                           </span>
                           <span className="inline-flex items-center gap-1">
-                            <User size={11} className="text-gray-400" />
+                            <User size={11} className="text-[#BE9662]" />
                             <span className="truncate max-w-[140px]">{lead.ownerName || "Proprietar"}</span>
                           </span>
                           <span className="inline-flex items-center gap-1 tabular-nums">
-                            <Phone size={11} className="text-gray-400" />
+                            <Phone size={11} className="text-[#BE9662]" />
                             <span>{lead.ownerPhone || "Nespecificat"}</span>
                           </span>
                         </div>

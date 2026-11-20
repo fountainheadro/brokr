@@ -174,6 +174,16 @@ Acest document conține reglementările oficiale și exhaustive pentru logica de
    - **Suprafață Utilă Totală**: Se calculează automat ca `Suprafață utilă + Suprafață balcoane + Suprafață terase` (dacă sunt prezente/menționate).
 4. **Cerințe Imagini**: Se vor extrage exclusiv fotografiile originale de înaltă rezoluție. Ignoră sau filtrează logo-urile, iconițele, thumbnail-urile mici sau imaginile pur textuale.
 5. **Deduplicare Vizuală**: Identifică imaginile duplicat (aceeași scenă vizualizată din același unghi) și păstrează exclusiv versiunea de rezoluție maximă.
+6. **Extragere Număr de Telefon OLX (Click-to-Reveal)**:
+   - Pe paginile de anunț OLX (`olx.ro`), numărul de telefon al vânzătorului este inițial **mascat** în următorul buton HTML:
+     ```html
+     <button data-cy="ad-contact-phone" data-testid="ad-contact-phone" class="css-1o4b4d" data-nx-name="Button" data-nx-legacy="true" type="button" data-button-variant="secondary" data-button-background="default"><span class="n-button-text-wrapper"><span>Suna vanzatorul</span></span></button>
+     ```
+   - Pentru a obține numărul real de telefon, scraper-ul/crawler-ul **TREBUIE**:
+     1. Să identifice butonul `button[data-cy="ad-contact-phone"]` / `button[data-testid="ad-contact-phone"]` (eliminând eventualul banner de cookie-uri dacă blochează interacțiunea).
+     2. Să facă **click** pe acest buton astfel încât textul inițial `"Suna vanzatorul"` să fie înlocuit cu numărul real de telefon.
+     3. Să aștepte înlocuirea textului din buton (sau din `.n-button-text-wrapper` / link-ul `tel:` generat / răspunsul XHR `/api/v1/offers/{id}/limited-phones/` ori `/phones/`) și să **copieze noul text apărut**.
+     4. Să nu salveze niciodată texte mascate/placeholder precum `"Suna vanzatorul"`, `"Sună vânzătorul"`, `"Arată numărul"` sau `"xxx"` drept număr de telefon.
 
 ---
 

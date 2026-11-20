@@ -304,9 +304,6 @@ export class CrmTenantStoreService {
       }
     );
 
-    if (key === "document") {
-      return `${prefix}${nextNum < 10 ? `0${nextNum}` : `${nextNum}`}`;
-    }
     return `${prefix}${nextNum}`;
   }
 
@@ -800,16 +797,44 @@ export class CrmTenantStoreService {
   }
 
   /**
-   * Resolves a property across registered tenants in tenant-scoped store ONLY for sanitized public viewing.
+   * Resolves a property/lead/cerere across registered tenants in tenant-scoped store ONLY for sanitized public viewing.
+   * Supports matching by document id OR sequential entity code (e.g. L123, P123, R123, C123),
+   * checking preferredTenantId first when a request arrives on an agency subdomain.
    */
   public static async findPublicPropertyAcrossTenants(
-    id: string
+    id: string,
+    preferredTenantId?: string | null
   ): Promise<Record<string, any> | null> {
-    const tenants = TenantResolutionService.getAllTenants();
-    for (const t of tenants) {
-      const found = await this.getById(t.id, "leads", id);
-      if (found) {
-        return found;
+    const cleanId = String(id || "").trim();
+    if (!cleanId) return null;
+
+    const candidateCodes = new Set<string>([cleanId.toUpperCase()]);
+    const cerereC = cleanId.match(/^C(\d+)$/i);
+    if (cerereC) candidateCodes.add(`R${cerereC[1]}`);
+    const cerereR = cleanId.match(/^R(\d+)$/i);
+    if (cerereR) candidateCodes.add(`C${cerereR[1]}`);
+
+    const allTenants = TenantResolutionService.getAllTenants();
+    const orderedTenants = preferredTenantId
+      ? [
+          ...allTenants.filter((t) => t.id === preferredTenantId),
+          ...allTenants.filter((t) => t.id !== preferredTenantId),
+        ]
+      : allTenants;
+
+    for (const t of orderedTenants) {
+      const direct = await this.getById(t.id, "leads", cleanId);
+      if (direct) {
+        return direct;
+      }
+
+      const items = await this.list(t.id, "leads");
+      const byCode = items.find((item) => {
+        const propCode = String(item.propertyId || "").trim().toUpperCase();
+        return propCode && candidateCodes.has(propCode);
+      });
+      if (byCode) {
+        return byCode;
       }
     }
     return null;

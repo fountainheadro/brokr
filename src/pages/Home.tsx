@@ -483,7 +483,7 @@ export const Home: React.FC = () => {
   const [isExtractionRulesOpen, setIsExtractionRulesOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const { user, isLoading: authLoading, loginWithGoogle, logout } = useAuth();
-  const { isAccessDenied, accessDeniedReason, isLoading: isTenantLoading, startPreview } = useTenantContext();
+  const { tenant, platformRootDomain, isAccessDenied, accessDeniedReason, isLoading: isTenantLoading, startPreview } = useTenantContext();
   const [loginError, setLoginError] = useState<string | null>(null);
   const [copiedDomain, setCopiedDomain] = useState<string | null>(null);
 
@@ -521,11 +521,15 @@ export const Home: React.FC = () => {
 
   const [copiedShareId, setCopiedShareId] = useState<string | null>(null);
 
-  const handleCopyShareLink = async (id: string) => {
-    const url = getPublicShareUrl(id);
+  const handleCopyShareLink = async (leadOrId: Lead | string) => {
+    const targetId = typeof leadOrId === "string" ? leadOrId : (leadOrId.id || leadOrId.propertyId || "");
+    const url = getPublicShareUrl(leadOrId, {
+      agencySubdomain: tenant?.subdomain,
+      rootDomain: platformRootDomain,
+    });
     try {
       await navigator.clipboard.writeText(url);
-      setCopiedShareId(id);
+      setCopiedShareId(targetId);
       setTimeout(() => setCopiedShareId(null), 3000);
       toast.success("Linkul public fără autentificare a fost copiat!");
     } catch (err) {
@@ -536,7 +540,7 @@ export const Home: React.FC = () => {
         tempInput.select();
         document.execCommand("copy");
         document.body.removeChild(tempInput);
-        setCopiedShareId(id);
+        setCopiedShareId(targetId);
         setTimeout(() => setCopiedShareId(null), 3000);
         toast.success("Linkul public a fost copiat!");
       } catch (fallbackErr) {
@@ -2416,7 +2420,7 @@ export const Home: React.FC = () => {
                         <div className="flex items-center px-3 h-full shrink-0">
                           <button
                             type="button"
-                            onClick={() => void handleCopyShareLink(selectedLead.id!)}
+                            onClick={() => void handleCopyShareLink(selectedLead)}
                             className="h-8 w-8 rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
                             title="Copiază link public de prezentare (fără date proprietar)"
                             aria-label="Distribuie"

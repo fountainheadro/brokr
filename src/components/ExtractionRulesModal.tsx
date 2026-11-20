@@ -29,7 +29,7 @@ export const ExtractionRulesModal: React.FC<ExtractionRulesModalProps> = ({ isOp
       type: "Phone Button Click",
       isActive: true,
       selector: `<button data-cy="ad-contact-phone" data-testid="ad-contact-phone" class="css-1o4b4d" data-nx-name="Button" data-nx-legacy="true" type="button" data-button-variant="secondary" data-button-background="default"><span class="n-button-text-wrapper"><span>Suna vanzatorul</span></span></button>`,
-      description: "Pentru a vizualiza numărul de telefon, se simulează click pe butonul de contact. Odată apăsat, numărul de telefon apare în același loc și este extras instantaneu de crawler."
+      description: "Numărul de telefon este inițial mascat sub textul «Suna vanzatorul». Crawler-ul face mai întâi click pe acest buton (button[data-cy=\"ad-contact-phone\"]) pentru a înlocui textul inițial cu numărul real de telefon, așteaptă afișarea acestuia și copiază noul text apărut."
     },
     {
       id: "storia-phone",

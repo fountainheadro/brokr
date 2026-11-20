@@ -1,7 +1,10 @@
 import { Router, Request, Response } from "express";
 import { requireTenantContext } from "../middleware/mw_tenant-context";
 import { requireRole } from "../middleware/mw_authorization";
-import { TenantResolutionService } from "../../src/core/tenancy/svc_tenant-resolution";
+import {
+  TenantResolutionService,
+  resolveEffectiveRootDomain,
+} from "../../src/core/tenancy/svc_tenant-resolution";
 import { TenantMembershipService } from "../../src/core/tenancy/svc_tenant-membership";
 import { TenantScopedRepository, TenantScopedEntity } from "../../src/core/database/repo_tenant-scoped";
 import { createSuccessResponse, createErrorResponse } from "../../src/core/api/api_response";
@@ -43,6 +46,8 @@ tenantRouter.get("/resolve", (req: Request, res: Response) => {
       (req.query.simulate_tenant as string) ||
       null;
 
+    const platformRootDomain = resolveEffectiveRootDomain(rawHost);
+
     const resolved = TenantResolutionService.resolveDomain(
       rawHost,
       devOverride,
@@ -56,17 +61,19 @@ tenantRouter.get("/resolve", (req: Request, res: Response) => {
           createSuccessResponse({
             tenantId: tenant.id,
             subdomain: tenant.subdomain,
+            customDomain: tenant.customDomain,
             name: tenant.name,
             status: tenant.status,
             branding: tenant.branding,
             enabledModules: tenant.enabledModules,
+            platformRootDomain,
           })
         );
         return;
       }
     }
 
-    res.json(createSuccessResponse(resolved));
+    res.json(createSuccessResponse({ ...resolved, platformRootDomain }));
   } catch (error) {
     if (error instanceof AppError) {
       res.status(error.statusCode).json(createErrorResponse(error.code, error.message));

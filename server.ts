@@ -32,6 +32,12 @@ import {
   parseThumbnailWidth,
   shouldServeWebp,
 } from "./server/utils/img_thumbnail";
+import {
+  extractPhoneFromOlxHtml,
+  extractPhoneFromVisibleText,
+  extractValidRoPhone,
+  revealOlxPhoneByClick,
+} from "./server/utils/olxPhoneExtractor";
 import { assertProductionEnvironment } from "./src/core/env/svc_production-config";
 import { PersistentStoreService } from "./src/core/database/svc_persistent-store";
 import { tenantRouter } from "./server/tenant/rtr_tenant";
@@ -43,10 +49,14 @@ import { storageRouter } from "./server/storage/rtr_storage";
 import { crmRouter } from "./server/crm/rtr_crm";
 import { automationRouter } from "./server/automation/rtr_automation";
 import { AutomationConfigRepository } from "./src/core/automation/repo_automation-config";
+import { resolveAreaFromAd } from "./src/utils/zoneResolutionUtils";
 import { normalizeTitleAutomationRule, TitleAutomationRule } from "./src/core/automation/typ_title-automation";
 import { CrmTenantStoreService } from "./src/core/crm/svc_crm-tenant-store";
 import { CloudStorageService } from "./src/core/storage/svc_cloud-storage";
-import { TenantResolutionService } from "./src/core/tenancy/svc_tenant-resolution";
+import {
+  TenantResolutionService,
+  resolveEffectiveRootDomain,
+} from "./src/core/tenancy/svc_tenant-resolution";
 import { TenantMembershipService } from "./src/core/tenancy/svc_tenant-membership";
 import { PreviewSessionService } from "./src/core/tenancy/svc_preview-session";
 import { BillingManager } from "./src/core/subscription/svc_billing-manager";
@@ -576,7 +586,10 @@ async function startServer() {
       ? forwardedProto.split(',')[0].trim()
       : (req.secure ? 'https' : (req.protocol || 'https'));
 
-    const rawHost = req.headers['x-forwarded-host'] || req.get('host') || 'agency.highline.ro';
+    const rawHost =
+      req.headers['x-forwarded-host'] ||
+      req.get('host') ||
+      resolveEffectiveRootDomain();
     const cleanHost = (Array.isArray(rawHost) ? rawHost[0] : rawHost).trim();
 
     // If running in development on localhost, keep http; otherwise force https for live domain
@@ -1126,119 +1139,245 @@ Returnează un JSON strict cu următoarele chei:
     }
   });
 
-  // Helper function to fetch public property data: checks tenant-scoped store first, then tenant Firestore subcollections, then legacy root fallback
-  async function fetchPropertyById(id: string): Promise<any> {
-    const tenantLocalProp = await CrmTenantStoreService.findPublicPropertyAcrossTenants(id);
-    if (tenantLocalProp) {
-      return tenantLocalProp;
+  function resolvePublicShareTenantIdFromHost(rawHost?: string | null): string | null {
+    const cleanHost = String(rawHost || "").trim();
+    if (!cleanHost) return null;
+    try {
+      const resolved = TenantResolutionService.resolveDomain(
+        cleanHost,
+        null,
+        process.env.NODE_ENV === "production"
+      );
+      if (resolved.type === "agency_crm" && resolved.tenantId && !resolved.isDevSimulation) {
+        return resolved.tenantId;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  function resolvePublicShareTenantId(req: express.Request): string | null {
+    const rawHost =
+      (req.headers["x-forwarded-host"] as string) ||
+      req.get("host") ||
+      req.hostname ||
+      "";
+    const devOverride =
+      (req.headers["x-tenant-override"] as string) ||
+      (typeof req.query?.simulate_tenant === "string" ? req.query.simulate_tenant : null) ||
+      null;
+    if (devOverride && process.env.NODE_ENV !== "production") {
+      try {
+        const simResolved = TenantResolutionService.resolveDomain(rawHost, devOverride, false);
+        if (simResolved.type === "agency_crm" && simResolved.tenantId) {
+          return simResolved.tenantId;
+        }
+      } catch {
+        // ignore invalid override
+      }
+    }
+    return resolvePublicShareTenantIdFromHost(rawHost);
+  }
+
+  function buildShareLookupCandidates(rawId: string): string[] {
+    const clean = String(rawId || "").trim();
+    if (!clean) return [];
+    const candidates = new Set<string>([clean, clean.toUpperCase()]);
+    const cerereC = clean.match(/^C(\d+)$/i);
+    if (cerereC) candidates.add(`R${cerereC[1]}`);
+    const cerereR = clean.match(/^R(\d+)$/i);
+    if (cerereR) candidates.add(`C${cerereR[1]}`);
+    return Array.from(candidates);
+  }
+
+  // Helper function to fetch public property/lead/cerere data:
+  // Supports document IDs AND sequential entity codes (L123, P123, R123, C123),
+  // scoping agency requests to the subdomain's tenant first and global lead requests to platform_shared_leads first.
+  async function fetchPropertyById(
+    id: string,
+    options?: { preferredTenantId?: string | null }
+  ): Promise<any> {
+    const cleanId = String(id || "").trim();
+    if (!cleanId) return null;
+
+    const preferredTenantId = options?.preferredTenantId || null;
+    const candidates = buildShareLookupCandidates(cleanId);
+    const isGlobalLeadCode = /^L\d+$/i.test(cleanId);
+
+    const parseFirestoreDoc = (docObj: any, fallbackId: string): Record<string, any> => {
+      const parseValue = (fieldObj: any): any => {
+        if (!fieldObj || typeof fieldObj !== 'object') return fieldObj;
+        if ('stringValue' in fieldObj) return fieldObj.stringValue;
+        if ('integerValue' in fieldObj) return Number(fieldObj.integerValue);
+        if ('doubleValue' in fieldObj) return Number(fieldObj.doubleValue);
+        if ('booleanValue' in fieldObj) return fieldObj.booleanValue;
+        if ('timestampValue' in fieldObj) return fieldObj.timestampValue;
+        if ('nullValue' in fieldObj) return null;
+        if ('mapValue' in fieldObj) {
+          const resObj: any = {};
+          const fields = fieldObj.mapValue.fields || {};
+          for (const k of Object.keys(fields)) {
+            resObj[k] = parseValue(fields[k]);
+          }
+          return resObj;
+        }
+        if ('arrayValue' in fieldObj) {
+          const values = fieldObj.arrayValue.values || [];
+          return values.map((v: any) => parseValue(v));
+        }
+        return fieldObj;
+      };
+      const nameParts = String(docObj?.name || "").split("/");
+      const resolvedDocId = nameParts[nameParts.length - 1] || fallbackId;
+      const result: any = { id: resolvedDocId };
+      const fields = docObj?.fields || {};
+      for (const k of Object.keys(fields)) {
+        result[k] = parseValue(fields[k]);
+      }
+      return result;
+    };
+
+    // 1. If accessed on an agency subdomain (or non-L code), check tenant-scoped store first
+    if (preferredTenantId || !isGlobalLeadCode) {
+      const tenantLocalProp = await CrmTenantStoreService.findPublicPropertyAcrossTenants(
+        cleanId,
+        preferredTenantId
+      );
+      if (tenantLocalProp) {
+        return tenantLocalProp;
+      }
     }
 
     const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
-    if (!fs.existsSync(configPath)) {
-      return null;
+    let fbConfig: any = null;
+    if (fs.existsSync(configPath)) {
+      fbConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     }
-    const fbConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-    const dbId = fbConfig.firestoreDatabaseId || "(default)";
 
-    const googleToken = await PersistentStoreService.getGoogleAccessToken();
+    const dbId = fbConfig?.firestoreDatabaseId || "(default)";
+    const googleToken = fbConfig ? await PersistentStoreService.getGoogleAccessToken() : null;
     const requestHeaders: Record<string, string> = {};
     let authQuery = "";
     if (googleToken) {
       requestHeaders.Authorization = `Bearer ${googleToken}`;
-    } else if (fbConfig.apiKey) {
+    } else if (fbConfig?.apiKey) {
       authQuery = `?key=${fbConfig.apiKey}`;
     }
 
-    let docData: any = null;
-    let docId = id;
+    const queryFirestoreCollectionByPropertyId = async (
+      parentRelativePath: string,
+      collectionId: string
+    ): Promise<any | null> => {
+      if (!fbConfig) return null;
+      const baseDocs = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents`;
+      const parentUrl = parentRelativePath ? `${baseDocs}/${parentRelativePath}` : baseDocs;
+      const queryUrl = `${parentUrl}:runQuery${authQuery}`;
 
-    // 1. Check tenant-scoped Firestore subcollections first when server OAuth token is present
-    if (googleToken) {
-      for (const tenant of TenantResolutionService.getAllTenants()) {
+      for (const candidate of candidates) {
         try {
-          const tenantDocUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/tenants/${encodeURIComponent(tenant.id)}/leads/${encodeURIComponent(id)}`;
-          const tRes = await axios.get(tenantDocUrl, { headers: requestHeaders, timeout: 6000 });
-          if (tRes.data) {
-            docData = tRes.data;
-            break;
+          const queryBody = {
+            structuredQuery: {
+              from: [{ collectionId }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: "propertyId" },
+                  op: "EQUAL",
+                  value: { stringValue: candidate },
+                },
+              },
+              limit: 1,
+            },
+          };
+          const queryRes = await axios.post(queryUrl, queryBody, { headers: requestHeaders, timeout: 6000 });
+          if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
+            return parseFirestoreDoc(queryRes.data[0].document, cleanId);
           }
         } catch {
-          // Continue searching next tenant or propertyId query
+          // Continue to next candidate
         }
       }
-    }
-
-    const firestoreUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/leads/${encodeURIComponent(id)}${authQuery}`;
-
-    if (!docData) {
-      try {
-        const response = await axios.get(firestoreUrl, { headers: requestHeaders, timeout: 8000 });
-        if (response.data) {
-          docData = response.data;
-        }
-      } catch (directErr: any) {
-        if (directErr.response && directErr.response.status === 404) {
-          try {
-            const queryUrl = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents:runQuery${authQuery}`;
-            const queryBody = {
-              structuredQuery: {
-                from: [{ collectionId: "leads" }],
-                where: {
-                  fieldFilter: {
-                    field: { fieldPath: "propertyId" },
-                    op: "EQUAL",
-                    value: { stringValue: id }
-                  }
-                },
-                limit: 1
-              }
-            };
-            const queryRes = await axios.post(queryUrl, queryBody, { headers: requestHeaders, timeout: 8000 });
-            if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
-              docData = queryRes.data[0].document;
-              const nameParts = (docData.name || "").split("/");
-              docId = nameParts[nameParts.length - 1] || id;
-            }
-          } catch (queryErr: any) {
-            console.warn("[Server] propertyId fallback query failed:", queryErr.message);
-          }
-        } else {
-          throw directErr;
-        }
-      }
-    }
-
-    if (!docData) return null;
-
-    const parseValue = (fieldObj: any): any => {
-      if (!fieldObj || typeof fieldObj !== 'object') return fieldObj;
-      if ('stringValue' in fieldObj) return fieldObj.stringValue;
-      if ('integerValue' in fieldObj) return Number(fieldObj.integerValue);
-      if ('doubleValue' in fieldObj) return Number(fieldObj.doubleValue);
-      if ('booleanValue' in fieldObj) return fieldObj.booleanValue;
-      if ('timestampValue' in fieldObj) return fieldObj.timestampValue;
-      if ('nullValue' in fieldObj) return null;
-      if ('mapValue' in fieldObj) {
-        const resObj: any = {};
-        const fields = fieldObj.mapValue.fields || {};
-        for (const k of Object.keys(fields)) {
-          resObj[k] = parseValue(fields[k]);
-        }
-        return resObj;
-      }
-      if ('arrayValue' in fieldObj) {
-        const values = fieldObj.arrayValue.values || [];
-        return values.map((v: any) => parseValue(v));
-      }
-      return fieldObj;
+      return null;
     };
 
-    const result: any = { id: docId };
-    const fields = docData.fields || {};
-    for (const k of Object.keys(fields)) {
-      result[k] = parseValue(fields[k]);
+    const getFirestoreDocDirect = async (relativeDocPath: string): Promise<any | null> => {
+      if (!fbConfig) return null;
+      try {
+        const url = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/${relativeDocPath}${authQuery}`;
+        const res = await axios.get(url, { headers: requestHeaders, timeout: 6000 });
+        if (res.data) {
+          return parseFirestoreDoc(res.data, cleanId);
+        }
+      } catch {
+        // Not found or unauthorized
+      }
+      return null;
+    };
+
+    // 2. Global shared leads (platform_shared_leads) — checked first for L-codes & root-domain links
+    if (fbConfig && (isGlobalLeadCode || !preferredTenantId)) {
+      const sharedDirect = await getFirestoreDocDirect(
+        `platform_shared_leads/${encodeURIComponent(cleanId)}`
+      );
+      if (sharedDirect) return sharedDirect;
+
+      const sharedByCode = await queryFirestoreCollectionByPropertyId("", "platform_shared_leads");
+      if (sharedByCode) return sharedByCode;
     }
-    return result;
+
+    // 3. If global lead code wasn't in platform_shared_leads, check tenant-scoped store too (agency-created leads)
+    if (!preferredTenantId && isGlobalLeadCode) {
+      const tenantLocalLead = await CrmTenantStoreService.findPublicPropertyAcrossTenants(cleanId, null);
+      if (tenantLocalLead) {
+        return tenantLocalLead;
+      }
+    }
+
+    if (!fbConfig) return null;
+
+    // 4. Check tenant-scoped Firestore subcollections (preferredTenantId first) by doc ID and propertyId
+    if (googleToken) {
+      const allTenants = TenantResolutionService.getAllTenants();
+      const orderedTenants = preferredTenantId
+        ? [
+            ...allTenants.filter((t) => t.id === preferredTenantId),
+            ...allTenants.filter((t) => t.id !== preferredTenantId),
+          ]
+        : allTenants;
+
+      for (const tenant of orderedTenants) {
+        const directTenantDoc = await getFirestoreDocDirect(
+          `tenants/${encodeURIComponent(tenant.id)}/leads/${encodeURIComponent(cleanId)}`
+        );
+        if (directTenantDoc) return directTenantDoc;
+
+        const codeTenantDoc = await queryFirestoreCollectionByPropertyId(
+          `tenants/${encodeURIComponent(tenant.id)}`,
+          "leads"
+        );
+        if (codeTenantDoc) return codeTenantDoc;
+      }
+    }
+
+    // 5. Fallback: check platform_shared_leads even when preferredTenantId was set
+    if (preferredTenantId && !isGlobalLeadCode) {
+      const sharedDirect = await getFirestoreDocDirect(
+        `platform_shared_leads/${encodeURIComponent(cleanId)}`
+      );
+      if (sharedDirect) return sharedDirect;
+
+      const sharedByCode = await queryFirestoreCollectionByPropertyId("", "platform_shared_leads");
+      if (sharedByCode) return sharedByCode;
+    }
+
+    // 6. Legacy root leads fallback (doc ID then propertyId)
+    const legacyDirect = await getFirestoreDocDirect(`leads/${encodeURIComponent(cleanId)}`);
+    if (legacyDirect) return legacyDirect;
+
+    const legacyByCode = await queryFirestoreCollectionByPropertyId("", "leads");
+    if (legacyByCode) return legacyByCode;
+
+    return null;
   }
 
   // Public property endpoint for shared property links (strictly strips private owner PII & source URLs, tokenizes images)
@@ -1247,7 +1386,8 @@ Returnează un JSON strict cu următoarele chei:
       const { id } = req.params;
       if (!id) return res.status(400).json({ error: "Property ID required" });
 
-      const property = await fetchPropertyById(id);
+      const preferredTenantId = resolvePublicShareTenantId(req);
+      const property = await fetchPropertyById(id, { preferredTenantId });
       if (!property) {
         return res.status(404).json({ error: "Property not found" });
       }
@@ -1454,7 +1594,9 @@ Returnează un JSON strict cu următoarele chei:
     }
 
     // 1. Serve from in-memory cache if available (instant < 5ms response for crawlers)
-    const cached = ogImageMemoryCache.get(id);
+    const preferredTenantId = resolvePublicShareTenantId(req);
+    const ogCacheKey = `${preferredTenantId || "global"}:${id}`;
+    const cached = ogImageMemoryCache.get(ogCacheKey);
     if (cached && (Date.now() - cached.timestamp < 1000 * 60 * 60 * 24)) {
       res.setHeader("Content-Type", cached.mimeType);
       res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400, immutable");
@@ -1462,7 +1604,7 @@ Returnează un JSON strict cu următoarele chei:
     }
 
     try {
-      const property = await fetchPropertyById(id);
+      const property = await fetchPropertyById(id, { preferredTenantId });
       
       // Collect candidate image URLs in priority order
       const candidateUrls: string[] = [];
@@ -1609,7 +1751,7 @@ Returnează un JSON strict cu următoarele chei:
         const oldestKey = ogImageMemoryCache.keys().next().value;
         if (oldestKey !== undefined) ogImageMemoryCache.delete(oldestKey);
       }
-      ogImageMemoryCache.set(id, { buffer: processedBuffer, mimeType: "image/jpeg", timestamp: Date.now() });
+      ogImageMemoryCache.set(ogCacheKey, { buffer: processedBuffer, mimeType: "image/jpeg", timestamp: Date.now() });
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Content-Length", String(processedBuffer.length));
       res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400, immutable");
@@ -1633,7 +1775,8 @@ Returnează un JSON strict cu următoarele chei:
         return res.sendFile(indexInfo.path);
       }
 
-      const property = await fetchPropertyById(id);
+      const preferredTenantId = resolvePublicShareTenantId(req);
+      const property = await fetchPropertyById(id, { preferredTenantId });
 
       const title = property?.extractedData?.crmData?.descriere?.titlu || property?.title || "Proprietate Imobiliară • brokr.";
       let description = property?.extractedData?.crmData?.descriere?.continut || property?.description || "Proprietate imobiliară prezentată de brokr.";
@@ -1813,14 +1956,14 @@ Returnează un JSON strict cu următoarele chei:
         .add('h3[data-nx-name="H3"]').first();
       if (priceEl.length) rawPrice = priceEl.text();
 
-      const phoneEl = $('a[data-testid="contact-phone"]').first()
-        .add('button[data-testid="ad-contact-phone"] a[href^="tel:"]').first()
-        .add('button[data-cy="ad-contact-phone"] a').first();
-      if (phoneEl.length) {
-        rawPhone = phoneEl.attr("href")?.replace("tel:", "") || phoneEl.text();
-      } else {
-        const telHref = $('a[href^="tel:"]').first().attr("href");
-        if (telHref) rawPhone = telHref.replace("tel:", "");
+      // OLX Phone Rule:
+      // The seller phone resides inside:
+      // <button data-cy="ad-contact-phone" data-testid="ad-contact-phone" ...><span class="n-button-text-wrapper"><span>Suna vanzatorul</span></span></button>
+      // Initially it is masked ("Suna vanzatorul"); once clicked, the text is replaced with the real phone number.
+      // extractPhoneFromOlxHtml inspects the button's revealed text / .n-button-text-wrapper / tel: links and rejects masked labels.
+      const revealedOlxPhone = extractPhoneFromOlxHtml(html);
+      if (revealedOlxPhone) {
+        rawPhone = revealedOlxPhone;
       }
 
       const ownerEl = $('h4[data-testid="user-profile-user-name"]').first()
@@ -1832,10 +1975,11 @@ Returnează un JSON strict cu următoarele chei:
       const fallbackPrice = $('strong[data-cy="adPageHeaderPrice"], div[data-testid="ad-price-container"] h3, [data-sentry-element="Price"]').first();
       if (fallbackPrice.length) rawPrice = fallbackPrice.text();
     }
-    if (!rawPhone) {
+    if (!rawPhone && source !== "olx") {
       const fallbackPhone = $('a[data-cy="phone-number.number-button"], a[data-testid="contact-phone"], a[href^="tel:"]').first();
       if (fallbackPhone.length) {
-        rawPhone = fallbackPhone.attr("href")?.replace("tel:", "") || fallbackPhone.text();
+        const candidate = fallbackPhone.attr("href")?.replace("tel:", "") || fallbackPhone.text();
+        rawPhone = extractValidRoPhone(candidate);
       }
     }
     if (!rawOwner) {
@@ -1880,9 +2024,11 @@ Returnează un JSON strict cu următoarele chei:
 
     // Fast path for CRM share links (/share/:id or /p/:id) backed by our persistent store
     try {
-      const sharePathMatch = new URL(url).pathname.match(/^\/(?:share|p)\/([A-Za-z0-9_-]+)\/?$/i);
+      const parsedShareUrl = new URL(url);
+      const sharePathMatch = parsedShareUrl.pathname.match(/^\/(?:share|p)\/([A-Za-z0-9_-]+)\/?$/i);
       if (sharePathMatch?.[1]) {
-        const sharedProp = await fetchPropertyById(sharePathMatch[1]);
+        const urlTenantId = resolvePublicShareTenantIdFromHost(parsedShareUrl.hostname);
+        const sharedProp = await fetchPropertyById(sharePathMatch[1], { preferredTenantId: urlTenantId });
         if (sharedProp) {
           const authTenantId = (req as any).auth?.tenantId;
           const isSameTenant = !sharedProp.tenantId || !authTenantId || sharedProp.tenantId === authTenantId;
@@ -2451,15 +2597,25 @@ Returnează un JSON strict cu următoarele chei:
           }
         }
 
-        // Extract Phone Number explicitly if possible (Storia/OLX structured & API via HTTP/2)
-        let sellerPhone = String(
+        // Extract Phone Number explicitly if possible (Storia/OLX structured, revealed DOM, API, and OLX click-to-reveal)
+        // OLX Phone Click-to-Reveal Rule:
+        // On OLX pages the seller phone sits inside:
+        // <button data-cy="ad-contact-phone" data-testid="ad-contact-phone" ...><span class="n-button-text-wrapper"><span>Suna vanzatorul</span></span></button>
+        // Because the phone is initially masked as "Suna vanzatorul", we must first click this button
+        // so OLX replaces the initial text with the actual phone number, then copy the newly appeared text.
+        const isOLX = url.toLowerCase().includes("olx.ro");
+        const isOLXOrStoria = isOLX || url.toLowerCase().includes("storia.ro");
+        const initialStructuredPhone = String(
           nextAdData?.contact?.phone ||
           nextAdData?.owner?.phones?.[0] ||
           olxAd?.contact?.phone ||
           olxAd?.phoneNumber ||
           ""
         ).trim();
-        const isOLXOrStoria = url.includes("olx.ro") || url.includes("storia.ro");
+        let sellerPhone =
+          extractValidRoPhone(initialStructuredPhone) ||
+          (isOLX ? extractPhoneFromOlxHtml(html) : null) ||
+          "";
         const numericId: any = nextAdData?.id || olxAd?.id || null;
 
         if (isOLXOrStoria && numericId && !sellerPhone) {
@@ -2481,18 +2637,33 @@ Returnează un JSON strict cu următoarele chei:
               });
               if (phoneRes.status === 200 && phoneRes.data && typeof phoneRes.data === "object") {
                 const dataVal = phoneRes.data.data;
+                let candidatePhone = "";
                 if (dataVal && Array.isArray(dataVal.phones) && dataVal.phones.length > 0) {
-                  sellerPhone = String(dataVal.phones[0]).trim();
+                  candidatePhone = String(dataVal.phones[0]).trim();
                 } else if (phoneRes.data.value) {
-                  sellerPhone = String(phoneRes.data.value).trim();
+                  candidatePhone = String(phoneRes.data.value).trim();
                 } else if (Array.isArray(phoneRes.data) && phoneRes.data.length > 0) {
-                  sellerPhone = String(phoneRes.data[0]).trim();
+                  candidatePhone = String(phoneRes.data[0]).trim();
                 }
-                if (sellerPhone) break;
+                const validPhone = extractValidRoPhone(candidatePhone);
+                if (validPhone) {
+                  sellerPhone = validPhone;
+                  break;
+                }
               }
             } catch (err: any) {
               console.log(`Phone lookup (${phonesUrl}) warning: ${err?.message}`);
             }
+          }
+        }
+
+        // If this is an OLX page and the phone is still masked ("Suna vanzatorul") or missing,
+        // open the page in headless Chromium, click `button[data-cy="ad-contact-phone"]`,
+        // wait for the button text to be replaced by the real phone number, and copy the new text.
+        if (isOLX && !extractValidRoPhone(sellerPhone)) {
+          const revealedByClick = await revealOlxPhoneByClick(url, numericId, { timeoutMs: 20000 });
+          if (revealedByClick) {
+            sellerPhone = revealedByClick;
           }
         }
 
@@ -2509,74 +2680,38 @@ Returnează un JSON strict cu următoarele chei:
           ],
         });
 
-        // Robust phone number extraction fallback (from HTML attributes, JSON keys or regex matches)
-        if (!sellerPhone || sellerPhone.includes("...") || sellerPhone.replace(/\D/g, "").length < 9) {
-          const phoneCandidates: string[] = [];
+        // Strict phone extraction fallback (NEVER scan raw HTML or inline <script> tags,
+        // which falsely capture tracking pixel IDs like dot.wp.pl/r0776940545 or i18n examples like "0722 123 456").
+        if (!extractValidRoPhone(sellerPhone)) {
+          if (isOLX) {
+            // For OLX.ro: only accept a strictly validated phone explicitly written by the seller
+            // in the listing's own description text; otherwise leave empty -> "Nespecificat".
+            const olxDescText = typeof olxAd?.description === "string"
+              ? olxAd.description.replace(/<[^>]+>/g, " ")
+              : "";
+            const descPhone = extractPhoneFromVisibleText(olxDescText);
+            sellerPhone = descPhone || "";
+          } else {
+            // For non-OLX sites: check explicit contact DOM elements and clean stripped visible text only.
+            const phoneCandidates: string[] = [];
 
-          const jsonPhoneKeys = [
-            /"telefon"\s*:\s*"([^"]+)"/gi,
-            /"phone"\s*:\s*"([^"]+)"/gi,
-            /"phoneNumber"\s*:\s*"([^"]+)"/gi,
-            /"contact_phone"\s*:\s*"([^"]+)"/gi,
-            /\\"[tT]elefon\\"\s*:\s*\\"[^"\d]*(\d+)[^"\d]*\\"/g,
-            /\\"[pP]hone\\"\s*:\s*\\"[^"\d]*(\d+)[^"\d]*\\"/g,
-            /data-telefon="([^"]+)"/gi,
-            /data-phone="([^"]+)"/gi,
-            /tel:([^"]+)/gi
-          ];
-
-          for (const regex of jsonPhoneKeys) {
-            let match;
-            while ((match = regex.exec(html)) !== null) {
-              const rawVal = match[1];
-              const cleaned = rawVal.replace(/[^\d+]/g, "").trim();
-              if ((cleaned.startsWith("07") && cleaned.length === 10) ||
-                  (cleaned.startsWith("407") && cleaned.length === 12) ||
-                  (cleaned.startsWith("+407") && cleaned.length === 13)) {
-                phoneCandidates.push(cleaned);
+            $("[data-telefon], [data-phone], a[href^='tel:']").each((_, el) => {
+              const $el = $(el);
+              const href = $el.attr("href");
+              if (href && href.startsWith("tel:")) {
+                phoneCandidates.push(href.replace("tel:", "").trim());
               }
-            }
-          }
-
-          $("[data-telefon], [data-phone], [data-contacts], [data-contact], .phone, .telefon, a[href^='tel:']").each((_, el) => {
-            const $el = $(el);
-            const tel = $el.attr("data-telefon") || $el.attr("data-phone") || $el.attr("data-contact") || $el.text();
-            const href = $el.attr("href");
-            if (href && href.startsWith("tel:")) {
-              phoneCandidates.push(href.replace("tel:", "").trim());
-            }
-            if (tel) {
-              phoneCandidates.push(tel.trim());
-            }
-          });
-
-          const romanianPhoneRegex = /(?:\+40|0)\s?7\d{2}[\s.-]?\d{3}[\s.-]?\d{3}\b/g;
-          const phoneMatches: string[] = [...(html.match(romanianPhoneRegex) || []), ...(text.match(romanianPhoneRegex) || [])];
-          if (phoneMatches) {
-            for (const rawMatch of phoneMatches) {
-              const cleaned = rawMatch.replace(/[^\d+]/g, "").trim();
-              if (cleaned.startsWith("07") && cleaned.length === 10) {
-                phoneCandidates.push(cleaned);
-              } else if (cleaned.startsWith("407") && cleaned.length === 12) {
-                phoneCandidates.push("0" + cleaned.substring(2));
-              } else if (cleaned.startsWith("+407") && cleaned.length === 13) {
-                phoneCandidates.push("0" + cleaned.substring(3));
+              const attrTel = $el.attr("data-telefon") || $el.attr("data-phone");
+              if (attrTel) {
+                phoneCandidates.push(attrTel.trim());
               }
-            }
-          }
+            });
 
-          if (phoneCandidates.length > 0) {
-            const normalized = phoneCandidates.map(p => {
-              const cleanStr = p.replace(/[^\d+]/g, "").trim();
-              if (cleanStr.startsWith("+40")) return "0" + cleanStr.substring(3);
-              if (cleanStr.startsWith("40")) return "0" + cleanStr.substring(2);
-              return cleanStr;
-            }).filter(p => p.startsWith("07") && p.length === 10);
+            const validFromAttrs = phoneCandidates
+              .map((p) => extractValidRoPhone(p))
+              .find((p): p is string => Boolean(p));
 
-            const uniquePhones = [...new Set(normalized)];
-            if (uniquePhones.length > 0) {
-              sellerPhone = uniquePhones[0];
-            }
+            sellerPhone = validFromAttrs || extractPhoneFromVisibleText(text) || "";
           }
         }
 
@@ -2802,26 +2937,13 @@ Returnează un JSON strict cu următoarele chei:
         if (olxAd?.location?.cityName) oras = olxAd.location.cityName;
         if (olxAd?.location?.districtName) zona = olxAd.location.districtName;
 
-        if (!zona) {
-          const secMatch = (title + " " + text).match(/Sector(?:ul)?\s*[1-6]/i);
-          if (secMatch) {
-            zona = secMatch[0];
-          } else {
-            const commonZones = [
-              "Pipera", "Floreasca", "Dorobanti", "Aviatiei", "Baneasa", "Militari", "Drumul Taberei",
-              "Titan", "Dristor", "Vitan", "Unirii", "Universitate", "Victoriei", "Tineretului",
-              "Berceni", "Pantelimon", "Colentina", "Tei", "Crangasi", "Grozavesti", "Cotroceni",
-              "Lujerului", "Gorjului", "Politehnica", "Obor", "Iancului", "Stefan cel Mare"
-            ];
-            for (const z of commonZones) {
-              if (lowerCombo.includes(z.toLowerCase())) {
-                zona = z;
-                break;
-              }
-            }
-          }
-        }
-        if (!zona) zona = oras;
+        zona = resolveAreaFromAd({
+          rawZone: zona,
+          city: oras,
+          title,
+          description: text,
+          url,
+        });
 
         // 5. Specs (Surface, Rooms, Floor, Heating, Furnished)
         let suprafataUtila = "";
@@ -3330,7 +3452,13 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
         crmData.pret.detalii.pret = finalPrice;
         crmData.pret.detalii.moneda = "€";
         presentationSections.tranzactie["Preț"] = finalPrice;
-        const finalPhone = (sellerPhone && sellerPhone !== "Nespecificat") ? sellerPhone : (listingDetails.phone_number || "Nespecificat");
+        const finalPhone =
+          (sellerPhone && sellerPhone !== "Nespecificat" ? sellerPhone : null) ||
+          extractValidRoPhone(listingDetails.phone_number) ||
+          "Nespecificat";
+        if (finalPhone !== "Nespecificat" && crmData?.detaliiGenerale) {
+          crmData.detaliiGenerale.contacteAditionale = finalPhone;
+        }
         const finalOwner = (sellerName && sellerName !== "Nespecificat") ? sellerName : (listingDetails.owner_name || "Nespecificat");
 
         res.json({
@@ -3596,9 +3724,15 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
           etaj = /^\d+$/.test(fv) ? `Etaj ${fv}` : fv;
         }
 
-        // Location
+        // Location — never use a Sector ("Sector 1".."Sector 6") as area; match against areas database
         const oras = String(ad?.location?.cityName || "București").trim();
-        const zona = String(ad?.location?.districtName || ad?.location?.cityName || "București").trim();
+        const zona = resolveAreaFromAd({
+          rawZone: ad?.location?.districtName,
+          city: oras,
+          title: rawTitle,
+          description: rawDesc,
+          url: adUrl,
+        });
 
         // Photos (promoted to 1000x700 and proxied)
         const rawPhotos: string[] = Array.isArray(ad?.photos)
@@ -3616,9 +3750,8 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
             : u
         );
 
-        // Extract phone from description fallback if present
-        const phoneMatch = rawDesc.match(/(?:\+40|0)\s?7\d{2}[\s.-]?\d{3}[\s.-]?\d{3}/);
-        const descPhone = phoneMatch ? phoneMatch[0].replace(/[^\d+]/g, "") : "";
+        // Extract phone from seller description ONLY if strictly boundary-delimited and non-placeholder
+        const descPhone = extractPhoneFromVisibleText(rawDesc) || "";
         const ownerName = String(ad?.user?.name || "Proprietar OLX").trim() || "Proprietar OLX";
 
         const olxTitleRule = resolveTitleAutomationRuleForReq(req);
@@ -3889,49 +4022,67 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
 
       const selectedBatch = matchedCandidates.slice(0, limit);
 
-      // Enrich phone numbers quickly in small parallel chunks (non-blocking if OLX hides phone)
+      // Enrich phone numbers:
+      // 1. Try OLX's JSON phone endpoints quickly.
+      // 2. When OLX masks the phone behind <button data-cy="ad-contact-phone" data-testid="ad-contact-phone">...<span>Suna vanzatorul</span>...</button>,
+      //    open the listing page via Puppeteer, click that button to replace "Suna vanzatorul" with the real phone number, and copy the new text.
       const enrichPhone = async (item: ReturnType<typeof mapOlxAdToLeadCandidate>) => {
-        if (item.ownerPhone && item.ownerPhone !== "Nespecificat") return item;
-        if (!item.olxAdId) return item;
-        for (const ep of [
-          `https://www.olx.ro/api/v1/offers/${item.olxAdId}/phones/`,
-          `https://www.olx.ro/api/v1/offers/${item.olxAdId}/limited-phones/`,
-        ]) {
-          try {
-            const pRes = await safeFetchExternal(ep, {
-              headers: {
-                "User-Agent": crawlHeaders["User-Agent"],
-                "Referer": item.url,
-                "Accept": "application/json",
-              },
-              timeout: 1800,
-              responseType: "json",
-            });
-            if (pRes.status === 200 && pRes.data && typeof pRes.data === "object") {
-              const d = pRes.data.data;
-              const found =
-                (Array.isArray(d?.phones) && d.phones[0]) ||
-                pRes.data.value ||
-                (Array.isArray(pRes.data) && pRes.data[0]);
-              if (found) {
-                const phoneStr = String(found).trim();
-                item.ownerPhone = phoneStr;
-                if (item.extractedData?.crmData?.detaliiGenerale) {
-                  item.extractedData.crmData.detaliiGenerale.contacteAditionale = phoneStr;
+        if (item.ownerPhone && item.ownerPhone !== "Nespecificat" && extractValidRoPhone(item.ownerPhone)) {
+          return item;
+        }
+        if (item.olxAdId) {
+          for (const ep of [
+            `https://www.olx.ro/api/v1/offers/${item.olxAdId}/phones/`,
+            `https://www.olx.ro/api/v1/offers/${item.olxAdId}/limited-phones/`,
+          ]) {
+            try {
+              const pRes = await safeFetchExternal(ep, {
+                headers: {
+                  "User-Agent": crawlHeaders["User-Agent"],
+                  "Referer": item.url,
+                  "Accept": "application/json",
+                },
+                timeout: 1800,
+                responseType: "json",
+              });
+              if (pRes.status === 200 && pRes.data && typeof pRes.data === "object") {
+                const d = pRes.data.data;
+                const found =
+                  (Array.isArray(d?.phones) && d.phones[0]) ||
+                  pRes.data.value ||
+                  (Array.isArray(pRes.data) && pRes.data[0]);
+                const validPhone = extractValidRoPhone(found);
+                if (validPhone) {
+                  item.ownerPhone = validPhone;
+                  if (item.extractedData?.crmData?.detaliiGenerale) {
+                    item.extractedData.crmData.detaliiGenerale.contacteAditionale = validPhone;
+                  }
+                  return item;
                 }
-                break;
               }
+            } catch {
+              // Optional fast-path lookup - continue to click-to-reveal
             }
-          } catch {
-            // Optional enrichment - fail silently
+          }
+        }
+
+        // Click-to-reveal fallback: click `button[data-cy="ad-contact-phone"]` ("Suna vanzatorul")
+        // and copy the revealed phone number that replaces the initial button text.
+        if (item.url && item.url.toLowerCase().includes("olx.ro")) {
+          const revealedPhone = await revealOlxPhoneByClick(item.url, item.olxAdId, { timeoutMs: 20000 });
+          if (revealedPhone) {
+            item.ownerPhone = revealedPhone;
+            if (item.extractedData?.crmData?.detaliiGenerale) {
+              item.extractedData.crmData.detaliiGenerale.contacteAditionale = revealedPhone;
+            }
           }
         }
         return item;
       };
 
       const enrichedItems: any[] = [];
-      for (let i = 0; i < selectedBatch.length; i += 8) {
-        const chunk = selectedBatch.slice(i, i + 8);
+      for (let i = 0; i < selectedBatch.length; i += 3) {
+        const chunk = selectedBatch.slice(i, i + 3);
         const settled = await Promise.allSettled(chunk.map(enrichPhone));
         settled.forEach((r, idx) => {
           const item = r.status === "fulfilled" ? r.value : chunk[idx];

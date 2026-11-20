@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { auth } from "../lib/firebase";
 import { ProtectedPublicImage } from "./ProtectedPublicImage";
@@ -360,8 +361,16 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onAddActivity,
   onUpdateLead
 }) => {
+  const { tenant, platformRootDomain } = useTenantContext();
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
   const [isCopied, setIsCopied] = useState<boolean>(false);
+  const publicShareUrl =
+    lead?.propertyId || lead?.id
+      ? getPublicShareUrl(lead, {
+          agencySubdomain: tenant?.subdomain,
+          rootDomain: platformRootDomain,
+        })
+      : "";
   
   // Ensure default active tab is always the first in jump links on mount or property change
   useEffect(() => {
@@ -598,7 +607,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   const handleNativeShare = async () => {
-    const currentUrl = lead.id ? getPublicShareUrl(lead.id) : window.location.href;
+    const currentUrl = publicShareUrl || window.location.href;
     const shareData = {
       title: displayTitle,
       text: `${displayTitle} • ${formattedPrice} • brokr.`,
@@ -628,7 +637,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   const handleCopyLink = async () => {
-    const currentUrl = lead.id ? getPublicShareUrl(lead.id) : window.location.href;
+    const currentUrl = publicShareUrl || window.location.href;
     try {
       await navigator.clipboard.writeText(currentUrl);
       setIsCopied(true);
@@ -690,7 +699,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       const notesContent = `Cerere vizionare trimisă de pe fișa proprietății #${internalCode} (${displayTitle}).\nClient: ${formName.trim()}\nTelefon: ${formPhone.trim()}${formEmail.trim() ? `\nEmail: ${formEmail.trim()}` : ""}${formMessage.trim() ? `\nMesaj client: ${formMessage.trim()}` : ""}\nAgent asignat: ${assignedAgent}`;
 
       const cerereDoc = await leadsService.addLead({
-        url: lead.id ? getPublicShareUrl(lead.id) : (lead.url || ""),
+        url: publicShareUrl || (lead.url || ""),
         title: `Cerere vizionare: ${displayTitle}`,
         zone: lead.zone || "București",
         price: lead.price || "N/A",
@@ -1635,9 +1644,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   <Share2 size={14} className="text-gray-500 group-hover:text-[#051D35] transition-colors" />
                 </button>
 
-                {lead?.id && (
+                {publicShareUrl && (
                   <a
-                    href={getPublicShareUrl(lead.id)}
+                    href={publicShareUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="h-7 w-7 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 text-gray-600 hover:text-[#051D35] transition-colors shrink-0 cursor-pointer shadow-2xs group"
@@ -2763,7 +2772,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <div className="p-5 space-y-2 font-sans">
                 <div className="flex items-center gap-2 bg-gray-50 border border-gray-200 rounded p-1 pl-2">
                   <span className="text-[12px] text-gray-600 font-normal truncate flex-1 select-all font-sans">
-                    {getPublicShareUrl(lead.id || "")}
+                    {publicShareUrl}
                   </span>
                   <button
                     type="button"

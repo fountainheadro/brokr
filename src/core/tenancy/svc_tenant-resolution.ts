@@ -16,12 +16,133 @@ export function setPlatformAdminSubdomain(subdomain: string): void {
 
 export const DEFAULT_PLATFORM_ROOT_DOMAIN = "highline.ro";
 
+const MULTI_PART_PUBLIC_SUFFIXES = new Set([
+  "co.uk",
+  "org.uk",
+  "ac.uk",
+  "gov.uk",
+  "com.ro",
+  "org.ro",
+  "tm.ro",
+  "nt.ro",
+  "nom.ro",
+  "info.ro",
+  "rec.ro",
+  "arts.ro",
+  "firm.ro",
+  "store.ro",
+  "www.ro",
+  "com.au",
+  "net.au",
+  "org.au",
+  "co.nz",
+  "co.za",
+  "com.br",
+  "com.mx",
+  "co.jp",
+  "co.kr",
+  "co.in",
+  "com.tr",
+  "com.ua",
+  "com.pl",
+  "co.il",
+]);
+
+function isEphemeralOrLocalHost(host: string): boolean {
+  if (!host) return true;
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host.endsWith(".local") ||
+    host.endsWith(".run.app") ||
+    host.endsWith(".web.app") ||
+    host.endsWith(".firebaseapp.com") ||
+    host.endsWith(".vercel.app") ||
+    host.endsWith(".netlify.app")
+  ) {
+    return true;
+  }
+  // IPv4 or IPv6 literal
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host) || host.includes(":")) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Automatically extracts the registrable root (apex) domain from any real hostname.
+ * Examples:
+ * - "app.highline.ro" -> "highline.ro"
+ * - "zenith.highline.ro" -> "highline.ro"
+ * - "www.highline.ro" -> "highline.ro"
+ * - "highline.ro" -> "highline.ro"
+ * - "localhost:3000" / "*.run.app" -> null
+ */
+export function extractRootDomainFromHost(rawHost?: string | null): string | null {
+  if (!rawHost) return null;
+  const host = String(rawHost)
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .split("/")[0]
+    .split(":")[0]
+    .replace(/\.$/, "")
+    .toLowerCase();
+
+  if (!host || isEphemeralOrLocalHost(host)) return null;
+
+  const parts = host.split(".").filter(Boolean);
+  if (parts.length < 2) return null;
+  if (parts.length === 2) return host;
+
+  const lastTwo = parts.slice(-2).join(".");
+  if (MULTI_PART_PUBLIC_SUFFIXES.has(lastTwo) && parts.length >= 3) {
+    return parts.slice(-3).join(".");
+  }
+  return lastTwo;
+}
+
 export function getPlatformRootDomain(): string | null {
   if (runtimePlatformRootDomain !== undefined) return runtimePlatformRootDomain;
   const configured =
     envConfig.platformRootDomain?.trim() ||
     (typeof process !== "undefined" ? process.env?.PLATFORM_ROOT_DOMAIN?.trim() : undefined);
   return configured || DEFAULT_PLATFORM_ROOT_DOMAIN;
+}
+
+/**
+ * Resolves the effective CRM main (root) domain for link generation & routing.
+ * Prefers explicit platform configuration, then automatically detects the apex domain
+ * from the active request host (ignoring third-party agency custom domains and dev hosts),
+ * falling back to DEFAULT_PLATFORM_ROOT_DOMAIN ("highline.ro").
+ */
+export function resolveEffectiveRootDomain(rawHost?: string | null): string {
+  if (runtimePlatformRootDomain && runtimePlatformRootDomain.trim()) {
+    return runtimePlatformRootDomain.trim().toLowerCase();
+  }
+
+  const envExplicit =
+    typeof process !== "undefined" ? process.env?.PLATFORM_ROOT_DOMAIN?.trim().toLowerCase() : "";
+
+  const normalizedHost = rawHost ? TenantResolutionService.normalizeHost(rawHost) : "";
+  if (normalizedHost && !isEphemeralOrLocalHost(normalizedHost)) {
+    const customTenantId = CUSTOM_DOMAINS.get(normalizedHost);
+    const extracted = extractRootDomainFromHost(normalizedHost);
+    // If host is a third-party agency custom domain (not matching envExplicit/default), keep platform root domain
+    if (customTenantId && extracted) {
+      const baseline = envExplicit || DEFAULT_PLATFORM_ROOT_DOMAIN;
+      if (extracted === baseline) {
+        return extracted;
+      }
+      if (!envExplicit) {
+        return baseline;
+      }
+    } else if (extracted) {
+      return envExplicit && extracted !== envExplicit ? envExplicit : extracted;
+    }
+  }
+
+  return envExplicit || getPlatformRootDomain() || DEFAULT_PLATFORM_ROOT_DOMAIN;
 }
 
 export function getPlatformAdminSubdomain(): string {

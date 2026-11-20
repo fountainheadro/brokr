@@ -21,6 +21,7 @@ import { toast } from "react-hot-toast";
 import { contactsService, Contact } from "../services/contactsService";
 import { Lead, getLeadRole } from "../services/leadsService";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getThumbnailImageUrl } from "../utils/imageUtils";
 
 const formatWhatsAppLink = (phone: string) => {
@@ -46,6 +47,7 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
   onContactClick,
   onAddContactClick
 }) => {
+  const { tenant, platformRootDomain } = useTenantContext();
   const [copiedShare, setCopiedShare] = useState(false);
   const [copiedPhone, setCopiedPhone] = useState(false);
 
@@ -55,16 +57,23 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
   const renterBuyerContacts = contacts.filter(c => c.type === "Renter" || c.type === "Buyer");
   const ownerContacts = contacts.filter(c => c.type === "Owner");
 
+  const publicShareUrl =
+    lead.propertyId || lead.id
+      ? getPublicShareUrl(lead, {
+          agencySubdomain: tenant?.subdomain,
+          rootDomain: platformRootDomain,
+        })
+      : "";
+
   const handleShare = async () => {
-    if (!lead.id) return;
-    const shareUrl = getPublicShareUrl(lead.id);
+    if (!publicShareUrl) return;
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(publicShareUrl);
       setCopiedShare(true);
       setTimeout(() => setCopiedShare(false), 2000);
       toast.success("Linkul public de prezentare a fost copiat!");
     } catch {
-      toast.success("Link: " + shareUrl);
+      toast.success("Link: " + publicShareUrl);
     }
   };
 
@@ -155,9 +164,9 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
                 <span>{copiedShare ? "Copiat!" : "Distribuie"}</span>
               </button>
 
-              {lead.id && (
+              {publicShareUrl && (
                 <a
-                  href={getPublicShareUrl(lead.id)}
+                  href={publicShareUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-8 h-8 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors shadow-2xs"

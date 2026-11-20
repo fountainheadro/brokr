@@ -2,7 +2,10 @@ import { Router, Request, Response } from "express";
 import { mwAuthentication } from "../middleware/mw_authentication";
 import { mwPlatformAuthorization } from "../middleware/mw_platform-authorization";
 import { PreviewSessionService } from "../../src/core/tenancy/svc_preview-session";
-import { TenantResolutionService } from "../../src/core/tenancy/svc_tenant-resolution";
+import {
+  TenantResolutionService,
+  resolveEffectiveRootDomain,
+} from "../../src/core/tenancy/svc_tenant-resolution";
 import { TenantMembershipService } from "../../src/core/tenancy/svc_tenant-membership";
 import { QuotaService } from "../../src/core/subscription/svc_quota";
 import { createSuccessResponse, createErrorResponse } from "../../src/core/api/api_response";
@@ -70,6 +73,12 @@ previewRouter.post("/start", (req: Request, res: Response) => {
       environment: process.env.NODE_ENV === "production" ? "production" : "development",
     });
 
+    const rawHost =
+      (req.headers["x-forwarded-host"] as string) ||
+      (req.headers.host as string) ||
+      req.hostname ||
+      "";
+
     res.json(
       createSuccessResponse({
         token: session.token,
@@ -80,6 +89,7 @@ previewRouter.post("/start", (req: Request, res: Response) => {
         effectivePermissions: session.effectivePermissions,
         effectiveModules: session.effectiveModules,
         expiresAt: session.expiresAt,
+        platformRootDomain: resolveEffectiveRootDomain(rawHost),
       })
     );
   } catch (err: any) {
@@ -159,9 +169,16 @@ previewRouter.get("/status", (req: Request, res: Response) => {
     return;
   }
 
+  const rawHost =
+    (req.headers["x-forwarded-host"] as string) ||
+    (req.headers.host as string) ||
+    req.hostname ||
+    "";
+
   res.json(
     createSuccessResponse({
       isActive: true,
+      platformRootDomain: resolveEffectiveRootDomain(rawHost),
       session: {
         token: session.token,
         tenantId: session.tenantId,

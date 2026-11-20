@@ -61,7 +61,7 @@ export const CERERI_STATUSES: LeadStatus[] = [
 export const isCerereLead = (l?: { status?: string; title?: string; notes?: string; propertyId?: string } | null): boolean => {
   if (!l) return false;
   if (l.propertyId && (l.propertyId.startsWith('P') || l.propertyId.startsWith('L'))) return false;
-  if (l.propertyId && l.propertyId.startsWith('R')) return true;
+  if (l.propertyId && (l.propertyId.startsWith('R') || l.propertyId.startsWith('C'))) return true;
   if (l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata') return false;
   if (l.title && l.title.toLowerCase().startsWith('cerere')) return true;
   if (l.status === 'AreInteres' || l.status === 'Calificare' || l.status === 'Matching') return true;

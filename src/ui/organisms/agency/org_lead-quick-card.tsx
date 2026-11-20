@@ -3,6 +3,7 @@ import { MapPin, Users, ChevronRight, Share2, Building2 } from "lucide-react";
 import { AtmAgencyRoleBadge } from "../../atoms/agency/atm_agency-role-badge";
 import { designTokens } from "../../../../design/tokens";
 import { getThumbnailImageUrl } from "../../../utils/imageUtils";
+import { resolveAreaFromAd } from "../../../utils/zoneResolutionUtils";
 
 export interface OrgLeadQuickCardProps {
   id: string;
@@ -97,7 +98,7 @@ export const OrgLeadQuickCard: React.FC<OrgLeadQuickCardProps> = ({
 
             <div className="flex items-center gap-1 text-[11px] font-normal text-gray-500 truncate">
               <MapPin size={11} className="text-[#BE9662] shrink-0" />
-              <span className="truncate">{zone}</span>
+              <span className="truncate">{resolveAreaFromAd({ rawZone: zone, title })}</span>
             </div>
 
             {ownerName && (
@@ -120,7 +121,7 @@ export const OrgLeadQuickCard: React.FC<OrgLeadQuickCardProps> = ({
                 referrerPolicy="no-referrer"
               />
             ) : (
-              <Building2 size={18} className="text-gray-300" />
+              <Building2 size={18} className="text-[#BE9662]" />
             )}
           </div>
         </div>

@@ -20,6 +20,7 @@ import {
 import { Lead } from "../services/leadsService";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { useTenantContext } from "../core/tenancy/ctx_tenant";
 
 interface CalificataDetailsModalProps {
   isOpen: boolean;
@@ -38,6 +39,7 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
   onDeleteLead,
   onOpenFullForm
 }) => {
+  const { tenant, platformRootDomain } = useTenantContext();
   const [activating, setActivating] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -73,16 +75,23 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
     }
   };
 
+  const publicShareUrl =
+    lead.propertyId || lead.id
+      ? getPublicShareUrl(lead, {
+          agencySubdomain: tenant?.subdomain,
+          rootDomain: platformRootDomain,
+        })
+      : "";
+
   const handleShare = async () => {
-    if (!lead.id) return;
-    const shareUrl = getPublicShareUrl(lead.id);
+    if (!publicShareUrl) return;
     try {
-      await navigator.clipboard.writeText(shareUrl);
+      await navigator.clipboard.writeText(publicShareUrl);
       setCopiedShare(true);
       setTimeout(() => setCopiedShare(false), 2000);
-      toast.success("Linkul public al proprietății a fost copiat!");
+      toast.success("Linkul public a fost copiat!");
     } catch {
-      toast.success("Link: " + shareUrl);
+      toast.success("Link: " + publicShareUrl);
     }
   };
 
@@ -137,9 +146,9 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
                   </button>
                 )}
 
-                {lead.id && (
+                {publicShareUrl && (
                   <a
-                    href={getPublicShareUrl(lead.id)}
+                    href={publicShareUrl}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="w-8 h-8 flex items-center justify-center rounded-md border border-gray-200 bg-white hover:bg-gray-50 text-gray-600 transition-colors shadow-2xs"

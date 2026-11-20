@@ -1,11 +1,112 @@
 import React from "react";
-import { MapPin, Users, ChevronRight, Share2, ExternalLink, Building2, User } from "lucide-react";
+import { MapPin, Users, ChevronRight, Share2, ExternalLink, Building2, User, Phone } from "lucide-react";
 import { Lead, getLeadRole } from "../services/leadsService";
 import { Contact } from "../services/contactsService";
 import { motion } from "motion/react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getThumbnailImageUrl } from "../utils/imageUtils";
+import { resolveLeadDisplayArea } from "../utils/zoneResolutionUtils";
+
+const WhatsAppBusinessIcon: React.FC<{ size?: number; className?: string }> = ({
+  size = 13,
+  className = "",
+}) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.9"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    className={className}
+    aria-hidden="true"
+  >
+    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />
+    <path d="M9.75 8.5h2.6a1.75 1.75 0 0 1 0 3.5h-2.6V8.5z" />
+    <path d="M9.75 12h3a1.75 1.75 0 0 1 0 3.5h-3V12z" />
+  </svg>
+);
+
+const PLACEHOLDER_CARD_PHONES = new Set([
+  "0722123456",
+  "0712345678",
+  "0700000000",
+  "0722000000",
+  "0700123456",
+  "0722111222",
+  "0733444555",
+  "0700000001",
+]);
+
+function extractCleanPhoneCandidate(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  const lower = trimmed.toLowerCase();
+  if (lower === "nespecificat" || lower === "n/a" || lower === "-") return "";
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length < 9) return "";
+  const normalizedRo = digits.startsWith("40") && digits.length === 11 ? `0${digits.slice(2)}` : digits;
+  if (PLACEHOLDER_CARD_PHONES.has(normalizedRo) || /^070{8}$/.test(normalizedRo)) return "";
+  return trimmed;
+}
+
+function resolveCardPhone(lead: Lead, contacts: Contact[]): string {
+  // 1. Extracted phone directly from the original ad link / lead record
+  const directCandidates: unknown[] = [
+    lead.ownerPhone,
+    lead.extractedData?.crmData?.detaliiGenerale?.contacteAditionale,
+    (lead.extractedData as any)?.ownerPhone,
+  ];
+  for (const cand of directCandidates) {
+    const valid = extractCleanPhoneCandidate(cand);
+    if (valid) return valid;
+  }
+
+  // 2. Fallback strict-boundary extraction from original seller description / notes
+  const textPool = [
+    lead.extractedData?.originalDescription,
+    lead.extractedData?.crmData?.descriere?.continut,
+    lead.notes,
+  ]
+    .filter((v): v is string => typeof v === "string" && v.length > 0)
+    .join("\n");
+  const phoneMatch = textPool.match(/(?<![0-9A-Za-z])(?:\+?40|0)[\s.-]*7\d{2}[\s.-]?\d{3}[\s.-]?\d{3}(?![0-9A-Za-z])/);
+  if (phoneMatch) {
+    const valid = extractCleanPhoneCandidate(phoneMatch[0]);
+    if (valid) return valid;
+  }
+
+  // 3. Fallback to linked contact phone (for Cumpărător / Chiriaș / Owner contacts)
+  for (const c of contacts) {
+    const valid = extractCleanPhoneCandidate(c.phone);
+    if (valid) return valid;
+  }
+
+  return "";
+}
+
+function buildTelHref(phone: string): string {
+  const cleaned = phone.replace(/[^0-9+]/g, "");
+  return cleaned ? `tel:${cleaned}` : "";
+}
+
+function buildWhatsAppBusinessHref(phone: string): string {
+  let digits = phone.replace(/\D/g, "");
+  if (!digits) return "";
+  if (digits.startsWith("00")) {
+    digits = digits.slice(2);
+  } else if (digits.startsWith("0") && digits.length === 10) {
+    digits = `40${digits.slice(1)}`;
+  } else if (digits.length === 9 && digits.startsWith("7")) {
+    digits = `40${digits}`;
+  }
+  return `https://wa.me/${digits}`;
+}
 
 interface LeadCardProps {
   lead: Lead;
@@ -26,6 +127,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({
   quickViewLabel = "Detalii",
   compactTypography = false
 }) => {
+  const { tenant, platformRootDomain } = useTenantContext();
   const role = getLeadRole(lead);
   const images = lead.extractedData?.crmData?.imagini;
   const categoria = String(lead.extractedData?.crmData?.detaliiGenerale?.categoria || '').toLowerCase();
@@ -65,11 +167,14 @@ export const LeadCard: React.FC<LeadCardProps> = ({
 
   const handleShare = (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!lead.id) return;
-    const shareUrl = getPublicShareUrl(lead.id);
+    if (!lead.propertyId && !lead.id) return;
+    const shareUrl = getPublicShareUrl(lead, {
+      agencySubdomain: tenant?.subdomain,
+      rootDomain: platformRootDomain,
+    });
     try {
       navigator.clipboard.writeText(shareUrl);
-      toast.success("Linkul public al proprietății a fost copiat!");
+      toast.success("Linkul public a fost copiat!");
     } catch {
       toast.success("Link: " + shareUrl);
     }
@@ -129,6 +234,11 @@ export const LeadCard: React.FC<LeadCardProps> = ({
     isCerere && interestedContacts.length === 0 && !primaryOwnerContact && lead.ownerName && lead.ownerName !== "Nespecificat"
       ? lead.ownerName
       : "";
+
+  const displayZone = resolveLeadDisplayArea(lead);
+  const extractedPhone = resolveCardPhone(lead, contacts);
+  const telHref = extractedPhone ? buildTelHref(extractedPhone) : "";
+  const whatsappBusinessHref = extractedPhone ? buildWhatsAppBusinessHref(extractedPhone) : "";
 
   return (
     <motion.div
@@ -217,7 +327,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({
           {/* Row 4: Area / Zone */}
           <div className="flex items-center gap-1 text-[11px] text-gray-700 font-normal truncate leading-snug">
             <MapPin size={11} className="text-[#BE9662] shrink-0" />
-            <span className="truncate">{lead.zone || "București"}</span>
+            <span className="truncate">{displayZone}</span>
           </div>
 
           {/* Row 5: Owner link button */}
@@ -234,7 +344,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({
               }}
               className="flex items-center gap-1 text-[11px] text-gray-700 hover:text-[#051D35] hover:underline font-normal min-w-0 max-w-full text-left cursor-pointer leading-snug"
             >
-              <User size={11} className="text-gray-500 shrink-0" />
+              <User size={11} className="text-[#BE9662] shrink-0" />
               <span className="truncate">{ownerDisplayName}</span>
               {primaryOwnerContact?.contactId && (
                 <span className="shrink-0 tabular-nums">({primaryOwnerContact.contactId})</span>
@@ -262,7 +372,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({
                 }}
                 className="flex items-center gap-1 text-[11px] text-gray-700 hover:text-[#051D35] hover:underline font-normal min-w-0 max-w-full text-left cursor-pointer leading-snug"
               >
-                <Users size={11} className="text-gray-500 shrink-0" />
+                <Users size={11} className="text-[#BE9662] shrink-0" />
                 <span className="truncate">{contactName}</span>
                 {contact.contactId && (
                   <span className="shrink-0 tabular-nums">({contact.contactId})</span>
@@ -280,7 +390,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({
               }}
               className="flex items-center gap-1 text-[11px] text-gray-700 hover:text-[#051D35] hover:underline font-normal min-w-0 max-w-full text-left cursor-pointer leading-snug"
             >
-              <Users size={11} className="text-gray-500 shrink-0" />
+              <Users size={11} className="text-[#BE9662] shrink-0" />
               <span className="truncate">{fallbackCerereClientName}</span>
               {internalId && (
                 <span className="shrink-0 tabular-nums">({internalId})</span>
@@ -301,8 +411,8 @@ export const LeadCard: React.FC<LeadCardProps> = ({
               referrerPolicy="no-referrer"
             />
           ) : (
-            <div className="w-full h-full flex items-center justify-center text-gray-300 bg-gray-50">
-              <Building2 size={18} className="text-gray-300" />
+            <div className="w-full h-full flex items-center justify-center text-[#BE9662] bg-gray-50">
+              <Building2 size={18} className="text-[#BE9662]" />
             </div>
           )}
         </div>
@@ -320,6 +430,54 @@ export const LeadCard: React.FC<LeadCardProps> = ({
           className="flex items-center gap-1"
           onClick={(e) => e.stopPropagation()}
         >
+          {/* Contact Actions: Phone, then WhatsApp Business */}
+          {telHref ? (
+            <a
+              href={telHref}
+              className={`h-6 w-6 rounded-md flex items-center justify-center ${compactTypography ? "text-[11px]" : ""} text-gray-600 hover:text-[#051D35] hover:bg-gray-200/60 transition-colors cursor-pointer`}
+              title={`Apelează ${extractedPhone}`}
+              aria-label={`Apelează ${extractedPhone}`}
+            >
+              <Phone size={13} />
+            </a>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className={`h-6 w-6 rounded-md flex items-center justify-center ${compactTypography ? "text-[11px]" : ""} text-gray-300 cursor-not-allowed`}
+              title="Fără număr de telefon disponibil"
+              aria-label="Fără număr de telefon disponibil"
+            >
+              <Phone size={13} />
+            </button>
+          )}
+
+          {whatsappBusinessHref ? (
+            <a
+              href={whatsappBusinessHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`h-6 w-6 rounded-md flex items-center justify-center ${compactTypography ? "text-[11px]" : ""} text-gray-600 hover:text-[#051D35] hover:bg-gray-200/60 transition-colors cursor-pointer`}
+              title={`Deschide în WhatsApp Business (${extractedPhone})`}
+              aria-label={`Deschide în WhatsApp Business (${extractedPhone})`}
+            >
+              <WhatsAppBusinessIcon size={13} />
+            </a>
+          ) : (
+            <button
+              type="button"
+              disabled
+              className={`h-6 w-6 rounded-md flex items-center justify-center ${compactTypography ? "text-[11px]" : ""} text-gray-300 cursor-not-allowed`}
+              title="Fără număr pentru WhatsApp Business"
+              aria-label="Fără număr pentru WhatsApp Business"
+            >
+              <WhatsAppBusinessIcon size={13} />
+            </button>
+          )}
+
+          {/* Divider between contact actions and share/external link actions */}
+          <span className="h-3.5 w-px bg-gray-200 mx-1 shrink-0" aria-hidden="true" />
+
           <button
             type="button"
             onClick={handleShare}

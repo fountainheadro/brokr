@@ -9,6 +9,7 @@ import {
   query,
   orderBy,
   writeBatch,
+  runTransaction,
 } from "firebase/firestore";
 import { auth, db, handleFirestoreError, OperationType } from "../lib/firebase";
 import {
@@ -24,11 +25,13 @@ import { hydrateEntityTimestamps } from "../core/crm/svc_crm-client";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { automationSettingsService } from "./automationSettingsService";
 import { buildTitleFromAutomationRule } from "../utils/titleAutomationEngine";
+import { resolveAreaFromAd } from "../utils/zoneResolutionUtils";
 import type { Lead } from "./leadsService";
 
 export const SHARED_LEADS_COLLECTION = "platform_shared_leads";
 export const AUTO_CRAWL_CONFIG_COLLECTION = "platform_auto_crawl";
 export const AUTO_CRAWL_CONFIG_DOC_ID = "global_config";
+export const AUTO_CRAWL_COUNTERS_DOC_ID = "counters";
 
 export interface AutoCrawlScanNotice {
   type: "info" | "error" | "success";
@@ -146,20 +149,58 @@ function buildSharedLeadDocId(url: string, index: number): string {
   return `shl_${Date.now()}_${hash.toString(36)}_${index}`;
 }
 
-function buildSharedPropertyId(url: string, existingLeads: Lead[], offset: number): string {
-  const slugId = extractOlxSlugId(url);
-  if (slugId) {
-    return `L-${slugId.toUpperCase()}`;
+function isValidSequentialLeadId(value: unknown): boolean {
+  return typeof value === "string" && /^L\d+$/i.test(value.trim());
+}
+
+function extractNumericLeadNumber(value: unknown): number {
+  if (typeof value !== "string") return 0;
+  const m = value.trim().match(/^L(\d+)$/i);
+  if (!m) return 0;
+  const n = parseInt(m[1], 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function getMaxNumericSharedLeadNumber(leads: Array<{ propertyId?: string }>): number {
+  let maxNum = 0;
+  for (const lead of leads) {
+    const n = extractNumericLeadNumber(lead.propertyId);
+    if (n > maxNum) maxNum = n;
   }
-  let maxNum = 1000;
-  for (const lead of existingLeads) {
-    const m = String(lead.propertyId || "").match(/^L(\d+)$/i);
-    if (m) {
-      const n = parseInt(m[1], 10);
-      if (Number.isFinite(n) && n > maxNum) maxNum = n;
+  return maxNum;
+}
+
+function replaceEmbeddedPropertyId(
+  payload: Record<string, any>,
+  oldPropertyId: string,
+  newPropertyId: string
+): Record<string, any> {
+  if (!oldPropertyId || oldPropertyId === newPropertyId) return payload;
+  const next: Record<string, any> = { ...payload };
+  if (typeof next.title === "string" && next.title.includes(oldPropertyId)) {
+    next.title = next.title.split(oldPropertyId).join(newPropertyId);
+  }
+  if (next.extractedData && typeof next.extractedData === "object") {
+    const ed = { ...next.extractedData };
+    if (ed.propertyId === oldPropertyId) {
+      ed.propertyId = newPropertyId;
     }
+    if (ed.crmData?.descriere && typeof ed.crmData.descriere === "object") {
+      const desc = { ...ed.crmData.descriere };
+      if (typeof desc.titlu === "string" && desc.titlu.includes(oldPropertyId)) {
+        desc.titlu = desc.titlu.split(oldPropertyId).join(newPropertyId);
+      }
+      if (typeof desc.continut === "string" && desc.continut.includes(oldPropertyId)) {
+        desc.continut = desc.continut.split(oldPropertyId).join(newPropertyId);
+      }
+      ed.crmData = { ...ed.crmData, descriere: desc };
+    }
+    if (typeof ed.markdownMarketing === "string" && ed.markdownMarketing.includes(oldPropertyId)) {
+      ed.markdownMarketing = ed.markdownMarketing.split(oldPropertyId).join(newPropertyId);
+    }
+    next.extractedData = ed;
   }
-  return `L${maxNum + offset + 1}`;
+  return next;
 }
 
 export interface AutoCrawlRunResult {
@@ -323,20 +364,156 @@ export const platformAutoCrawlService = {
   async clearAllSharedLeads(): Promise<number> {
     try {
       const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
-      if (snap.empty) return 0;
-      const docs = snap.docs;
       let deleted = 0;
-      for (let i = 0; i < docs.length; i += 400) {
-        const batch = writeBatch(db);
-        for (const d of docs.slice(i, i + 400)) {
-          batch.delete(d.ref);
-          deleted++;
+      if (!snap.empty) {
+        const docs = snap.docs;
+        for (let i = 0; i < docs.length; i += 400) {
+          const batch = writeBatch(db);
+          for (const d of docs.slice(i, i + 400)) {
+            batch.delete(d.ref);
+            deleted++;
+          }
+          await batch.commit();
         }
-        await batch.commit();
       }
+      // Reset sequential shared-lead counter so new crawls start cleanly from L1
+      await setDoc(
+        doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID),
+        {
+          lead: 0,
+          updatedBy: auth.currentUser?.email || "super_admin",
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
       return deleted;
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, SHARED_LEADS_COLLECTION);
+      return 0;
+    }
+  },
+
+  /**
+   * Atomically reserves `count` sequential lead IDs (`L1`, `L2`, `L3`, ...)
+   * in Firestore under `platform_auto_crawl/counters`.
+   */
+  async reserveSequentialLeadIds(
+    count: number,
+    fallbackExistingLeads: Lead[] = []
+  ): Promise<string[]> {
+    if (count <= 0) return [];
+    const counterRef = doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID);
+
+    // Inspect live collection max so counter is never behind existing L<N> docs
+    let liveMax = getMaxNumericSharedLeadNumber(fallbackExistingLeads);
+    try {
+      const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
+      const snapMax = getMaxNumericSharedLeadNumber(
+        snap.docs.map((d) => d.data() as { propertyId?: string })
+      );
+      if (snapMax > liveMax) liveMax = snapMax;
+    } catch {
+      // fallbackExistingLeads max already computed
+    }
+
+    const startNum = await runTransaction(db, async (tx) => {
+      const counterSnap = await tx.get(counterRef);
+      const storedVal =
+        counterSnap.exists() && typeof counterSnap.data()?.lead === "number"
+          ? Math.max(0, Math.floor(counterSnap.data().lead))
+          : 0;
+      const base = Math.max(storedVal, liveMax);
+      const nextEnd = base + count;
+      tx.set(
+        counterRef,
+        {
+          lead: nextEnd,
+          updatedBy: auth.currentUser?.email || "super_admin",
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+      return base + 1;
+    });
+
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      ids.push(`L${startNum + i}`);
+    }
+    return ids;
+  },
+
+  /**
+   * Repairs any previously imported shared leads that received non-sequential IDs
+   * (e.g., `L-L7KSG` from OLX slugs) into clean sequential `L1`, `L2`, `L3`, ...
+   */
+  async normalizeLegacySharedLeadIds(): Promise<number> {
+    if (!auth.currentUser) return 0;
+    try {
+      const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
+      if (snap.empty) return 0;
+
+      const allDocs = snap.docs.map((d) => ({
+        id: d.id,
+        ref: d.ref,
+        data: d.data() as Record<string, any>,
+      }));
+
+      const broken = allDocs
+        .filter((entry) => !isValidSequentialLeadId(entry.data.propertyId))
+        .sort((a, b) => {
+          const ta = Date.parse(String(a.data.createdAt || "")) || 0;
+          const tb = Date.parse(String(b.data.createdAt || "")) || 0;
+          return ta - tb;
+        });
+
+      if (broken.length === 0) return 0;
+
+      let nextNum = getMaxNumericSharedLeadNumber(
+        allDocs.map((entry) => ({ propertyId: entry.data.propertyId }))
+      );
+
+      let updatedCount = 0;
+      for (const entry of broken) {
+        nextNum += 1;
+        const newPropId = `L${nextNum}`;
+        const oldPropId = typeof entry.data.propertyId === "string" ? entry.data.propertyId : "";
+        const updatedDoc = replaceEmbeddedPropertyId(
+          {
+            ...entry.data,
+            propertyId: newPropId,
+            updatedAt: new Date().toISOString(),
+          },
+          oldPropId,
+          newPropId
+        );
+        await setDoc(entry.ref, stripUndefinedDeep(updatedDoc));
+        updatedCount += 1;
+      }
+
+      const counterRef = doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID);
+      await runTransaction(db, async (tx) => {
+        const counterSnap = await tx.get(counterRef);
+        const storedVal =
+          counterSnap.exists() && typeof counterSnap.data()?.lead === "number"
+            ? Math.max(0, Math.floor(counterSnap.data().lead))
+            : 0;
+        if (nextNum > storedVal) {
+          tx.set(
+            counterRef,
+            {
+              lead: nextNum,
+              updatedBy: auth.currentUser?.email || "super_admin",
+              updatedAt: new Date().toISOString(),
+            },
+            { merge: true }
+          );
+        }
+      });
+
+      return updatedCount;
+    } catch (err) {
+      console.warn("[platformAutoCrawlService] normalizeLegacySharedLeadIds skipped:", err);
       return 0;
     }
   },
@@ -430,6 +607,8 @@ export const platformAutoCrawlService = {
       };
     }
 
+    await this.normalizeLegacySharedLeadIds().catch(() => 0);
+
     const creatorName =
       auth.currentUser.displayName ||
       (auth.currentUser.email ? auth.currentUser.email.split("@")[0] : "Auto Crawl Platform");
@@ -439,6 +618,7 @@ export const platformAutoCrawlService = {
     let skippedCount = 0;
     const saveErrors: string[] = [];
 
+    const itemsToSave: Array<{ item: any; idx: number; normUrl: string; slugId: string }> = [];
     for (let idx = 0; idx < crawledItems.length; idx++) {
       const item = crawledItems[idx];
       const normUrl = normalizeCrawlUrl(String(item.url || ""));
@@ -447,9 +627,17 @@ export const platformAutoCrawlService = {
         skippedCount++;
         continue;
       }
+      if (normUrl) seenUrls.add(normUrl);
+      if (slugId) seenSlugIds.add(slugId);
+      itemsToSave.push({ item, idx, normUrl, slugId });
+    }
 
+    const reservedIds = await this.reserveSequentialLeadIds(itemsToSave.length, existingLeads);
+
+    for (let i = 0; i < itemsToSave.length; i++) {
+      const { item, idx } = itemsToSave[i];
       const docId = buildSharedLeadDocId(String(item.url || ""), idx);
-      const propertyId = buildSharedPropertyId(String(item.url || ""), existingLeads, addedCount);
+      const propertyId = reservedIds[i] || `L${i + 1}`;
       const nowIso = new Date().toISOString();
 
       let finalTitle = clampString(item.title, 500, "Anunț OLX");
@@ -486,12 +674,20 @@ export const platformAutoCrawlService = {
         ? item.images.filter((u: unknown) => typeof u === "string" && u.trim().length > 0).slice(0, 100)
         : [];
 
+      const resolvedZone = resolveAreaFromAd({
+        rawZone: item.zone,
+        city: finalExtractedData?.crmData?.detaliiGenerale?.localizare?.oras || "București",
+        title: finalExtractedData?.olxMeta?.originalTitle || item.title || finalTitle,
+        description: finalExtractedData?.originalDescription || item.notes || "",
+        url: item.url,
+      });
+
       const docPayload = stripUndefinedDeep({
         id: docId,
         propertyId,
         url: clampString(item.url, 2048),
         title: finalTitle,
-        zone: clampString(item.zone, 200, "București"),
+        zone: clampString(resolvedZone, 200, "București"),
         price: clampString(item.price, 100, "N/A"),
         ownerName: clampString(item.ownerName, 200, "Proprietar OLX"),
         ownerPhone: clampString(item.ownerPhone, 100, "Nespecificat"),
@@ -516,8 +712,6 @@ export const platformAutoCrawlService = {
 
       try {
         await setDoc(doc(db, SHARED_LEADS_COLLECTION, docId), docPayload);
-        if (normUrl) seenUrls.add(normUrl);
-        if (slugId) seenSlugIds.add(slugId);
         addedCount++;
       } catch (saveErr: any) {
         console.warn("[platformAutoCrawlService] Failed saving shared OLX lead:", saveErr);
