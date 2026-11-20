@@ -21,6 +21,7 @@ import { toast } from "react-hot-toast";
 import { contactsService, Contact } from "../services/contactsService";
 import { Lead, getLeadRole } from "../services/leadsService";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getThumbnailImageUrl } from "../utils/imageUtils";
 
@@ -67,6 +68,7 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
 
   const handleShare = async () => {
     if (!publicShareUrl) return;
+    void publishPublicShareSnapshot(lead, { tenantId: tenant?.id, force: true });
     try {
       await navigator.clipboard.writeText(publicShareUrl);
       setCopiedShare(true);

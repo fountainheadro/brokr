@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { auth } from "../lib/firebase";
@@ -377,10 +378,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     setActiveSection(NAV_SECTIONS[0]?.id || "tranzactie");
     if (isPublicShared) {
       window.scrollTo(0, 0);
-    } else if (mainScrollRef.current) {
-      mainScrollRef.current.scrollTop = 0;
+    } else {
+      if (mainScrollRef.current) {
+        mainScrollRef.current.scrollTop = 0;
+      }
+      if (lead?.propertyId || lead?.id) {
+        void publishPublicShareSnapshot(lead, { tenantId: tenant?.id });
+      }
     }
-  }, [lead?.id, isPublicShared]);
+  }, [lead?.id, lead?.propertyId, isPublicShared, tenant?.id]);
   
   // Persistent favorite stored in browser localStorage
   const favoriteStorageKey = `brokr_fav_prop_${lead.propertyId || lead.id || "default"}`;
@@ -607,6 +613,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   const handleNativeShare = async () => {
+    if (!isPublicShared) {
+      void publishPublicShareSnapshot(lead, { tenantId: tenant?.id, force: true });
+    }
     const currentUrl = publicShareUrl || window.location.href;
     const shareData = {
       title: displayTitle,
@@ -637,6 +646,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   };
 
   const handleCopyLink = async () => {
+    if (!isPublicShared) {
+      void publishPublicShareSnapshot(lead, { tenantId: tenant?.id, force: true });
+    }
     const currentUrl = publicShareUrl || window.location.href;
     try {
       await navigator.clipboard.writeText(currentUrl);

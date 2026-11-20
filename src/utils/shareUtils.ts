@@ -30,6 +30,7 @@ const RESERVED_NON_AGENCY_SUBDOMAINS = new Set(["www", "app", "admin", "api", "c
 
 const LEAD_ONLY_STATUSES = new Set([
   "Noi",
+  "ListaMea",
   "Pierdute",
   "Nevalidata",
   "Calificata",
@@ -155,7 +156,7 @@ function isCerereShareTarget(target: ShareTargetInput): boolean {
   if (code.startsWith("R") || code.startsWith("C")) return true;
 
   const status = String(target.status || "");
-  if (status === "Noi" || status === "Pierdute" || status === "Nevalidata" || status === "Calificata") {
+  if (status === "Noi" || status === "ListaMea" || status === "Pierdute" || status === "Nevalidata" || status === "Calificata") {
     return false;
   }
   if (status === "AreInteres" || status === "Calificare" || status === "Matching") {

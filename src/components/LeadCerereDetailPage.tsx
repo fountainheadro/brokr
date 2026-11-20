@@ -21,7 +21,8 @@ import {
   Upload,
   X,
   Link as LinkIcon,
-  Star
+  Star,
+  Bookmark
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { contactsService, Contact, ContactType } from "../services/contactsService";
@@ -200,6 +201,7 @@ interface LeadCerereDetailPageProps {
   onDeleteLead?: (leadId: string) => Promise<void>;
   onMarkAsLost?: (leadId: string) => Promise<void>;
   onReactivateLead?: (leadId: string) => Promise<void>;
+  onAddToMyList?: (leadId: string) => Promise<void>;
 }
 
 export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
@@ -212,8 +214,10 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
   onDeleteLead,
   onMarkAsLost,
   onReactivateLead,
+  onAddToMyList,
 }) => {
   const [copiedPhone, setCopiedPhone] = useState(false);
+  const [addingToMyList, setAddingToMyList] = useState(false);
 
   // Per-section edit & saving states
   const [editingPropertyInfo, setEditingPropertyInfo] = useState(false);
@@ -1537,10 +1541,34 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
         {/* Footer Status & Actions */}
         <div className="px-4 py-3 bg-white border border-gray-200 rounded-xl flex flex-wrap items-center justify-between gap-2 shadow-2xs">
           <span className="text-[11px] text-gray-400 font-semibold">
-            Status: <span className="text-gray-700 font-normal">{lead.status}</span>
+            Status: <span className="text-gray-700 font-normal">{lead.status === "ListaMea" ? "Lista Mea" : lead.status}</span>
           </span>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {!isCerere && lead.status !== "ListaMea" && onAddToMyList && lead.id && (
+              <button
+                type="button"
+                disabled={addingToMyList}
+                onClick={async () => {
+                  setAddingToMyList(true);
+                  try {
+                    await onAddToMyList(lead.id!);
+                    onBack();
+                  } finally {
+                    setAddingToMyList(false);
+                  }
+                }}
+                className="h-8 px-3 rounded-md bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-60"
+              >
+                {addingToMyList ? (
+                  <Loader2 size={12} className="animate-spin text-[#BE9662]" />
+                ) : (
+                  <Bookmark size={12} className="text-[#BE9662]" />
+                )}
+                <span>{addingToMyList ? "Se adaugă..." : "Adaugă în lista mea"}</span>
+              </button>
+            )}
+
             {!isCerere && lead.status !== "Pierdute" && onMarkAsLost && lead.id && (
               <button
                 type="button"

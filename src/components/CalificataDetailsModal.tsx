@@ -20,6 +20,7 @@ import {
 import { Lead } from "../services/leadsService";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 
 interface CalificataDetailsModalProps {
@@ -85,6 +86,7 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
 
   const handleShare = async () => {
     if (!publicShareUrl) return;
+    void publishPublicShareSnapshot(lead, { tenantId: tenant?.id, force: true });
     try {
       await navigator.clipboard.writeText(publicShareUrl);
       setCopiedShare(true);

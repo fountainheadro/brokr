@@ -5,6 +5,7 @@ import { Contact } from "../services/contactsService";
 import { motion } from "motion/react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getThumbnailImageUrl } from "../utils/imageUtils";
 import { resolveLeadDisplayArea } from "../utils/zoneResolutionUtils";
@@ -168,6 +169,7 @@ export const LeadCard: React.FC<LeadCardProps> = ({
   const handleShare = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!lead.propertyId && !lead.id) return;
+    void publishPublicShareSnapshot(lead, { tenantId: tenant?.id });
     const shareUrl = getPublicShareUrl(lead, {
       agencySubdomain: tenant?.subdomain,
       rootDomain: platformRootDomain,

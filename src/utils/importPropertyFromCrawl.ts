@@ -1,8 +1,6 @@
 import { leadsService } from "../services/leadsService";
 import { notificationsService } from "../services/notificationsService";
 import { auth } from "../lib/firebase";
-import { generateStandardAdTitle } from "./propertyTitleGenerator";
-import { automationSettingsService } from "../services/automationSettingsService";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 
 export interface ImportPropertyParams {
@@ -59,14 +57,12 @@ export async function importPropertyFromCrawl({
   let crawlRes: Response;
   try {
     const authHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
-    const activeTitleRule = automationSettingsService.getCachedTitleRule();
     crawlRes = await fetch("/api/crawl", {
       method: "POST",
       headers: authHeaders,
       body: JSON.stringify({
         url: trimmedUrl,
         ...(trimmedHtml ? { html: trimmedHtml } : {}),
-        titleAutomationRule: activeTitleRule,
       }),
       signal: controller.signal,
     });
@@ -123,22 +119,19 @@ export async function importPropertyFromCrawl({
     (currentUser?.email ? currentUser.email.split("@")[0] : "Consilier Imobiliar");
   const creatorEmail = currentUser?.email || "";
 
-  const activeRuleForFallback = automationSettingsService.getCachedTitleRule();
-  const finalTitle =
-    title ||
-    crmData?.descriere?.titlu ||
-    generateStandardAdTitle({
-      transactionType: crawledTrans,
-      categoria: crawledCat || "Apartament",
-      camere: crmData?.caracteristici?.detalii?.camere,
-      suprafataUtila: crmData?.caracteristici?.suprafete?.utila,
-      etaj: crmData?.caracteristici?.detalii?.etaj,
-      zona: zone,
-      compartimentare: crmData?.caracteristici?.detalii?.compartimentare,
-      rawTitle: title,
-      rawText: crawlData.description || crawlData.text || "",
-      titleRule: activeRuleForFallback,
-    });
+  const originalTitle = String(
+    crawlData.originalTitle || title || crmData?.descriere?.titlu || ""
+  ).trim();
+  const finalTitle = originalTitle || "Anunț imobiliar";
+
+  const originalDescription = String(
+    crawlData.description || crmData?.descriere?.continut || crawlData.text || ""
+  ).trim();
+
+  if (crmData?.descriere) {
+    crmData.descriere.titlu = finalTitle;
+    crmData.descriere.continut = originalDescription;
+  }
 
   let resolvedPrice = price || "N/A";
   if (
@@ -197,6 +190,7 @@ export async function importPropertyFromCrawl({
     leadType: "Proprietar",
     coverImage: cleanCover,
     images: cleanImages,
+    notes: originalDescription,
     createdByName: creatorName,
     createdByEmail: creatorEmail,
     author: creatorName,
@@ -206,12 +200,12 @@ export async function importPropertyFromCrawl({
           crmData: crmData,
           presentationSections: crawlData.presentationSections || null,
           automationSource: crawlData.automationSource || null,
-          markdownMarketing: crmData.descriere?.continut || "",
+          originalTitle: finalTitle,
+          markdownMarketing: originalDescription,
           summary:
             crawlData.presentationSections?.introducere?.summary ||
             `${crawledCat || "Proprietate"} ${crmData.caracteristici?.detalii?.camere || "2"} camere în ${zone || "București"}, ${price || "N/A"}`,
-          originalDescription:
-            crawlData.description || crawlData.text || crmData.descriere?.continut || "",
+          originalDescription: originalDescription,
         }
       : null,
   });

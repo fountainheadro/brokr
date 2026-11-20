@@ -33,6 +33,7 @@ import { getApiAuthHeaders } from "../lib/apiAuth";
 import { toast } from "react-hot-toast";
 import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
 import { automationSettingsService } from "../services/automationSettingsService";
+import { applyLeadTitleAndDescriptionRules } from "../utils/applyLeadContentRules";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { 
   DetaliiGeneraleSection, 
@@ -78,6 +79,7 @@ import {
   ShieldAlert
 } from "lucide-react";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { auth } from "../lib/firebase";
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { useAuth } from "../core/auth/ctx_auth";
@@ -99,6 +101,7 @@ import {
 
 const TABS: LeadStatus[] = [
   "Noi",
+  "ListaMea",
   "Pierdute",
   "Nevalidata", 
   "Calificata", 
@@ -118,7 +121,7 @@ const TABS: LeadStatus[] = [
   "Sterse"
 ];
 
-const LEADS_TABS: LeadStatus[] = ["Noi", "Pierdute"];
+const LEADS_TABS: LeadStatus[] = ["Noi", "ListaMea", "Pierdute"];
 
 const CERERI_TABS: LeadStatus[] = ["Noua", "Calificare", "Matching", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
@@ -126,6 +129,7 @@ const PROPRIETATI_TABS: LeadStatus[] = ["Noua", "Prospectare", "Colaborare", "Vi
 
 const STATUS_LABELS: Record<string, string> = {
   "Noi": "Noi",
+  "ListaMea": "Lista Mea",
   "Pierdute": "Pierdute",
   "Nevalidata": "Nevalidate",
   "Calificata": "Calificate",
@@ -396,8 +400,8 @@ export const Home: React.FC = () => {
   // Compute live counts matching the sidebar definition
   const counts = useMemo(() => {
     const isCerere = (l: Lead) => isCerereLead(l);
-    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && (l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
-    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Noi' && l.status !== 'Pierdute' && l.status !== 'Sterse';
+    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && (l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
+    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Noi' && l.status !== 'ListaMea' && l.status !== 'Pierdute' && l.status !== 'Sterse';
 
     return {
       leads: leads.filter(isLeadItem).length,
@@ -522,6 +526,9 @@ export const Home: React.FC = () => {
   const [copiedShareId, setCopiedShareId] = useState<string | null>(null);
 
   const handleCopyShareLink = async (leadOrId: Lead | string) => {
+    if (typeof leadOrId !== "string") {
+      void publishPublicShareSnapshot(leadOrId, { tenantId: tenant?.id });
+    }
     const targetId = typeof leadOrId === "string" ? leadOrId : (leadOrId.id || leadOrId.propertyId || "");
     const url = getPublicShareUrl(leadOrId, {
       agencySubdomain: tenant?.subdomain,
@@ -935,12 +942,15 @@ export const Home: React.FC = () => {
         }));
       }
 
-      const extraction = {
-        crmData: finalCrmData,
-        automationSource: crawlData.automationSource || null,
-        markdownMarketing: finalCrmData.descriere?.continut || description || "",
-        summary: `${categoria || "Proprietate"} în ${zone || "București"}, ${price || "N/A"}`
-      };
+      const isRawLeadStatus =
+        !isCerereLead(lead) &&
+        (lead.status === "Noi" ||
+          lead.status === "Pierdute" ||
+          lead.status === "Nevalidata" ||
+          lead.status === "Calificata");
+
+      const originalCrawledTitle = String(crawlData.originalTitle || title || finalCrmData.descriere?.titlu || "").trim();
+      const originalCrawledDescription = String(description || finalCrmData.descriere?.continut || text || "").trim();
 
       const transType = (finalCrmData.detaliiGenerale?.tranzactie || transactionType || "").toLowerCase().includes("inchiriere") 
         ? "Închiriere" 
@@ -952,20 +962,39 @@ export const Home: React.FC = () => {
         : rawCover;
 
       const fallbackRule = automationSettingsService.getCachedTitleRule();
-      const finalTitle = finalCrmData.descriere?.titlu || title || generateStandardAdTitle({
-        transactionType: transType,
-        categoria: categoria || lead.categoria || "Apartament",
-        camere: finalCrmData.caracteristici?.detalii?.camere,
-        suprafataUtila: finalCrmData.caracteristici?.suprafete?.utila,
-        etaj: finalCrmData.caracteristici?.detalii?.etaj,
-        zona: zone || lead.zone,
-        compartimentare: finalCrmData.caracteristici?.detalii?.compartimentare,
-        propertyId: lead.propertyId,
-        rawTitle: title,
-        rawText: description || text || "",
-        titleRule: fallbackRule,
-      });
-      finalCrmData.descriere.titlu = finalTitle;
+      const finalTitle = isRawLeadStatus
+        ? (originalCrawledTitle || lead.title || "Anunț imobiliar")
+        : (finalCrmData.descriere?.titlu || generateStandardAdTitle({
+            transactionType: transType,
+            categoria: categoria || lead.categoria || "Apartament",
+            camere: finalCrmData.caracteristici?.detalii?.camere,
+            suprafataUtila: finalCrmData.caracteristici?.suprafete?.utila,
+            etaj: finalCrmData.caracteristici?.detalii?.etaj,
+            zona: zone || lead.zone,
+            compartimentare: finalCrmData.caracteristici?.detalii?.compartimentare,
+            propertyId: lead.propertyId,
+            rawTitle: originalCrawledTitle,
+            rawText: originalCrawledDescription,
+            titleRule: fallbackRule,
+          }) || originalCrawledTitle);
+
+      if (!finalCrmData.descriere) {
+        finalCrmData.descriere = { titlu: finalTitle, continut: originalCrawledDescription, disponibilitate: "Imediat", video: "", turVirtual: "" };
+      } else {
+        finalCrmData.descriere.titlu = finalTitle;
+        if (isRawLeadStatus) {
+          finalCrmData.descriere.continut = originalCrawledDescription;
+        }
+      }
+
+      const extraction = {
+        crmData: finalCrmData,
+        automationSource: crawlData.automationSource || null,
+        originalTitle: originalCrawledTitle,
+        originalDescription: originalCrawledDescription,
+        markdownMarketing: isRawLeadStatus ? originalCrawledDescription : (finalCrmData.descriere?.continut || originalCrawledDescription),
+        summary: `${categoria || "Proprietate"} în ${zone || "București"}, ${price || "N/A"}`
+      };
 
       let resolvedPrice = price || lead.price || "N/A";
       if (resolvedPrice !== "N/A" && (resolvedPrice.toLowerCase().includes("ron") || resolvedPrice.toLowerCase().includes("lei"))) {
@@ -980,6 +1009,7 @@ export const Home: React.FC = () => {
         extractedData: extraction,
         categoria: finalCrmData.detaliiGenerale?.categoria || categoria || lead.categoria || "Apartament",
         title: finalTitle,
+        ...(isRawLeadStatus && originalCrawledDescription ? { notes: originalCrawledDescription } : {}),
         price: resolvedPrice,
         ownerName: ownerName || finalCrmData.detaliiGenerale?.proprietar || lead.ownerName || "Nespecificat",
         ownerPhone: ownerPhone || finalCrmData.detaliiGenerale?.contacteAditionale || lead.ownerPhone || "Nespecificat",
@@ -1041,12 +1071,15 @@ export const Home: React.FC = () => {
           if (activeTab === 'Pierdute') {
             return lead.status === 'Pierdute';
           }
+          if (activeTab === 'ListaMea') {
+            return lead.status === 'ListaMea';
+          }
           // Default tab 'Noi' (includes newly added leads and legacy unpromoted leads)
           return lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata';
         }
         // Proprietăți: exclude cereri and non-property items
         if (isCerereLead(lead)) return false;
-        if (lead.status === 'Nevalidata' || lead.status === 'Calificata' || lead.status === 'Sterse' || lead.status === 'Noi' || lead.status === 'Pierdute') return false;
+        if (lead.status === 'Nevalidata' || lead.status === 'Calificata' || lead.status === 'Sterse' || lead.status === 'Noi' || lead.status === 'ListaMea' || lead.status === 'Pierdute') return false;
         if (activeTab === 'Noua') {
           return lead.status === 'Noua' || lead.status === 'Activa';
         }
@@ -1185,6 +1218,7 @@ export const Home: React.FC = () => {
       activeSidebarItem === 'Lead-uri' ||
       lead.status === "Nevalidata" ||
       lead.status === "Noi" ||
+      lead.status === "ListaMea" ||
       lead.status === "Pierdute" ||
       lead.status === "Calificata";
 
@@ -1316,7 +1350,7 @@ export const Home: React.FC = () => {
 
       if (leadMatch) {
         setActiveSidebarItem("Lead-uri");
-        setActiveTab((prev) => (prev === "Noi" || prev === "Pierdute" ? prev : "Noi"));
+        setActiveTab((prev) => (prev === "Noi" || prev === "ListaMea" || prev === "Pierdute" ? prev : "Noi"));
       } else if (cerereMatch) {
         setActiveSidebarItem("Cereri");
         setActiveTab((prev) => (CERERI_TABS.includes(prev) ? prev : "Noua"));
@@ -1714,68 +1748,25 @@ export const Home: React.FC = () => {
       const newPropId = await entityIdService.getNextId('property');
       const leadObj = leads.find(l => l.id === leadId);
       const mergedLead = { ...leadObj, ...updatedData };
-      const crmData = mergedLead.extractedData?.crmData;
-      const category = mergedLead.categoria || crmData?.detaliiGenerale?.categoria || "Apartament";
-      const transactionType = mergedLead.transactionType || crmData?.detaliiGenerale?.tranzactie || "Vânzare";
-      const zoneVal = crmData?.detaliiGenerale?.localizare?.zona || mergedLead.zone || "București";
-      const zone = Array.isArray(zoneVal) ? zoneVal[0] : (zoneVal || "București");
-      const price = mergedLead.price || crmData?.pret?.detalii?.pret || "";
-      const specs = crmData?.caracteristici || {};
-      const originalTitle = mergedLead.title || crmData?.descriere?.titlu || "";
-      const originalDescription = mergedLead.extractedData?.markdownMarketing || crmData?.descriere?.continut || "";
 
-      let formattedTitle = originalTitle;
-      let formattedDescription = originalDescription;
-
-      try {
-        const aiHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
-        const aiRes = await fetch("/api/generate-ai-text", {
-          method: "POST",
-          headers: aiHeaders,
-          body: JSON.stringify({
-            category,
-            transactionType,
-            zone,
-            price,
-            specs,
-            originalTitle,
-            originalDescription,
-            propertyId: newPropId
-          })
-        });
-        if (aiRes.ok) {
-          const aiJson = await aiRes.json();
-          if (aiJson.title) formattedTitle = aiJson.title;
-          if (aiJson.description) formattedDescription = aiJson.description;
-        }
-      } catch (err) {
-        console.warn("AI formatting on convert to imobil failed:", err);
-      }
-
-      const updatedCrmData = crmData ? {
-        ...crmData,
-        descriere: {
-          disponibilitate: crmData.descriere?.disponibilitate || "",
-          video: crmData.descriere?.video || "",
-          turVirtual: crmData.descriere?.turVirtual || "",
-          ...(crmData.descriere || {}),
-          titlu: formattedTitle,
-          continut: formattedDescription
-        }
-      } : null;
+      const {
+        formattedTitle,
+        formattedDescription,
+        updatedExtractedData,
+      } = await applyLeadTitleAndDescriptionRules({
+        lead: mergedLead,
+        targetKind: "property",
+        propertyId: newPropId,
+      });
 
       const finalPayload: Partial<Lead> = {
         ...updatedData,
         propertyId: newPropId,
         title: formattedTitle,
+        notes: formattedDescription,
         status: "Noua" as LeadStatus,
         lastMovedAt: new Date(),
-        extractedData: mergedLead.extractedData ? {
-          ...mergedLead.extractedData,
-          crmData: updatedCrmData,
-          markdownMarketing: formattedDescription,
-          summary: formattedDescription.substring(0, 300)
-        } : updatedData.extractedData
+        extractedData: updatedExtractedData,
       };
 
       await leadsService.updateLeadData(leadId, finalPayload);
@@ -1791,19 +1782,73 @@ export const Home: React.FC = () => {
   const handleConvertToCerere = async (leadId: string, updatedData: Partial<Lead>) => {
     try {
       const newCerereId = await entityIdService.getNextId('cerere');
+      const leadObj = leads.find(l => l.id === leadId);
+      const mergedLead = { ...leadObj, ...updatedData };
+
+      const {
+        formattedTitle,
+        formattedDescription,
+        updatedExtractedData,
+      } = await applyLeadTitleAndDescriptionRules({
+        lead: mergedLead,
+        targetKind: "cerere",
+        propertyId: newCerereId,
+      });
+
       const finalPayload: Partial<Lead> = {
         ...updatedData,
         propertyId: newCerereId,
         status: "Noua" as LeadStatus,
-        title: updatedData.title?.toLowerCase().startsWith('cerere') ? updatedData.title : `Cerere: ${updatedData.title || 'Proprietate'}`,
+        title: formattedTitle,
+        notes: formattedDescription,
+        extractedData: updatedExtractedData,
         lastMovedAt: new Date()
       };
       await leadsService.updateLeadData(leadId, finalPayload);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
-      toast.success(`Leadul a fost concretizat în Cererea #${newCerereId}!`);
+      toast.success(`Leadul a fost concretizat în Cererea #${newCerereId} cu titlul și descrierea formatate!`);
     } catch (e) {
       console.error("Failed to convert lead to cerere:", e);
       toast.error("Eroare la crearea cererii!");
+      throw e;
+    }
+  };
+
+  const handleAddToMyList = async (leadId: string) => {
+    try {
+      const leadObj = leads.find(l => l.id === leadId) || (selectedLead?.id === leadId ? selectedLead : undefined);
+      if (!leadObj) {
+        await leadsService.updateLeadStatus(leadId, 'ListaMea');
+        setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'ListaMea' } : l));
+        toast.success("Leadul a fost adăugat în Lista Mea.");
+        return;
+      }
+
+      const {
+        formattedTitle,
+        formattedDescription,
+        updatedExtractedData,
+      } = await applyLeadTitleAndDescriptionRules({
+        lead: leadObj,
+        targetKind: "my_list",
+        propertyId: leadObj.propertyId,
+      });
+
+      const finalPayload: Partial<Lead> = {
+        status: 'ListaMea' as LeadStatus,
+        title: formattedTitle,
+        notes: formattedDescription,
+        extractedData: updatedExtractedData,
+        lastMovedAt: new Date(),
+      };
+
+      await leadsService.updateLeadData(leadId, finalPayload);
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
+      setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...finalPayload } : prev);
+      toast.success("Leadul a fost adăugat în Lista Mea cu titlul și descrierea formatate!");
+    } catch (e) {
+      console.error("Failed to add lead to Lista Mea:", e);
+      toast.error("Eroare la adăugarea în Lista Mea!");
       throw e;
     }
   };
@@ -1861,71 +1906,27 @@ export const Home: React.FC = () => {
     try {
       const leadObj = leads.find(l => l.id === leadId);
       let newPropId = leadObj?.propertyId;
-      if (!newPropId) {
+      if (!newPropId || newPropId.startsWith('L')) {
         newPropId = await entityIdService.getNextId('property');
       }
 
-      const crmData = leadObj?.extractedData?.crmData;
-      const category = leadObj?.categoria || crmData?.detaliiGenerale?.categoria || "Apartament";
-      const transactionType = leadObj?.transactionType || crmData?.detaliiGenerale?.tranzactie || "Vânzare";
-      const zoneVal = crmData?.detaliiGenerale?.localizare?.zona || leadObj?.zone || "București";
-      const zone = Array.isArray(zoneVal) ? zoneVal[0] : (zoneVal || "București");
-      const price = leadObj?.price || crmData?.pret?.detalii?.pret || "";
-      const specs = crmData?.caracteristici || {};
-      const originalTitle = leadObj?.title || crmData?.descriere?.titlu || "";
-      const originalDescription = leadObj?.extractedData?.markdownMarketing || crmData?.descriere?.continut || "";
-
-      let formattedTitle = originalTitle;
-      let formattedDescription = originalDescription;
-
-      try {
-        const aiHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
-        const aiRes = await fetch("/api/generate-ai-text", {
-          method: "POST",
-          headers: aiHeaders,
-          body: JSON.stringify({
-            category,
-            transactionType,
-            zone,
-            price,
-            specs,
-            originalTitle,
-            originalDescription,
-            propertyId: newPropId
-          })
-        });
-        if (aiRes.ok) {
-          const aiJson = await aiRes.json();
-          if (aiJson.title) formattedTitle = aiJson.title;
-          if (aiJson.description) formattedDescription = aiJson.description;
-        }
-      } catch (err) {
-        console.warn("AI formatting on activate qualified lead failed:", err);
-      }
-
-      const updatedCrmData = crmData ? {
-        ...crmData,
-        descriere: {
-          disponibilitate: crmData.descriere?.disponibilitate || "",
-          video: crmData.descriere?.video || "",
-          turVirtual: crmData.descriere?.turVirtual || "",
-          ...(crmData.descriere || {}),
-          titlu: formattedTitle,
-          continut: formattedDescription
-        }
-      } : null;
+      const {
+        formattedTitle,
+        formattedDescription,
+        updatedExtractedData,
+      } = await applyLeadTitleAndDescriptionRules({
+        lead: leadObj || {},
+        targetKind: "property",
+        propertyId: newPropId,
+      });
 
       const finalPayload: Partial<Lead> = {
         propertyId: newPropId,
         title: formattedTitle,
+        notes: formattedDescription,
         status: "Noua" as LeadStatus,
         lastMovedAt: new Date(),
-        extractedData: leadObj?.extractedData ? {
-          ...leadObj.extractedData,
-          crmData: updatedCrmData,
-          markdownMarketing: formattedDescription,
-          summary: formattedDescription.substring(0, 300)
-        } : undefined
+        extractedData: updatedExtractedData,
       };
 
       await leadsService.updateLeadData(leadId, finalPayload);
@@ -2127,6 +2128,7 @@ export const Home: React.FC = () => {
                           if (isCerereLead(l)) return false;
                           if (l.status === 'Sterse') return false;
                           if (tab === 'Pierdute') return l.status === 'Pierdute';
+                          if (tab === 'ListaMea') return l.status === 'ListaMea';
                           return l.status === 'Noi' || l.status === 'Nevalidata' || l.status === 'Calificata';
                         }
                         if (activeSidebarItem === 'Cereri') {
@@ -2136,7 +2138,7 @@ export const Home: React.FC = () => {
                         }
                         // Proprietăți
                         if (isCerereLead(l)) return false;
-                        if (l.status === 'Nevalidata' || l.status === 'Calificata' || l.status === 'Sterse' || l.status === 'Noi' || l.status === 'Pierdute') return false;
+                        if (l.status === 'Nevalidata' || l.status === 'Calificata' || l.status === 'Sterse' || l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute') return false;
                         if (tab === 'Noua') return l.status === 'Noua' || l.status === 'Activa';
                         return l.status === tab;
                       }).length;
@@ -2144,11 +2146,11 @@ export const Home: React.FC = () => {
                       const hasNew = leads.some(lead => {
                         let isMatch = false;
                         if (activeSidebarItem === 'Lead-uri') {
-                          isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && (tab === 'Pierdute' ? lead.status === 'Pierdute' : (lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata'));
+                          isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && (tab === 'Pierdute' ? lead.status === 'Pierdute' : tab === 'ListaMea' ? lead.status === 'ListaMea' : (lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata'));
                         } else if (activeSidebarItem === 'Cereri') {
                           isMatch = isCerereLead(lead) && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'AreInteres' : lead.status === tab);
                         } else {
-                          isMatch = !isCerereLead(lead) && lead.status !== 'Nevalidata' && lead.status !== 'Calificata' && lead.status !== 'Sterse' && lead.status !== 'Noi' && lead.status !== 'Pierdute' && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'Activa' : lead.status === tab);
+                          isMatch = !isCerereLead(lead) && lead.status !== 'Nevalidata' && lead.status !== 'Calificata' && lead.status !== 'Sterse' && lead.status !== 'Noi' && lead.status !== 'ListaMea' && lead.status !== 'Pierdute' && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'Activa' : lead.status === tab);
                         }
                         if (!isMatch) return false;
                         const itemTime = getTimestampMs(lead.lastMovedAt) || getTimestampMs(lead.updatedAt) || getTimestampMs(lead.createdAt);
@@ -2371,6 +2373,7 @@ export const Home: React.FC = () => {
                 const isLeadOrCerere =
                   isCerereLead(selectedLead) ||
                   selectedLead.status === "Noi" ||
+                  selectedLead.status === "ListaMea" ||
                   selectedLead.status === "Pierdute" ||
                   selectedLead.status === "Nevalidata" ||
                   selectedLead.status === "Calificata";
@@ -2585,6 +2588,7 @@ export const Home: React.FC = () => {
               </div>
             ) : (isCerereLead(selectedLead) ||
               selectedLead.status === 'Noi' ||
+              selectedLead.status === 'ListaMea' ||
               selectedLead.status === 'Pierdute' ||
               selectedLead.status === 'Nevalidata' ||
               selectedLead.status === 'Calificata') ? (
@@ -2603,6 +2607,7 @@ export const Home: React.FC = () => {
                 onDeleteLead={handleDeleteNevalidatLead}
                 onMarkAsLost={handleMarkAsLost}
                 onReactivateLead={handleReactivateLead}
+                onAddToMyList={handleAddToMyList}
               />
             ) : (
               <PropertyDetailView 
@@ -2699,7 +2704,7 @@ export const Home: React.FC = () => {
             if (isCerereLead(targetLead)) {
               handleSelectSidebarItem('Cereri');
               if (targetLead.id) navigate(`/cereri/${targetLead.id}`);
-            } else if (targetLead.status === 'Noi' || targetLead.status === 'Pierdute' || targetLead.status === 'Nevalidata' || targetLead.status === 'Calificata') {
+            } else if (targetLead.status === 'Noi' || targetLead.status === 'ListaMea' || targetLead.status === 'Pierdute' || targetLead.status === 'Nevalidata' || targetLead.status === 'Calificata') {
               handleSelectSidebarItem('Lead-uri');
               if (targetLead.id) navigate(`/leads/${targetLead.id}`);
             } else {
@@ -2782,6 +2787,7 @@ export const Home: React.FC = () => {
         onConvertToCerere={handleConvertToCerere}
         onMarkAsLost={handleMarkAsLost}
         onReactivate={handleReactivateLead}
+        onAddToMyList={handleAddToMyList}
         onDeleteLead={handleDeleteNevalidatLead}
       />
 

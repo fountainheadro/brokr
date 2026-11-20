@@ -94,6 +94,48 @@ service cloud.firestore {
         (!('images' in data) || (data.images is list && data.images.size() <= 100));
     }
 
+    function isValidPublicShare(data) {
+      return data.keys().hasAll(['shareCode', 'entityKind', 'title', 'isPublicSnapshot', 'updatedAt']) &&
+        data.keys().hasOnly([
+          'shareCode', 'entityKind', 'tenantId', 'propertyId', 'sourceDocId',
+          'title', 'zone', 'price', 'transactionType', 'categoria', 'status',
+          'leadType', 'mobilare', 'parcare', 'sursaIncalzire', 'modIncalzire',
+          'coverImage', 'images', 'extractedData', 'author', 'agent',
+          'isPublicSnapshot', 'createdAt', 'updatedAt'
+        ]) &&
+        data.shareCode is string && data.shareCode.size() >= 1 && data.shareCode.size() <= 64 &&
+        data.shareCode.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.entityKind in ['lead', 'property', 'cerere'] &&
+        data.title is string && data.title.size() >= 1 && data.title.size() <= 500 &&
+        data.isPublicSnapshot == true &&
+        data.updatedAt is string && data.updatedAt.size() <= 64 &&
+        (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64)) &&
+        (!('propertyId' in data) || (data.propertyId is string && data.propertyId.size() <= 64)) &&
+        (!('tenantId' in data) || (data.tenantId is string && data.tenantId.size() <= 128)) &&
+        (!('sourceDocId' in data) || (data.sourceDocId is string && data.sourceDocId.size() <= 128)) &&
+        (!('zone' in data) || (data.zone is string && data.zone.size() <= 200)) &&
+        (!('price' in data) || (data.price is string && data.price.size() <= 100)) &&
+        (!('transactionType' in data) || (data.transactionType is string && data.transactionType.size() <= 64)) &&
+        (!('categoria' in data) || (data.categoria is string && data.categoria.size() <= 100)) &&
+        (!('status' in data) || (data.status is string && data.status.size() <= 64)) &&
+        (!('leadType' in data) || (data.leadType is string && data.leadType.size() <= 64)) &&
+        (!('mobilare' in data) || (data.mobilare is string && data.mobilare.size() <= 200)) &&
+        (!('parcare' in data) || (data.parcare is string && data.parcare.size() <= 200)) &&
+        (!('sursaIncalzire' in data) || (data.sursaIncalzire is string && data.sursaIncalzire.size() <= 200)) &&
+        (!('modIncalzire' in data) || (data.modIncalzire is string && data.modIncalzire.size() <= 200)) &&
+        (!('author' in data) || (data.author is string && data.author.size() <= 200)) &&
+        (!('agent' in data) || (data.agent is string && data.agent.size() <= 200)) &&
+        (!('coverImage' in data) || (data.coverImage is string && data.coverImage.size() <= 2048)) &&
+        (!('images' in data) || (data.images is list && data.images.size() <= 100 && (data.images.size() == 0 || data.images[0] is string || data.images[0] is map)));
+    }
+
+    match /public_shares/{shareId} {
+      allow get: if isValidId(shareId);
+      allow list: if false;
+      allow create, update: if isSignedIn() && isValidId(shareId) && isValidPublicShare(request.resource.data);
+      allow delete: if isPlatformAdmin() && isValidId(shareId);
+    }
+
     match /platform_shared_leads/{leadId} {
       allow get: if isSignedIn() && isValidId(leadId);
       allow list: if isSignedIn();

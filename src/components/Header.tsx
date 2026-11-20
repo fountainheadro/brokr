@@ -180,7 +180,7 @@ export const Header: React.FC<HeaderProps> = ({
     };
 
     const LEADS_STATUS_ORDER: Record<string, number> = {
-      'Noi': 1, 'Pierdute': 2, 'Nevalidata': 3, 'Calificata': 4
+      'Noi': 1, 'ListaMea': 2, 'Pierdute': 3, 'Nevalidata': 4, 'Calificata': 5
     };
 
     const PROPRIETATI_STATUS_ORDER: Record<string, number> = {
@@ -207,10 +207,10 @@ export const Header: React.FC<HeaderProps> = ({
       return ordA - ordB;
     }).slice(0, 5);
 
-    // 2. Lead-uri: Items in status Noi / Pierdute / Nevalidata / Calificata, sorted by status order
+    // 2. Lead-uri: Items in status Noi / ListaMea / Pierdute / Nevalidata / Calificata, sorted by status order
     const leadsList = allLeads.filter(l => {
       if (isCerereLead(l)) return false;
-      const isLead = l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata';
+      const isLead = l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata';
       if (!isLead) return false;
 
       const titleMatch = (l.title || "").toLowerCase().includes(q);
@@ -230,7 +230,7 @@ export const Header: React.FC<HeaderProps> = ({
     // 3. Imobile: Portofoliu imobile (Noua, Prospectare, Colaborare, etc.), sorted by status tab order
     const properties = allLeads.filter(l => {
       if (isCerereLead(l)) return false;
-      const isLead = l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata';
+      const isLead = l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata';
       if (isLead) return false;
 
       const titleMatch = (l.title || "").toLowerCase().includes(q);

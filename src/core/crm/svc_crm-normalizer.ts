@@ -8,6 +8,7 @@
 
 export type CanonicalLeadStatus =
   | "new_lead"
+  | "my_list"
   | "lost"
   | "unvalidated"
   | "qualified"
@@ -29,6 +30,7 @@ export type CanonicalLeadStatus =
 
 const ROMANIAN_TO_CANONICAL_STATUS: Record<string, CanonicalLeadStatus> = {
   Noi: "new_lead",
+  ListaMea: "my_list",
   Pierdute: "lost",
   Nevalidata: "unvalidated",
   Calificata: "qualified",
@@ -51,6 +53,7 @@ const ROMANIAN_TO_CANONICAL_STATUS: Record<string, CanonicalLeadStatus> = {
 
 const CANONICAL_TO_DISPLAY_STATUS: Record<CanonicalLeadStatus, string> = {
   new_lead: "Noi",
+  my_list: "ListaMea",
   lost: "Pierdute",
   unvalidated: "Nevalidata",
   qualified: "Calificata",
@@ -81,6 +84,9 @@ export function toCanonicalLeadStatus(status?: string | null): CanonicalLeadStat
     return ROMANIAN_TO_CANONICAL_STATUS[trimmed];
   }
   const lower = trimmed.toLowerCase();
+  if (lower === "lista mea" || lower === "listamea") {
+    return "my_list";
+  }
   if (CANONICAL_STATUS_SET.has(lower)) {
     return lower as CanonicalLeadStatus;
   }
@@ -94,9 +100,13 @@ export function toDisplayLeadStatus(status?: string | null): string | undefined 
   if (trimmed in ROMANIAN_TO_CANONICAL_STATUS) {
     return trimmed;
   }
-  const lower = trimmed.toLowerCase() as CanonicalLeadStatus;
-  if (lower in CANONICAL_TO_DISPLAY_STATUS) {
-    return CANONICAL_TO_DISPLAY_STATUS[lower];
+  const lower = trimmed.toLowerCase();
+  if (lower === "lista mea" || lower === "listamea") {
+    return "ListaMea";
+  }
+  const canonicalKey = lower as CanonicalLeadStatus;
+  if (canonicalKey in CANONICAL_TO_DISPLAY_STATUS) {
+    return CANONICAL_TO_DISPLAY_STATUS[canonicalKey];
   }
   return trimmed;
 }

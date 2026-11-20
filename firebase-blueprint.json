@@ -252,9 +252,45 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["filters", "scanIntervalMinutes", "scanLimit", "updatedAt"]
+    },
+    "PublicShare": {
+      "title": "Sanitized Public Share Snapshot",
+      "description": "PII-free public presentation snapshot of a shared lead, property, or request keyed by scope and entity code (e.g. global__L32 or ten_agency_a__P12)",
+      "type": "object",
+      "properties": {
+        "shareCode": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "entityKind": { "type": "string", "enum": ["lead", "property", "cerere"] },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "sourceDocId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 500 },
+        "zone": { "type": "string", "maxLength": 200 },
+        "price": { "type": "string", "maxLength": 100 },
+        "transactionType": { "type": "string", "maxLength": 64 },
+        "categoria": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 64 },
+        "leadType": { "type": "string", "maxLength": 64 },
+        "mobilare": { "type": "string", "maxLength": 200 },
+        "parcare": { "type": "string", "maxLength": 200 },
+        "sursaIncalzire": { "type": "string", "maxLength": 200 },
+        "modIncalzire": { "type": "string", "maxLength": 200 },
+        "coverImage": { "type": "string", "maxLength": 2048 },
+        "images": { "type": "array" },
+        "extractedData": { "type": "object" },
+        "author": { "type": "string", "maxLength": 200 },
+        "agent": { "type": "string", "maxLength": 200 },
+        "isPublicSnapshot": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["shareCode", "entityKind", "title", "isPublicSnapshot", "updatedAt"]
     }
   },
   "firestore": {
+    "public_shares/{shareId}": {
+      "schema": { "$ref": "PublicShare" },
+      "description": "Strictly sanitized PII-free public share snapshots readable by exact shareId without authentication"
+    },
     "platform_shared_leads/{leadId}": {
       "schema": { "$ref": "SharedLead" },
       "description": "Global auto-crawled leads managed by Super Admin and visible to all agencies"

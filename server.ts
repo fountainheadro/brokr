@@ -962,28 +962,111 @@ async function startServer() {
 
   // API endpoint for optional on-demand AI generation of title and description
   app.post("/api/generate-ai-text", mwAuthentication, async (req, res) => {
+    const syncDescriptionHeadingTitle = (desc: string, finalTitle: string): string => {
+      if (!desc || !finalTitle) return desc;
+      return desc.replace(/^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+$/m, `$1${finalTitle}`);
+    };
+
     const generateLocalTemplateText = (body: any) => {
-      const { category, transactionType, zone, price, specs, propertyId } = body;
+      const { category, transactionType, zone, price, specs, propertyId, forcedTitle, originalTitle, originalDescription } = body;
       const cat = category || "Apartament";
       const z = zone || "București";
       const p = price || "N/A";
-      const idStr = propertyId ? propertyId.trim() : "";
+      const idStr = propertyId ? String(propertyId).trim() : "";
       const camere = specs?.detalii?.camere || "2";
+      const suprafata = specs?.suprafete?.utila || "";
+      const etaj = specs?.detalii?.etaj || "-";
+      const bai = specs?.detalii?.bai || "1";
+      const compartimentare = specs?.detalii?.compartimentare || "decomandat";
 
-      const title = `${cat} ${camere} camere | ${z} | Mutare imediată`;
-      const transLabel = transactionType === "Închiriere" ? "ÎNCHIRIERE" : "VÂNZARE";
+      const resolvedTitle =
+        (typeof forcedTitle === "string" && forcedTitle.trim()) ||
+        generateStandardAdTitle({
+          transactionType,
+          categoria: cat,
+          camere,
+          suprafataUtila: suprafata,
+          etaj,
+          zona: z,
+          compartimentare,
+          propertyId: idStr,
+          rawTitle: originalTitle || "",
+          rawText: originalDescription || "",
+        }) ||
+        `${cat} ${camere} camere | ${z} | Mutare imediată`;
+
+      const isRent = transactionType === "Închiriere";
+      const transLabel = isRent ? "ÎNCHIRIERE" : "VÂNZARE";
+      const isCommercial = /birou|comercial|industrial|hala|depozit/i.test(String(cat));
+
+      if (isCommercial) {
+        const description = `📌 ID Proprietate: ${idStr}
+🏢 ${resolvedTitle}
+
+Spațiu pregătit pentru activitate, situat în ${z}, cu acces rapid, expunere bună și configurare eficientă pentru multiple tipuri de business.
+
+Potrivit pentru retail, showroom, office, clinică, beauty, servicii sau activități comerciale mixte.
+
+━━━━━━━━━━━━━━━━━━
+
+⭐ PUNCTE CHEIE
+
+- ${suprafata ? `${suprafata} mp utili` : "suprafață eficientă"}
+- ${compartimentare}
+- vizibilitate comercială foarte bună
+- acces facil pentru clienți și aprovizionare
+- disponibil imediat
+- flexibil pentru multiple activități
+
+━━━━━━━━━━━━━━━━━━
+
+🛠️ SPAȚIUL
+
+- ${camere || "1"} încăperi
+- ${bai} băi
+- etaj ${etaj}
+
+━━━━━━━━━━━━━━━━━━
+
+📍 LOCAȚIE & ACCES
+
+Situat în ${z}, cu acces rapid către:
+
+- transport public
+- zone office & comerciale
+- artere principale
+
+━━━━━━━━━━━━━━━━━━
+
+💼 CONDIȚII ${transLabel}
+
+- ${isRent ? `chirie: ${p}` : `preț: ${p}`}
+${isRent ? "- garanție: 1 lună\n" : ""}- disponibilitate: imediată
+
+━━━━━━━━━━━━━━━━━━
+
+🤝 SUPORT ${transLabel}
+
+- consultanță dedicată din partea agenției brokr
+- suport negociere și contractare
+- analiză compatibilitate activitate
+- posibilitate de vizionare rapidă și flexibilă
+
+📞 Pentru vizionare sau detalii suplimentare, contactează-ne telefonic.`;
+        return { title: resolvedTitle, description };
+      }
 
       const description = `📌 ID ${idStr}
-🏡 ${title}
+🏡 ${resolvedTitle}
 
-Proprietate spațioasă și luminoasă, situată în zona ${z}, oferind acces facil către toate punctele de interes din oraș.
+${suprafata ? `${suprafata} mp utili, ` : ""}proprietate spațioasă și luminoasă, situată în zona ${z}, oferind acces facil către toate punctele de interes din oraș.
 Spațiul este ideal atât pentru locuință, cât și pentru investiție.
 
 ━━━━━━━━━━━━━━━━━━
 
 ⭐ AVANTAJE PRINCIPALE
 
--${specs?.detalii?.compartimentare || "decomandat"}
+-${compartimentare}
 -amplasare excelentă în zonă liniștită
 -lumină naturală generoasă pe parcursul întregii zile
 -acces rapid la mijloacele de transport în comun
@@ -1009,8 +1092,7 @@ Acces rapid către:
 
 💰 ${transLabel}
 
-${p}${transactionType === "Închiriere" ? " / lună\n1 lună garanție\nComision 50% + TVA" : ""}
-Disponibil imediat
+${isRent ? `${p}\n1 lună garanție\nComision 50% + TVA\nDisponibil imediat` : `${p}\nDisponibil imediat`}
 
 ━━━━━━━━━━━━━━━━━━
 
@@ -1022,14 +1104,19 @@ Disponibil imediat
 
 📞 Pentru vizionare sau detalii suplimentare, contactează-ne telefonic.`;
 
-      return { title, description };
+      return { title: resolvedTitle, description };
     };
 
     try {
-      const { category, transactionType, zone, price, specs, originalTitle, originalDescription, propertyId } = req.body;
+      const { category, transactionType, zone, price, specs, originalTitle, originalDescription, propertyId, forcedTitle } = req.body;
+      const cleanForcedTitle = typeof forcedTitle === "string" ? forcedTitle.trim() : "";
       if (!process.env.GEMINI_API_KEY) {
         return res.json(generateLocalTemplateText(req.body));
       }
+
+      const forcedTitleInstruction = cleanForcedTitle
+        ? `\n- TITLU OBLIGATORIU (din regula agenției): "${cleanForcedTitle}" — folosește EXACT acest titlu atât în câmpul 'title', cât și în antetul descrierii după emojiul 🏡 sau 🏢.`
+        : "";
 
       const prompt = `
 ESTI UN EXPERT IMOBILIAR DE TOP.
@@ -1043,11 +1130,11 @@ DATE PROPRIETATE:
 - ID Proprietate: ${propertyId ? propertyId.trim() : ""}
 - Specificații tehnice: ${JSON.stringify(specs || {})}
 - Titlu original: "${originalTitle || ""}"
-- Descriere originală: "${(originalDescription || "").substring(0, 3000)}"
+- Descriere originală: "${(originalDescription || "").substring(0, 3000)}"${forcedTitleInstruction}
 
 REGULI STRICTE MANDATATE:
 1. TITLUL IDENTIC: Titlul din câmpul 'title' TREBUIE să fie ABSOLUT IDENTIC cu titlul din corpul descrierii (situat pe linia direct de sub 📌 ID, după emojiul 🏡 sau 🏢).
-2. STRUCTURĂ TITLU: Tip imobil + număr camere/încăperi sau suprafață mp | Zonă | Pct. de interes | Pct forte imobil | Dotări | Parcare. Titlul TREBUIE să aibă SUB 70 de caractere.
+2. STRUCTURĂ TITLU: Tip imobil + număr camere/încăperi sau suprafață mp | Zonă | Pct. de interes | Pct forte imobil | Dotări | Parcare. Titlul TREBUIE să aibă SUB 70 de caractere (cu excepția cazului în care există un TITLU OBLIGATORIU furnizat mai sus).
 3. FĂRĂ NUMĂR STRADĂ, FĂRĂ COMPLEX REZIDENȚIAL: Niciodată nu include numărul străzii, numărul blocului, scara, apartamentul sau denumiri de complexe rezidențiale (ex: Astorium, Hills, etc.) nici în titlu, nici în descriere! Folosește doar zona/cartierul general.
 4. FĂRĂ COMISION 0%: Elimină complet orice referire la "0% comision", "comision 0", "fără comision".
 5. ȘABLON DESCRIERE APARTAMENTE ȘI CASE / VILE:
@@ -1104,7 +1191,7 @@ Folosește șablonul dedicat pentru spații comerciale (cu 📌 ID Proprietate, 
 
 Returnează un JSON strict cu următoarele chei:
 {
-  "title": "Titlul proprietatii sub 70 caractere",
+  "title": "Titlul proprietatii",
   "description": "Textul complet al descrierii conform sablonului"
 }
 `;
@@ -1128,7 +1215,9 @@ Returnează un JSON strict cu următoarele chei:
       const text = response.text;
       if (!text) throw new Error("Nu s-a primit niciun răspuns de la Gemini");
       const parsed = JSON.parse(text);
-      res.json(parsed);
+      const finalTitle = cleanForcedTitle || String(parsed.title || "").trim();
+      const finalDescription = syncDescriptionHeadingTitle(String(parsed.description || "").trim(), finalTitle);
+      res.json({ title: finalTitle, description: finalDescription });
     } catch (e: any) {
       const errStr = e?.message || String(e || "");
       if (!errStr.includes("402") && !errStr.includes("RESOURCE_EXHAUSTED") && !errStr.includes("prepayment credits")) {
@@ -1314,7 +1403,42 @@ Returnează un JSON strict cu următoarele chei:
       return null;
     };
 
-    // 2. Global shared leads (platform_shared_leads) — checked first for L-codes & root-domain links
+    // 2. Check sanitized Firestore public_shares snapshots (single-doc get works even without server OAuth token)
+    if (fbConfig) {
+      const publicShareKeys: string[] = [];
+      const addCandidateKeys = (scope: string) => {
+        for (const candidate of candidates) {
+          const upper = candidate.toUpperCase().replace(/[^A-Z0-9_-]/g, "");
+          if (upper) publicShareKeys.push(`${scope}__${upper}`);
+        }
+      };
+
+      if (preferredTenantId && !isGlobalLeadCode) {
+        addCandidateKeys(preferredTenantId);
+        addCandidateKeys("global");
+      } else {
+        addCandidateKeys("global");
+        if (preferredTenantId) {
+          addCandidateKeys(preferredTenantId);
+        } else {
+          for (const t of TenantResolutionService.getAllTenants()) {
+            addCandidateKeys(t.id);
+          }
+        }
+      }
+
+      const seenShareKeys = new Set<string>();
+      for (const shareKey of publicShareKeys) {
+        if (seenShareKeys.has(shareKey)) continue;
+        seenShareKeys.add(shareKey);
+        const pubDoc = await getFirestoreDocDirect(`public_shares/${encodeURIComponent(shareKey)}`);
+        if (pubDoc) {
+          return pubDoc;
+        }
+      }
+    }
+
+    // 3. Global shared leads (platform_shared_leads) — checked first for L-codes & root-domain links
     if (fbConfig && (isGlobalLeadCode || !preferredTenantId)) {
       const sharedDirect = await getFirestoreDocDirect(
         `platform_shared_leads/${encodeURIComponent(cleanId)}`
@@ -1325,7 +1449,7 @@ Returnează un JSON strict cu următoarele chei:
       if (sharedByCode) return sharedByCode;
     }
 
-    // 3. If global lead code wasn't in platform_shared_leads, check tenant-scoped store too (agency-created leads)
+    // 4. If global lead code wasn't in platform_shared_leads, check tenant-scoped store too (agency-created leads)
     if (!preferredTenantId && isGlobalLeadCode) {
       const tenantLocalLead = await CrmTenantStoreService.findPublicPropertyAcrossTenants(cleanId, null);
       if (tenantLocalLead) {
@@ -1887,14 +2011,106 @@ Returnează un JSON strict cu următoarele chei:
     }
   });
 
-  // Helper to extract price, phone number, and owner name from storia.ro or olx.ro HTML snippets
+  // Dedicated OLX.ro DOM extraction helpers for exact title, description, and price
+  function extractOlxDomTitle($: ReturnType<typeof cheerio.load>): string {
+    const selectors = [
+      'div[data-cy="offer_title"] h4',
+      'div[data-testid="offer_title"] h4',
+      '[data-cy="offer_title"] h4',
+      '[data-testid="offer_title"] h4',
+      'div[data-cy="offer_title"] h1',
+      'div[data-testid="offer_title"] h1',
+      'div[data-cy="offer_title"]',
+      'div[data-testid="offer_title"]',
+    ];
+    for (const sel of selectors) {
+      const txt = $(sel).first().text().replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      if (txt) return txt;
+    }
+    return "";
+  }
+
+  function extractOlxDomDescription($: ReturnType<typeof cheerio.load>): string {
+    const selectors = [
+      'div.text-background-action-primary.leading-body-base.whitespace-pre-line',
+      'div.text-background-action-primary.whitespace-pre-line',
+      'div[class*="text-background-action-primary"][class*="whitespace-pre-line"]',
+      '[data-cy="ad_description"] div[class*="whitespace-pre-line"]',
+      '[data-cy="ad_description"] div',
+      '[data-cy="ad_description"]',
+    ];
+    for (const sel of selectors) {
+      const el = $(sel).first();
+      if (!el.length) continue;
+      const $clone = el.clone();
+      $clone.find("script, style, button").remove();
+      $clone.find("br").replaceWith("\n");
+      const cleaned = $clone
+        .text()
+        .replace(/\r\n/g, "\n")
+        .replace(/\u00A0/g, " ")
+        .replace(/[ \t]+\n/g, "\n")
+        .replace(/\n[ \t]+/g, "\n")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+      if (cleaned && cleaned.toLowerCase() !== "descriere") {
+        return cleaned;
+      }
+    }
+    return "";
+  }
+
+  function extractOlxDomPrice($: ReturnType<typeof cheerio.load>): string {
+    const selectors = [
+      'div[data-testid="ad-price-container"] h3',
+      '[data-testid="ad-price-container"] h3',
+      'div[data-testid="ad-price-container"]',
+      '[data-testid="ad-price-container"]',
+    ];
+    for (const sel of selectors) {
+      const txt = $(sel).first().text().replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim();
+      if (txt && /\d/.test(txt)) return txt;
+    }
+    return "";
+  }
+
+  function parseDomPriceString(priceStr: string): { value: number; currency: "EUR" | "RON" } {
+    const cleaned = String(priceStr || "").replace(/\u00A0/g, " ").trim();
+    const lower = cleaned.toLowerCase();
+    const currency: "EUR" | "RON" = lower.includes("ron") || lower.includes("lei") ? "RON" : "EUR";
+    const m = cleaned.match(/(\d[\d\s.,]*)/);
+    if (!m) return { value: 0, currency };
+    const withoutDecimals = m[1].trim().replace(/[.,]\d{1,2}$/, "");
+    const value = parseInt(withoutDecimals.replace(/[^0-9]/g, ""), 10) || 0;
+    return { value, currency };
+  }
+
+  function cleanHtmlDescriptionPreservingLines(raw: string): string {
+    return String(raw || "")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/\r\n/g, "\n")
+      .replace(/\u00A0/g, " ")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n[ \t]+/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  // Helper to extract price, phone number, owner name, title, and description from storia.ro or olx.ro HTML snippets
   function extractListingDetails(html: string, url: string = "") {
     const $ = cheerio.load(html || "");
     
     let source: "storia" | "olx" | null = null;
     if (url.includes("storia.ro") || $('[data-cy*="storia"]').length > 0 || $('[data-sentry-component]').length > 0) {
       source = "storia";
-    } else if (url.includes("olx.ro") || $('[data-testid*="ad"]').length > 0 || $('[data-nx-name]').length > 0) {
+    } else if (
+      url.includes("olx.ro") ||
+      $('[data-cy="offer_title"], [data-testid="offer_title"], [data-testid="ad-price-container"]').length > 0 ||
+      $('[data-testid*="ad"]').length > 0 ||
+      $('[data-nx-name]').length > 0
+    ) {
       source = "olx";
     }
 
@@ -1909,6 +2125,8 @@ Returnează un JSON strict cu următoarele chei:
     let rawPrice: string | null = null;
     let rawPhone: string | null = null;
     let rawOwner: string | null = null;
+    let rawTitle: string | null = null;
+    let rawDescription: string | null = null;
 
     const normalizeText = (text: string | null | undefined): string | null => {
       if (!text) return null;
@@ -1951,10 +2169,19 @@ Returnează un JSON strict cu următoarele chei:
         .add('p[class*="truncate"][class*="font-bold"]').first();
       if (ownerEl.length) rawOwner = ownerEl.text();
     } else if (source === "olx") {
-      const priceEl = $('div[data-testid="ad-price-container"] h3').first()
-        .add('[data-testid="ad-price-container"]').first()
-        .add('h3[data-nx-name="H3"]').first();
-      if (priceEl.length) rawPrice = priceEl.text();
+      const olxPrice = extractOlxDomPrice($);
+      if (olxPrice) {
+        rawPrice = olxPrice;
+      } else {
+        const priceEl = $('h3[data-nx-name="H3"]').first();
+        if (priceEl.length) rawPrice = priceEl.text();
+      }
+
+      const olxTitle = extractOlxDomTitle($);
+      if (olxTitle) rawTitle = olxTitle;
+
+      const olxDesc = extractOlxDomDescription($);
+      if (olxDesc) rawDescription = olxDesc;
 
       // OLX Phone Rule:
       // The seller phone resides inside:
@@ -1966,8 +2193,7 @@ Returnează un JSON strict cu următoarele chei:
         rawPhone = revealedOlxPhone;
       }
 
-      const ownerEl = $('h4[data-testid="user-profile-user-name"]').first()
-        .add('h4[data-nx-name="H4"]').first();
+      const ownerEl = $('h4[data-testid="user-profile-user-name"]').first();
       if (ownerEl.length) rawOwner = ownerEl.text();
     }
 
@@ -1989,6 +2215,8 @@ Returnează un JSON strict cu următoarele chei:
 
     return {
       source: source || null,
+      title: normalizeText(rawTitle),
+      description: rawDescription,
       price: cleanPrice(rawPrice),
       phone_number: normalizeText(rawPhone),
       owner_name: normalizeText(rawOwner)
@@ -2217,9 +2445,19 @@ Returnează un JSON strict cu următoarele chei:
         const olxAd: any = olxState?.ad?.ad || olxState?.ad || null;
         const olxBreadcrumbs: any[] = Array.isArray(olxState?.ad?.breadcrumbs) ? olxState.ad.breadcrumbs : [];
 
+        const olxDomTitle = extractOlxDomTitle($);
+        const isOlxPage = url.toLowerCase().includes("olx.ro") || Boolean(olxDomTitle);
         const ogTitle = $('meta[property="og:title"]').attr("content") || $('meta[name="twitter:title"]').attr("content") || "";
         const ogDescription = $('meta[property="og:description"]').attr("content") || $('meta[name="description"]').attr("content") || "";
-        const title = String(nextAdData?.title || olxAd?.title || ogTitle || $("title").text() || "No title found").trim();
+        const title = String(
+          (isOlxPage ? olxDomTitle : "") ||
+          nextAdData?.title ||
+          olxAd?.title ||
+          olxDomTitle ||
+          ogTitle ||
+          $("title").text() ||
+          "No title found"
+        ).trim();
 
         // Extract image URLs strictly for the target property (filtering out logos, layouts, and recommendations)
         const imageExtensions = /\.(jpeg|jpg|gif|png|webp|avif)/i;
@@ -2786,7 +3024,15 @@ Returnează un JSON strict cu următoarele chei:
           }
         }
 
-        // 2b. OLX ad.price (handles regularPrice + displayValue cleanly)
+        // 2b. OLX DOM ad-price-container h3 (preferred) -> OLX ad.price fallback
+        const olxDomPrice = extractOlxDomPrice($);
+        if (rawPriceNum <= 0 && olxDomPrice) {
+          const parsedDomPrice = parseDomPriceString(olxDomPrice);
+          if (parsedDomPrice.value > 0) {
+            rawPriceNum = parsedDomPrice.value;
+            currency = parsedDomPrice.currency;
+          }
+        }
         if (rawPriceNum <= 0 && olxAd?.price) {
           const disp = String(olxAd.price.displayValue || "");
           const regVal = Number(olxAd.price.regularPrice?.value || 0);
@@ -2795,10 +3041,10 @@ Returnează un JSON strict cu următoarele chei:
             rawPriceNum = regVal;
             if (regCurr.includes("RON") || regCurr.includes("LEI")) currency = "RON";
           } else if (disp) {
-            const dispDigits = parseInt(disp.replace(/[^0-9]/g, ""), 10) || 0;
-            if (dispDigits > 0) {
-              rawPriceNum = dispDigits;
-              if (disp.toLowerCase().includes("lei") || disp.toLowerCase().includes("ron")) currency = "RON";
+            const parsedDisp = parseDomPriceString(disp);
+            if (parsedDisp.value > 0) {
+              rawPriceNum = parsedDisp.value;
+              currency = parsedDisp.currency;
             }
           }
         }
@@ -3083,14 +3329,21 @@ Returnează un JSON strict cu următoarele chei:
         if (lowerCombo.includes("nemobilat")) mobilat = "Nemobilat";
         else if (lowerCombo.includes("partial mobilat")) mobilat = "Partial";
 
-        // 6. Original Description
+        // 6. Original Description (prefer OLX DOM description container when present)
         let rawDescription = "";
-        if (nextAdData?.description) {
+        const olxDomDesc = extractOlxDomDescription($);
+        if (isOlxPage && olxDomDesc) {
+          rawDescription = olxDomDesc;
+        } else if (nextAdData?.description) {
           rawDescription = convert(nextAdData.description, { wordwrap: false });
         } else if (olxAd?.description) {
-          rawDescription = String(olxAd.description).trim();
+          rawDescription = cleanHtmlDescriptionPreservingLines(String(olxAd.description));
+        } else if (olxDomDesc) {
+          rawDescription = olxDomDesc;
         } else {
           const descSelectors = [
+            'div.text-background-action-primary.whitespace-pre-line',
+            'div[class*="text-background-action-primary"][class*="whitespace-pre-line"]',
             '[data-cy="ad_description"]',
             '[data-testid="description-section"]',
             '.offer-description',
@@ -3110,9 +3363,8 @@ Returnează un JSON strict cu următoarele chei:
           }
         }
 
-        const crawlTitleRule = resolveTitleAutomationRuleForReq(req);
-
-        // Generate compliant property ad title using tenant automation rule (or AGENTS.md fallback)
+        // Preserve structured automationSource so Title & Description rules can be applied
+        // later ONLY when the lead is moved to Lista Mea, Proprietăți, or Cereri.
         const automationSource = {
           transactionType,
           categoria,
@@ -3129,10 +3381,8 @@ Returnează un JSON strict cu următoarele chei:
           rawTitle: title,
           rawText: rawDescription || text,
         };
-        const cleanTitle = generateStandardAdTitle({
-          ...automationSource,
-          titleRule: crawlTitleRule,
-        });
+        const originalTitle = title;
+        const originalDescription = rawDescription;
 
         // 7. Full baseline CRM Data object - all photos start in 'alteSpatii' for manual slot moving!
         const crmData = {
@@ -3267,56 +3517,8 @@ Returnează un JSON strict cu următoarele chei:
             }
           },
           descriere: {
-            titlu: cleanTitle,
-            continut: `📌 ID 
-🏡 ${cleanTitle}
-
-${suprafataUtila ? `${suprafataUtila} mp utili` : "Spațiu generos"}${balcoaneFinal && parseInt(String(balcoaneFinal), 10) > 0 ? ", balcon" : ""}, mobilat și utilat, disponibil imediat.
-Proprietate luminoasă și bine compartimentată, situată în zona ${zona || oras}, cu acces facil la toate facilitățile urbane.
-
-━━━━━━━━━━━━━━━━━━
-
-⭐ AVANTAJE PRINCIPALE
-
--${compartimentare || "decomandat"}
--poziționare excelentă în zonă cu infrastructură completă
--lumină naturală generoasă și compartimentare eficientă
--acces rapid la mijloacele de transport în comun
-
-━━━━━━━━━━━━━━━━━━
-
-🛋️ DOTĂRI
-
--${Array.isArray(sistemIncalzire) && sistemIncalzire.length > 0 ? sistemIncalzire[0].toLowerCase() : "centrală proprie"}
--finisaje de calitate și spații optime de depozitare
--mobilat și utilat complet
-
-Spațiul este foarte bine organizat și oferă confort ridicat pentru locuire.
-
-━━━━━━━━━━━━━━━━━━
-
-📍 LOCAȚIE
-
-Acces rapid către:
--stații de transport în comun
--magazine, supermarketuri și servicii de proximitate
--parcuri și spații verzi în zonă
-
-━━━━━━━━━━━━━━━━━━
-
-💰 ${transactionType === "Închiriere" ? "ÎNCHIRIERE" : "VÂNZARE"}
-
-${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garanție\nComision 50% + TVA\nDisponibil imediat` : `${formattedPrice || "N/A"}\nDisponibil imediat`}
-
-━━━━━━━━━━━━━━━━━━
-
-🤝 ${transactionType === "Închiriere" ? "SUPORT ÎNCHIRIERE" : "SUPORT VÂNZARE"}
-
--consultanță dedicată din partea agenției brokr
--asistență completă în întocmirea contractului și înregistrarea ANAF
--posibilitate de vizionare rapidă și flexibilă
-
-📞 Pentru vizionare sau detalii suplimentare, contactează-ne telefonic.`.trim(),
+            titlu: originalTitle,
+            continut: originalDescription,
             disponibilitate: "Imediat",
             video: "",
             turVirtual: ""
@@ -3462,7 +3664,8 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
         const finalOwner = (sellerName && sellerName !== "Nespecificat") ? sellerName : (listingDetails.owner_name || "Nespecificat");
 
         res.json({
-          title: cleanTitle,
+          title: originalTitle,
+          originalTitle: originalTitle,
           price: finalPrice,
           zone: zona,
           oras: oras,
@@ -3470,7 +3673,7 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
           ownerPhone: finalPhone,
           transactionType: transactionType,
           categoria: categoria,
-          description: rawDescription,
+          description: originalDescription,
           specs: {
             utila: suprafataUtila || numUtila,
             construita: suprafataConstruita,
@@ -3630,7 +3833,7 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
       const mapOlxAdToLeadCandidate = (ad: any) => {
         const adUrl = String(ad.url || "").trim();
         const rawTitle = String(ad.title || "Anunț imobiliar OLX").trim();
-        const rawDesc = String(ad.description || "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+        const rawDesc = cleanHtmlDescriptionPreservingLines(String(ad.description || ""));
         const params: any[] = Array.isArray(ad.params) ? ad.params : [];
         const getParam = (key: string) => params.find((p) => p?.key === key);
 
@@ -3754,7 +3957,6 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
         const descPhone = extractPhoneFromVisibleText(rawDesc) || "";
         const ownerName = String(ad?.user?.name || "Proprietar OLX").trim() || "Proprietar OLX";
 
-        const olxTitleRule = resolveTitleAutomationRuleForReq(req);
         const olxAutomationSource = {
           transactionType,
           categoria,
@@ -3771,11 +3973,6 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
           rawTitle,
           rawText: `${rawTitle}\n${rawDesc}`,
         };
-
-        const cleanTitle = generateStandardAdTitle({
-          ...olxAutomationSource,
-          titleRule: olxTitleRule,
-        }) || rawTitle;
 
         const crmData = {
           detaliiGenerale: {
@@ -3898,7 +4095,7 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
             contract: { tip: "Intermediere", semnat: "Nu", nr: "", dataSemnare: "", dataExpirare: "" },
           },
           descriere: {
-            titlu: cleanTitle,
+            titlu: rawTitle,
             continut: rawDesc,
             disponibilitate: "Imediat",
             video: "",
@@ -3917,7 +4114,7 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
           olxAdId: ad.id,
           createdTime: ad.createdTime || ad.lastRefreshTime || null,
           url: adUrl,
-          title: cleanTitle,
+          title: rawTitle,
           zone: zona,
           price: formattedPrice,
           ownerName,
@@ -3927,10 +4124,12 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
           leadType: "Proprietar",
           coverImage: proxiedImages[0] || undefined,
           images: proxiedImages,
-          notes: rawDesc ? rawDesc.substring(0, 1200) : rawTitle,
+          notes: rawDesc || rawTitle,
           extractedData: {
             crmData,
+            originalTitle: rawTitle,
             originalDescription: rawDesc,
+            markdownMarketing: rawDesc,
             automationSource: olxAutomationSource,
             olxMeta: {
               adId: ad.id,
@@ -4181,7 +4380,7 @@ ${transactionType === "Închiriere" ? `${formattedPrice || "N/A"}\n1 lună garan
           break;
         }
         const $ = cheerio.load(html);
-        const title = $("title").text() || "";
+        const title = extractOlxDomTitle($) || $("title").text() || "";
         const text = convert(html, {
           wordwrap: 130,
           selectors: [

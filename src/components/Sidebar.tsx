@@ -74,8 +74,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Compute live item counts based on leads, contacts, and personal
   const counts = React.useMemo(() => {
     const isCerere = (l: Lead) => isCerereLead(l);
-    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && (l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
-    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Noi' && l.status !== 'Pierdute' && l.status !== 'Sterse';
+    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && (l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
+    const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Noi' && l.status !== 'ListaMea' && l.status !== 'Pierdute' && l.status !== 'Sterse';
 
     return {
       leads: leads.filter(isLeadItem).length,

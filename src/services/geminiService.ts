@@ -156,6 +156,7 @@ export interface ExtractionResult {
   summary: string;
   presentationSections?: Record<string, Record<string, string>> | null;
   automationSource?: Record<string, any> | null;
+  originalTitle?: string;
   originalDescription?: string;
   text?: string;
 }

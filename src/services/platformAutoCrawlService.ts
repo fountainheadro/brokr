@@ -23,9 +23,8 @@ import {
 } from "../components/OlxLeadDrawer";
 import { hydrateEntityTimestamps } from "../core/crm/svc_crm-client";
 import { getApiAuthHeaders } from "../lib/apiAuth";
-import { automationSettingsService } from "./automationSettingsService";
-import { buildTitleFromAutomationRule } from "../utils/titleAutomationEngine";
 import { resolveAreaFromAd } from "../utils/zoneResolutionUtils";
+import { syncPublicShareSnapshotsBatch } from "./publicShareService";
 import type { Lead } from "./leadsService";
 
 export const SHARED_LEADS_COLLECTION = "platform_shared_leads";
@@ -292,6 +291,7 @@ export const platformAutoCrawlService = {
             }) as Lead;
           });
           callback(items);
+          void syncPublicShareSnapshotsBatch(items);
         },
         (err) => {
           console.warn("[platformAutoCrawlService] Shared leads listener error:", err);
@@ -541,16 +541,6 @@ export const platformAutoCrawlService = {
       }
     }
 
-    let titleRule = automationSettingsService.getCachedTitleRule();
-    try {
-      const platformRuleRecord = await automationSettingsService.fetchPlatformDefaultTitleRule();
-      if (platformRuleRecord?.titleRule) {
-        titleRule = platformRuleRecord.titleRule;
-      }
-    } catch {
-      // Fallback to cached default rule
-    }
-
     const res = await fetch("/api/crawl-olx-leads", {
       method: "POST",
       headers: authHeaders,
@@ -561,7 +551,6 @@ export const platformAutoCrawlService = {
         limit: config.scanLimit,
         minAgeHours: config.minAdAgeHours,
         maxAgeHours: config.maxAdAgeHours,
-        titleAutomationRule: titleRule,
       }),
     });
 
@@ -640,34 +629,37 @@ export const platformAutoCrawlService = {
       const propertyId = reservedIds[i] || `L${i + 1}`;
       const nowIso = new Date().toISOString();
 
-      let finalTitle = clampString(item.title, 500, "Anunț OLX");
+      const originalTitle = clampString(
+        item.extractedData?.olxMeta?.originalTitle || item.extractedData?.originalTitle || item.title,
+        500,
+        "Anunț OLX"
+      );
+      const originalDescription = clampString(
+        item.extractedData?.originalDescription || item.notes || "",
+        10000,
+        ""
+      );
+
       let finalExtractedData = item.extractedData || undefined;
-      const automationSource = finalExtractedData?.automationSource;
-      if (titleRule?.enabled && automationSource) {
-        const rebuilt = buildTitleFromAutomationRule(titleRule, {
-          ...automationSource,
-          propertyId,
-        });
-        if (rebuilt) {
-          const oldTitle = finalTitle;
-          finalTitle = clampString(rebuilt, 500, finalTitle);
-          if (finalExtractedData?.crmData?.descriere) {
-            const updatedDescriere = {
-              ...finalExtractedData.crmData.descriere,
-              titlu: finalTitle,
-            };
-            if (oldTitle && typeof updatedDescriere.continut === "string") {
-              updatedDescriere.continut = updatedDescriere.continut.replace(oldTitle, finalTitle);
-            }
-            finalExtractedData = {
-              ...finalExtractedData,
-              crmData: {
-                ...finalExtractedData.crmData,
-                descriere: updatedDescriere,
-              },
-            };
-          }
-        }
+      if (finalExtractedData) {
+        finalExtractedData = {
+          ...finalExtractedData,
+          originalTitle,
+          originalDescription,
+          markdownMarketing: originalDescription,
+          ...(finalExtractedData.crmData?.descriere
+            ? {
+                crmData: {
+                  ...finalExtractedData.crmData,
+                  descriere: {
+                    ...finalExtractedData.crmData.descriere,
+                    titlu: originalTitle,
+                    continut: originalDescription,
+                  },
+                },
+              }
+            : {}),
+        };
       }
 
       const safeImages = Array.isArray(item.images)
@@ -677,8 +669,8 @@ export const platformAutoCrawlService = {
       const resolvedZone = resolveAreaFromAd({
         rawZone: item.zone,
         city: finalExtractedData?.crmData?.detaliiGenerale?.localizare?.oras || "București",
-        title: finalExtractedData?.olxMeta?.originalTitle || item.title || finalTitle,
-        description: finalExtractedData?.originalDescription || item.notes || "",
+        title: originalTitle,
+        description: originalDescription,
         url: item.url,
       });
 
@@ -686,7 +678,7 @@ export const platformAutoCrawlService = {
         id: docId,
         propertyId,
         url: clampString(item.url, 2048),
-        title: finalTitle,
+        title: originalTitle,
         zone: clampString(resolvedZone, 200, "București"),
         price: clampString(item.price, 100, "N/A"),
         ownerName: clampString(item.ownerName, 200, "Proprietar OLX"),
@@ -697,7 +689,7 @@ export const platformAutoCrawlService = {
         leadType: clampString(item.leadType, 64, "Proprietar"),
         coverImage: item.coverImage ? clampString(item.coverImage, 2048) : safeImages[0] || undefined,
         images: safeImages,
-        notes: clampString(item.notes, 10000),
+        notes: originalDescription,
         extractedData: finalExtractedData,
         isSharedLead: true,
         source: "platform_auto_crawl",

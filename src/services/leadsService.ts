@@ -14,6 +14,7 @@ export { toCanonicalLeadStatus, toDisplayLeadStatus, type CanonicalLeadStatus };
 
 export type LeadStatus = 
   | 'Noi'
+  | 'ListaMea'
   | 'Pierdute'
   | 'Nevalidata' 
   | 'Calificata' 
@@ -35,6 +36,7 @@ export type LeadStatus =
 
 export const LEADS_STATUSES: LeadStatus[] = [
   'Noi',
+  'ListaMea',
   'Pierdute'
 ];
 
@@ -62,7 +64,7 @@ export const isCerereLead = (l?: { status?: string; title?: string; notes?: stri
   if (!l) return false;
   if (l.propertyId && (l.propertyId.startsWith('P') || l.propertyId.startsWith('L'))) return false;
   if (l.propertyId && (l.propertyId.startsWith('R') || l.propertyId.startsWith('C'))) return true;
-  if (l.status === 'Noi' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata') return false;
+  if (l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata') return false;
   if (l.title && l.title.toLowerCase().startsWith('cerere')) return true;
   if (l.status === 'AreInteres' || l.status === 'Calificare' || l.status === 'Matching') return true;
   if (l.notes && (l.notes.toLowerCase().includes('cerințe cerere') || l.notes.toLowerCase().includes('cerere:'))) return true;
@@ -71,6 +73,7 @@ export const isCerereLead = (l?: { status?: string; title?: string; notes?: stri
 
 export const mapStatus = (status: string): LeadStatus => {
   if (status === 'Lead-uri' || status === 'Intrata' || status === 'Nevalidate' || status === 'Nevalidata') return 'Noi';
+  if (status === 'Lista Mea' || status === 'ListaMea') return 'ListaMea';
   if (status === 'Publicare') return 'Noua';
   if (status === 'Cerere') return 'Noua';
   return (toDisplayLeadStatus(status) || status) as LeadStatus;
@@ -174,16 +177,16 @@ async function updateOrForkSharedLead(leadId: string, patch: Record<string, any>
 
 export const leadsService = {
   addLead: async (leadData: Omit<Lead, 'id' | 'createdAt' | 'updatedAt' | 'lastMovedAt'>) => {
+    const isCerere = isCerereLead(leadData);
+    const isProperty =
+      PROPRIETATI_STATUSES.includes(leadData.status) ||
+      leadData.status === 'Activa' ||
+      leadData.status === 'InNegociere' ||
+      leadData.status === 'Finalizata' ||
+      leadData.status === 'Arhiva';
+
     let propertyId = leadData.propertyId;
     if (!propertyId) {
-      const isCerere = isCerereLead(leadData);
-      const isProperty =
-        PROPRIETATI_STATUSES.includes(leadData.status) ||
-        leadData.status === 'Activa' ||
-        leadData.status === 'InNegociere' ||
-        leadData.status === 'Finalizata' ||
-        leadData.status === 'Arhiva';
-
       if (isCerere) {
         propertyId = await entityIdService.getNextId('cerere');
       } else if (isProperty) {
@@ -195,9 +198,10 @@ export const leadsService = {
 
     let finalTitle = leadData.title;
     let finalExtractedData = leadData.extractedData;
+    const shouldApplyTitleRule = isProperty || isCerere || leadData.status === 'ListaMea';
     const titleRule = automationSettingsService.getCachedTitleRule();
     const automationSource = (leadData.extractedData as any)?.automationSource;
-    if (titleRule?.enabled && automationSource && !isCerereLead(leadData)) {
+    if (shouldApplyTitleRule && titleRule?.enabled && automationSource) {
       const rebuilt = buildTitleFromAutomationRule(titleRule, {
         ...automationSource,
         propertyId,

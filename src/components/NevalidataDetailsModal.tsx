@@ -20,12 +20,14 @@ import {
   XCircle,
   RotateCcw,
   Plus,
-  ExternalLink
+  ExternalLink,
+  Bookmark
 } from "lucide-react";
 import { Lead } from "../services/leadsService";
 import { CATEGORIA_OPTIONS, ORAS_OPTIONS } from "../constants";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 
 interface NevalidataDetailsModalProps {
@@ -37,6 +39,7 @@ interface NevalidataDetailsModalProps {
   onConvertToCerere?: (leadId: string, updatedData: Partial<Lead>) => Promise<void>;
   onMarkAsLost?: (leadId: string) => Promise<void>;
   onReactivate?: (leadId: string) => Promise<void>;
+  onAddToMyList?: (leadId: string) => Promise<void>;
   onDeleteLead: (leadId: string) => Promise<void>;
   onSaveLead: (leadId: string, updatedData: Partial<Lead>) => Promise<void>;
 }
@@ -50,6 +53,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
   onConvertToCerere,
   onMarkAsLost,
   onReactivate,
+  onAddToMyList,
   onDeleteLead,
   onSaveLead
 }) => {
@@ -115,6 +119,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
 
   const handleShare = async () => {
     if (!publicShareUrl) return;
+    void publishPublicShareSnapshot(lead, { tenantId: tenant?.id, force: true });
     try {
       await navigator.clipboard.writeText(publicShareUrl);
       setCopiedShare(true);
@@ -244,6 +249,23 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
     } catch (e) {
       console.error(e);
       toast.error("Eroare la concretizarea în cerere!");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleAddToMyList = async () => {
+    setSaving(true);
+    try {
+      if (onAddToMyList) {
+        await onAddToMyList(lead.id!);
+      } else {
+        await onSaveLead(lead.id!, { status: 'ListaMea' });
+      }
+      onClose();
+    } catch (e) {
+      console.error(e);
+      toast.error("Eroare la adăugarea în Lista Mea!");
     } finally {
       setSaving(false);
     }
@@ -623,6 +645,19 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                 >
                   <Trash2 size={13} />
                   <span>Șterge</span>
+                </button>
+              )}
+
+              {lead.status !== 'ListaMea' && (
+                <button
+                  type="button"
+                  onClick={handleAddToMyList}
+                  disabled={saving}
+                  className="h-8 px-3 bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
+                  title="Mută leadul în Lista Mea"
+                >
+                  <Bookmark size={12} className="text-[#BE9662]" />
+                  <span>Adaugă în lista mea</span>
                 </button>
               )}
 
