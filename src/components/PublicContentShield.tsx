@@ -1,116 +1,103 @@
 import React, { useEffect, useState } from "react";
-import { ShieldAlert, EyeOff } from "lucide-react";
+import { ShieldAlert } from "lucide-react";
 
 interface PublicContentShieldProps {
   onLockChange?: (locked: boolean) => void;
 }
 
 /**
- * Active protection shield mounted STRICTLY on public shared property pages (isPublicShared=true).
- * - Blocks context menu, selection, copy/cut, drag, printing, and DevTools / capture shortcuts.
- * - Activates a privacy blur curtain on tab switch, window blur, or PrintScreen (never on mouseleave).
- * - Runs an active debugger trap and locks rendered canvas pixels whenever Inspect Element / DevTools is open.
+ * Invokes an ephemeral `debugger` statement via Function constructor so production
+ * minifiers cannot strip it and single-location "Never pause here" cannot bypass it.
+ * Falls back to a direct `debugger` statement if CSP disallows Function().
+ */
+function triggerEphemeralDebuggerTrap(): number {
+  const startedAt = performance.now();
+  try {
+    const trap = (() => {}).constructor("debugger");
+    trap();
+  } catch {
+    // eslint-disable-next-line no-debugger
+    debugger;
+  }
+  return performance.now() - startedAt;
+}
+
+/**
+ * Active protection shield mounted STRICTLY on external public shared pages (/share/:id, /p/:id).
+ * - Blocks right-click (contextmenu) everywhere on the page.
+ * - Blocks Inspect Element / DevTools keyboard shortcuts (F12, Ctrl/Cmd+Shift+I/J/C/K, Cmd+Opt+I/J/C/U, Ctrl/Cmd+U, Shift+F10).
+ * - Runs a continuous ephemeral debugger trap + DevTools detection that pauses DevTools and locks/hides page content while Inspect Element is open.
  */
 export const PublicContentShield: React.FC<PublicContentShieldProps> = ({ onLockChange }) => {
-  const [curtainReason, setCurtainReason] = useState<"blur" | "screenshot" | "devtools" | null>(null);
+  const [devToolsDetected, setDevToolsDetected] = useState(false);
 
   useEffect(() => {
-    onLockChange?.(curtainReason !== null);
-  }, [curtainReason, onLockChange]);
+    onLockChange?.(devToolsDetected);
+  }, [devToolsDetected, onLockChange]);
 
   useEffect(() => {
-    let screenshotTimeout: number | null = null;
+    let isDisposed = false;
+    let trapTimer: number | null = null;
+    let rafId: number | null = null;
+    let isCurrentlyLocked = false;
 
-    const triggerScreenshotCurtain = () => {
-      setCurtainReason("screenshot");
-      try {
-        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-          void navigator.clipboard.writeText("Conținut protejat - brokr.ro").catch(() => {});
-        }
-      } catch {
-        // Ignore clipboard errors when unpermitted
-      }
-      if (screenshotTimeout) window.clearTimeout(screenshotTimeout);
-      screenshotTimeout = window.setTimeout(() => {
-        setCurtainReason((prev) => (prev === "screenshot" ? null : prev));
-      }, 2600);
+    const updateLockedState = (locked: boolean) => {
+      if (isDisposed) return;
+      isCurrentlyLocked = locked;
+      setDevToolsDetected(locked);
     };
 
-    const preventDefault = (e: Event) => {
+    const blockContextMenu = (e: Event) => {
       e.preventDefault();
       e.stopPropagation();
+      if ("stopImmediatePropagation" in e && typeof (e as any).stopImmediatePropagation === "function") {
+        (e as any).stopImmediatePropagation();
+      }
+      return false;
+    };
+
+    const blockRightMouseDown = (e: MouseEvent) => {
+      if (e.button === 2 || e.buttons === 2) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
     };
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = (e.key || "").toLowerCase();
+      const code = (e.code || "").toLowerCase();
       const ctrlOrMeta = e.ctrlKey || e.metaKey;
 
-      // PrintScreen key detection
-      if (e.key === "PrintScreen" || e.code === "PrintScreen" || e.keyCode === 44) {
+      // Block keyboard-triggered context menu (ContextMenu key / Shift+F10)
+      if (key === "contextmenu" || (e.shiftKey && key === "f10")) {
         e.preventDefault();
         e.stopPropagation();
-        triggerScreenshotCurtain();
         return;
       }
 
-      // macOS screenshot shortcuts (Cmd+Shift+3/4/5)
-      if (e.metaKey && e.shiftKey && (key === "3" || key === "4" || key === "5" || key === "s")) {
-        e.preventDefault();
-        e.stopPropagation();
-        triggerScreenshotCurtain();
-        return;
-      }
-
-      // Windows Snipping Tool shortcut (Meta+Shift+S) or Ctrl+P / Ctrl+S / Ctrl+C / Ctrl+A / Ctrl+U
-      if (ctrlOrMeta && (key === "p" || key === "s" || key === "u" || key === "c" || key === "x" || key === "a")) {
-        e.preventDefault();
-        e.stopPropagation();
-        if (key === "p") {
-          triggerScreenshotCurtain();
-        }
-        return;
-      }
-
-      // DevTools shortcuts: F12, Ctrl/Cmd+Shift+I/J/C/K, Cmd+Option+I/J/C/U
-      if (
-        e.key === "F12" ||
+      // Block Inspect Element / DevTools & View Source shortcuts:
+      // F12, Ctrl/Cmd+Shift+I/J/C/K, Cmd+Option+I/J/C/K/U, Ctrl/Cmd+U
+      const isDevToolsShortcut =
+        key === "f12" ||
+        code === "f12" ||
         (ctrlOrMeta && e.shiftKey && (key === "i" || key === "j" || key === "c" || key === "k")) ||
-        (e.metaKey && e.altKey && (key === "i" || key === "j" || key === "c" || key === "u"))
-      ) {
+        (e.metaKey && e.altKey && (key === "i" || key === "j" || key === "c" || key === "k" || key === "u")) ||
+        (ctrlOrMeta && key === "u");
+
+      if (isDevToolsShortcut) {
         e.preventDefault();
         e.stopPropagation();
-        setCurtainReason("devtools");
+        if (typeof e.stopImmediatePropagation === "function") {
+          e.stopImmediatePropagation();
+        }
+        updateLockedState(true);
+        // Immediately fire trap on DevTools shortcut attempt
+        triggerEphemeralDebuggerTrap();
       }
     };
 
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === "PrintScreen" || e.code === "PrintScreen" || e.keyCode === 44) {
-        triggerScreenshotCurtain();
-      }
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.hidden || document.visibilityState === "hidden") {
-        setCurtainReason((prev) => (prev === "devtools" ? prev : "blur"));
-      } else {
-        setCurtainReason((prev) => (prev === "blur" ? null : prev));
-      }
-    };
-
-    const handleWindowBlur = () => {
-      setCurtainReason((prev) => (prev === "devtools" ? prev : "blur"));
-    };
-
-    const handleWindowFocus = () => {
-      setCurtainReason((prev) => (prev === "blur" ? null : prev));
-    };
-
-    const handleBeforePrint = (e: Event) => {
-      e.preventDefault();
-      triggerScreenshotCurtain();
-    };
-
-    // Detect docked DevTools safely ONLY when not embedded inside an iframe (to avoid iframe false positives)
+    // Detect docked DevTools ONLY when rendered as a standalone top-level desktop window
+    // (avoids iframe and mobile toolbar false positives).
     const isStandaloneWindow = (() => {
       try {
         return window.self === window.top;
@@ -119,109 +106,118 @@ export const PublicContentShield: React.FC<PublicContentShieldProps> = ({ onLock
       }
     })();
 
-    const runDevToolsCheckAndDebugTrap = () => {
-      let dockedOpen = false;
-      if (isStandaloneWindow) {
-        const widthDiff = window.outerWidth - window.innerWidth;
-        const heightDiff = window.outerHeight - window.innerHeight;
-        dockedOpen = widthDiff > 210 || heightDiff > 230;
-        if (dockedOpen) {
-          setCurtainReason("devtools");
-        }
+    const isDockedDevToolsOpen = (): boolean => {
+      if (!isStandaloneWindow) return false;
+      if (window.innerWidth < 640) return false;
+      const widthDiff = window.outerWidth - window.innerWidth;
+      const heightDiff = window.outerHeight - window.innerHeight;
+      return widthDiff > 220 || heightDiff > 240;
+    };
+
+    const runDebugTrapCheck = () => {
+      if (isDisposed) return;
+
+      const dockedOpen = isDockedDevToolsOpen();
+      if (dockedOpen && !isCurrentlyLocked) {
+        updateLockedState(true);
       }
 
-      // Active debug trap: harmless (~0ms) when DevTools is closed;
-      // pauses DevTools execution and locks the screen when Inspect Element is open.
-      const startedAt = performance.now();
-      // eslint-disable-next-line no-debugger
-      debugger;
-      const elapsedMs = performance.now() - startedAt;
+      const elapsedMs = triggerEphemeralDebuggerTrap();
+      const trapped = elapsedMs > 80;
 
-      if (elapsedMs > 80 || dockedOpen) {
-        setCurtainReason("devtools");
-      } else {
-        setCurtainReason((prev) => (prev === "devtools" ? null : prev));
+      if (trapped || dockedOpen) {
+        updateLockedState(true);
+      } else if (isCurrentlyLocked) {
+        updateLockedState(false);
+      }
+
+      // Tighter loop while DevTools is open to keep Inspect Element trapped;
+      // lightweight interval when DevTools is closed.
+      const nextDelayMs = trapped || dockedOpen ? 120 : 400;
+      trapTimer = window.setTimeout(() => {
+        if (!isDisposed) {
+          rafId = window.requestAnimationFrame(runDebugTrapCheck);
+        }
+      }, nextDelayMs);
+    };
+
+    const handleResize = () => {
+      if (isDockedDevToolsOpen()) {
+        updateLockedState(true);
+        triggerEphemeralDebuggerTrap();
       }
     };
 
-    const devToolsInterval = window.setInterval(runDevToolsCheckAndDebugTrap, 450);
-
-    document.addEventListener("contextmenu", preventDefault, true);
-    document.addEventListener("copy", preventDefault, true);
-    document.addEventListener("cut", preventDefault, true);
-    document.addEventListener("selectstart", preventDefault, true);
-    document.addEventListener("dragstart", preventDefault, true);
+    window.addEventListener("contextmenu", blockContextMenu, true);
+    document.addEventListener("contextmenu", blockContextMenu, true);
+    document.addEventListener("mousedown", blockRightMouseDown, true);
+    window.addEventListener("keydown", handleKeyDown, true);
     document.addEventListener("keydown", handleKeyDown, true);
-    document.addEventListener("keyup", handleKeyUp, true);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("blur", handleWindowBlur);
-    window.addEventListener("focus", handleWindowFocus);
-    window.addEventListener("beforeprint", handleBeforePrint);
+    window.addEventListener("resize", handleResize);
+
+    // Kick off debug trap immediately on mount
+    runDebugTrapCheck();
 
     return () => {
-      if (screenshotTimeout) window.clearTimeout(screenshotTimeout);
-      window.clearInterval(devToolsInterval);
-      document.removeEventListener("contextmenu", preventDefault, true);
-      document.removeEventListener("copy", preventDefault, true);
-      document.removeEventListener("cut", preventDefault, true);
-      document.removeEventListener("selectstart", preventDefault, true);
-      document.removeEventListener("dragstart", preventDefault, true);
+      isDisposed = true;
+      if (trapTimer !== null) window.clearTimeout(trapTimer);
+      if (rafId !== null) window.cancelAnimationFrame(rafId);
+      window.removeEventListener("contextmenu", blockContextMenu, true);
+      document.removeEventListener("contextmenu", blockContextMenu, true);
+      document.removeEventListener("mousedown", blockRightMouseDown, true);
+      window.removeEventListener("keydown", handleKeyDown, true);
       document.removeEventListener("keydown", handleKeyDown, true);
-      document.removeEventListener("keyup", handleKeyUp, true);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("blur", handleWindowBlur);
-      window.removeEventListener("focus", handleWindowFocus);
-      window.removeEventListener("beforeprint", handleBeforePrint);
+      window.removeEventListener("resize", handleResize);
     };
   }, []);
 
-  if (!curtainReason) return null;
+  if (!devToolsDetected) return null;
 
   return (
     <div
-      className="fixed inset-0 z-[100] bg-[#051D35]/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center text-white select-none"
-      onContextMenu={(e) => e.preventDefault()}
+      className="fixed inset-0 z-[9999] bg-[#051D35]/95 backdrop-blur-xl flex flex-col items-center justify-center p-6 text-center text-white select-none"
+      onContextMenu={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
     >
       <div className="w-14 h-14 rounded-2xl bg-white/10 border border-[#BE9662]/40 flex items-center justify-center mb-4">
-        {curtainReason === "devtools" ? (
-          <ShieldAlert size={28} className="text-[#BE9662]" />
-        ) : (
-          <EyeOff size={28} className="text-[#BE9662]" />
-        )}
+        <ShieldAlert size={28} className="text-[#BE9662]" />
       </div>
 
       <h2 className="font-title text-base font-semibold text-white mb-2">
-        {curtainReason === "devtools"
-          ? "Acces restricționat (Inspector detectat)"
-          : curtainReason === "screenshot"
-          ? "Captură de ecran / tipărire blocată"
-          : "Prezentare protejată"}
+        Acces restricționat (Inspector detectat)
       </h2>
 
       <p className="text-xs text-gray-300 max-w-md leading-relaxed">
-        {curtainReason === "devtools"
-          ? "Pentru protejarea datelor și a fotografiilor proprietății, utilizarea instrumentelor de inspectare nu este permisă pe linkurile publice. Închideți Inspectorul pentru a continua."
-          : curtainReason === "screenshot"
-          ? "Copierea, tipărirea sau salvarea fotografiilor și a conținutului sunt restricționate pe această pagină."
-          : "Conținutul a fost ascuns temporar cât timp fereastra nu este activă. Reveniți în pagină pentru a vizualiza proprietatea."}
+        Pentru protejarea datelor și a fotografiilor proprietății, utilizarea funcției Inspect Element / Developer Tools este blocată pe această pagină. Închideți Inspectorul pentru a continua.
       </p>
 
-      {curtainReason === "devtools" && (
-        <button
-          type="button"
-          onClick={() => {
-            const t0 = performance.now();
-            // eslint-disable-next-line no-debugger
-            debugger;
-            if (performance.now() - t0 <= 80) {
-              setCurtainReason(null);
-            }
-          }}
-          className="mt-5 px-4 py-2 rounded-lg bg-[#BE9662] hover:bg-[#a8824f] text-white text-xs font-semibold transition-colors cursor-pointer"
-        >
-          Am închis inspectorul
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={() => {
+          const elapsed = triggerEphemeralDebuggerTrap();
+          const widthDiff = window.outerWidth - window.innerWidth;
+          const heightDiff = window.outerHeight - window.innerHeight;
+          let standalone = false;
+          try {
+            standalone = window.self === window.top;
+          } catch {
+            standalone = false;
+          }
+          const docked =
+            standalone &&
+            window.innerWidth >= 640 &&
+            (widthDiff > 220 || heightDiff > 240);
+
+          if (elapsed <= 80 && !docked) {
+            setDevToolsDetected(false);
+          }
+        }}
+        className="mt-5 px-4 py-2 rounded-lg bg-[#BE9662] hover:bg-[#a8824f] text-white text-xs font-semibold transition-colors cursor-pointer"
+      >
+        Am închis inspectorul
+      </button>
     </div>
   );
 };

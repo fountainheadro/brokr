@@ -1,9 +1,11 @@
 import { doc, runTransaction } from 'firebase/firestore';
 import { auth, db } from '../lib/firebase';
 import { crmApiClient } from '../core/crm/svc_crm-client';
+import { formatDailyLeadId, getDailyLeadDateKey } from '../utils/leadIdUtils';
 
 export type EntityType =
   | 'lead'
+  | 'daily_lead'
   | 'request'
   | 'cerere'
   | 'property'
@@ -70,10 +72,13 @@ export const entityIdService = {
    * Generates the next sequential ID starting at 1 and incrementing +1
    * (`L1`, `P1`, `R1`, `C1`, `S1`, `D1`, `A1`, ...), isolated strictly per verified agency tenant
    * via `/api/crm/counters/next-id` -> `/tenants/{tenantId}/counters/entities`.
+   * For `daily_lead`, generates `YYYY-MM-DD-N` resetting to 1 each day.
    */
   getNextId: async (type: EntityType): Promise<string> => {
+    const isDaily = type === 'daily_lead';
+    const dateKey = isDaily ? getDailyLeadDateKey() : '';
     const prefix = PREFIX_MAP[type] || 'X';
-    const key = normalizeCounterKey(type);
+    const key = isDaily ? `daily_lead_${dateKey}` : normalizeCounterKey(type);
     try {
       return await crmApiClient.getNextId(type);
     } catch (error) {
@@ -101,7 +106,7 @@ export const entityIdService = {
             );
             return next;
           });
-          return `${prefix}${nextNum}`;
+          return isDaily ? formatDailyLeadId(dateKey, nextNum) : `${prefix}${nextNum}`;
         } catch (fsErr) {
           console.warn(
             `[entityIdService] Firestore counter fallback failed for ${type}:`,
@@ -110,7 +115,7 @@ export const entityIdService = {
         }
       }
       const nextNum = nextLocalSequentialNumber(key);
-      return `${prefix}${nextNum}`;
+      return isDaily ? formatDailyLeadId(dateKey, nextNum) : `${prefix}${nextNum}`;
     }
   },
 };

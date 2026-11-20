@@ -9,6 +9,7 @@ import {
 import { automationSettingsService } from './automationSettingsService';
 import { buildTitleFromAutomationRule } from '../utils/titleAutomationEngine';
 import { platformAutoCrawlService, normalizeCrawlUrl } from './platformAutoCrawlService';
+import { isAgencyLeadId, isDailyLeadId } from '../utils/leadIdUtils';
 
 export { toCanonicalLeadStatus, toDisplayLeadStatus, type CanonicalLeadStatus };
 
@@ -62,7 +63,7 @@ export const CERERI_STATUSES: LeadStatus[] = [
 
 export const isCerereLead = (l?: { status?: string; title?: string; notes?: string; propertyId?: string } | null): boolean => {
   if (!l) return false;
-  if (l.propertyId && (l.propertyId.startsWith('P') || l.propertyId.startsWith('L'))) return false;
+  if (l.propertyId && (l.propertyId.startsWith('P') || l.propertyId.startsWith('L') || isDailyLeadId(l.propertyId))) return false;
   if (l.propertyId && (l.propertyId.startsWith('R') || l.propertyId.startsWith('C'))) return true;
   if (l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata') return false;
   if (l.title && l.title.toLowerCase().startsWith('cerere')) return true;
@@ -141,6 +142,7 @@ export interface Lead {
   agentUid?: string;
   isSharedLead?: boolean;
   sharedLeadId?: string;
+  sourcePropertyId?: string;
   source?: string;
   createdAt: any;
   updatedAt: any;
@@ -158,23 +160,38 @@ function getLeadTimeMs(lead: Lead): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-async function updateOrForkSharedLead(leadId: string, patch: Record<string, any>): Promise<void> {
+async function updateOrForkSharedLead(leadId: string, patch: Record<string, any>): Promise<Lead> {
   try {
-    await crmApiClient.update<Lead>(LEADS_COLLECTION, leadId, patch);
+    return await crmApiClient.update<Lead>(LEADS_COLLECTION, leadId, patch);
   } catch (err: any) {
     // If this is a shared platform lead not yet copied into this agency's tenant store,
-    // create an agency-local copy preserving the same ID so other agencies stay unaffected.
+    // create an agency-local copy in the current agency database so other agencies stay unaffected.
     const shared = await platformAutoCrawlService.getSharedLeadById(leadId);
     if (!shared) {
       throw err;
     }
     const { isSharedLead: _ignored, ...rest } = shared;
-    await crmApiClient.create<Lead>(LEADS_COLLECTION, {
+    const forkPayload: Record<string, any> = {
       ...rest,
       ...patch,
       id: leadId,
       sharedLeadId: shared.id || leadId,
-    });
+      isSharedLead: false,
+    };
+
+    const targetStatus = forkPayload.status;
+    if (
+      (targetStatus === 'ListaMea' || targetStatus === 'Pierdute') &&
+      !isAgencyLeadId(forkPayload.propertyId)
+    ) {
+      if (shared.propertyId && !forkPayload.sourcePropertyId) {
+        forkPayload.sourcePropertyId = shared.propertyId;
+      }
+      // Clear daily/non-agency propertyId so the agency tenant store assigns a unique agency #L123 ID.
+      delete forkPayload.propertyId;
+    }
+
+    return await crmApiClient.create<Lead>(LEADS_COLLECTION, forkPayload);
   }
 }
 
@@ -194,8 +211,10 @@ export const leadsService = {
         propertyId = await entityIdService.getNextId('cerere');
       } else if (isProperty) {
         propertyId = await entityIdService.getNextId('property');
-      } else {
+      } else if (leadData.status === 'ListaMea' || leadData.status === 'Pierdute') {
         propertyId = await entityIdService.getNextId('lead');
+      } else {
+        propertyId = await entityIdService.getNextId('daily_lead');
       }
     }
 
@@ -240,15 +259,15 @@ export const leadsService = {
   },
 
   updateLeadStatus: async (leadId: string, newStatus: LeadStatus) => {
-    await updateOrForkSharedLead(leadId, { status: newStatus });
+    return await updateOrForkSharedLead(leadId, { status: newStatus });
   },
 
   updateLeadData: async (leadId: string, data: Partial<Lead>) => {
-    await updateOrForkSharedLead(leadId, data);
+    return await updateOrForkSharedLead(leadId, data);
   },
 
   updateNestedField: async (leadId: string, fieldPath: string, value: any) => {
-    await updateOrForkSharedLead(leadId, { [fieldPath]: value });
+    return await updateOrForkSharedLead(leadId, { [fieldPath]: value });
   },
 
   subscribeToLeads: (callback: (leads: Lead[]) => void) => {

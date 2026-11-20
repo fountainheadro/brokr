@@ -1292,7 +1292,7 @@ Returnează un JSON strict cu următoarele chei:
 
     const preferredTenantId = options?.preferredTenantId || null;
     const candidates = buildShareLookupCandidates(cleanId);
-    const isGlobalLeadCode = /^L\d+$/i.test(cleanId);
+    const isGlobalLeadCode = /^L\d+$/i.test(cleanId) || /^\d{4}-\d{2}-\d{2}-\d+$/.test(cleanId);
 
     const parseFirestoreDoc = (docObj: any, fallbackId: string): Record<string, any> => {
       const parseValue = (fieldObj: any): any => {

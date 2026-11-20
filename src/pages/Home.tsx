@@ -34,6 +34,7 @@ import { toast } from "react-hot-toast";
 import { generateStandardAdTitle } from "../utils/propertyTitleGenerator";
 import { automationSettingsService } from "../services/automationSettingsService";
 import { applyLeadTitleAndDescriptionRules } from "../utils/applyLeadContentRules";
+import { isAgencyLeadId, isDailyLeadId } from "../utils/leadIdUtils";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { 
   DetaliiGeneraleSection, 
@@ -1731,7 +1732,7 @@ export const Home: React.FC = () => {
       // Update local state first for immediate feedback
       setSelectedLead(prev => prev ? { ...prev, status: newStatus } : null);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: newStatus } : l));
-      await leadsService.updateLeadData(leadId, {
+      const persisted = await leadsService.updateLeadData(leadId, {
         ownerName: editedName,
         ownerPhone: editedPhone,
         propertyId: editedPropertyId,
@@ -1742,6 +1743,11 @@ export const Home: React.FC = () => {
         status: newStatus,
         lastMovedAt: new Date()
       });
+      if (persisted?.propertyId && persisted.propertyId !== editedPropertyId) {
+        setEditedPropertyId(persisted.propertyId);
+        setSelectedLead(prev => prev && prev.id === leadId ? { ...prev, ...persisted, status: newStatus } : prev);
+        setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...persisted, status: newStatus } : l));
+      }
     } catch (error) {
       console.error("Failed to update status:", error);
     }
@@ -1765,8 +1771,14 @@ export const Home: React.FC = () => {
 
   const handleSaveNevalidatLead = async (leadId: string, updatedData: Partial<Lead>) => {
     try {
-      await leadsService.updateLeadData(leadId, updatedData);
-      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...updatedData } : l));
+      const persisted = await leadsService.updateLeadData(leadId, updatedData);
+      const mergedPatch: Partial<Lead> = {
+        ...updatedData,
+        ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
+        ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
+        ...(persisted?.isSharedLead === false ? { isSharedLead: false } : {}),
+      };
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPatch } : l));
     } catch (e) {
       console.error("Failed to save nevalidat lead:", e);
       throw e;
@@ -1856,11 +1868,31 @@ export const Home: React.FC = () => {
       };
       const leadObj = leads.find(l => l.id === leadId) || (selectedLead?.id === leadId ? selectedLead : undefined);
       if (!leadObj) {
-        await leadsService.updateLeadData(leadId, { status: 'ListaMea', ...agentAttribution });
-        setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'ListaMea', ...agentAttribution } : l));
-        toast.success("Leadul a fost adăugat în Selectate.");
+        const persisted = await leadsService.updateLeadData(leadId, { status: 'ListaMea', ...agentAttribution });
+        const fallbackPatch: Partial<Lead> = {
+          status: 'ListaMea',
+          ...agentAttribution,
+          isSharedLead: false,
+          ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
+          ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
+        };
+        setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...fallbackPatch } : l));
+        setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...fallbackPatch } : prev);
+        toast.success(
+          persisted?.propertyId
+            ? `Leadul a fost adăugat în Selectate (#${persisted.propertyId}).`
+            : "Leadul a fost adăugat în Selectate."
+        );
         return;
       }
+
+      const agencyLeadId = isAgencyLeadId(leadObj.propertyId)
+        ? leadObj.propertyId!
+        : await entityIdService.getNextId('lead');
+      const sourcePropertyId =
+        isDailyLeadId(leadObj.propertyId)
+          ? leadObj.propertyId
+          : leadObj.sourcePropertyId;
 
       const {
         formattedTitle,
@@ -1869,11 +1901,14 @@ export const Home: React.FC = () => {
       } = await applyLeadTitleAndDescriptionRules({
         lead: leadObj,
         targetKind: "my_list",
-        propertyId: leadObj.propertyId,
+        propertyId: agencyLeadId,
       });
 
       const finalPayload: Partial<Lead> = {
         ...agentAttribution,
+        propertyId: agencyLeadId,
+        ...(sourcePropertyId ? { sourcePropertyId } : {}),
+        isSharedLead: false,
         status: 'ListaMea' as LeadStatus,
         title: formattedTitle,
         notes: formattedDescription,
@@ -1881,10 +1916,15 @@ export const Home: React.FC = () => {
         lastMovedAt: new Date(),
       };
 
-      await leadsService.updateLeadData(leadId, finalPayload);
-      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
-      setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...finalPayload } : prev);
-      toast.success("Leadul a fost adăugat în Selectate cu titlul și descrierea formatate!");
+      const persisted = await leadsService.updateLeadData(leadId, finalPayload);
+      const resolvedPropertyId = persisted?.propertyId || agencyLeadId;
+      const mergedPayload: Partial<Lead> = {
+        ...finalPayload,
+        propertyId: resolvedPropertyId,
+      };
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPayload } : l));
+      setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...mergedPayload } : prev);
+      toast.success(`Leadul a fost adăugat în Selectate (#${resolvedPropertyId}) cu titlul și descrierea formatate!`);
     } catch (e) {
       console.error("Failed to add lead to Selectate:", e);
       toast.error("Eroare la adăugarea în Selectate!");
@@ -1897,8 +1937,19 @@ export const Home: React.FC = () => {
       const leadObj = leads.find(l => l.id === leadId) || (selectedLead?.id === leadId ? selectedLead : undefined);
       const shouldStampCurrentAgent =
         !leadObj || leadObj.status !== 'ListaMea' || !hasRealLeadAgent(leadObj);
+      const agencyLeadId = isAgencyLeadId(leadObj?.propertyId)
+        ? leadObj!.propertyId!
+        : await entityIdService.getNextId('lead');
+      const sourcePropertyId =
+        isDailyLeadId(leadObj?.propertyId)
+          ? leadObj!.propertyId
+          : leadObj?.sourcePropertyId;
+
       const lostPayload: Partial<Lead> = {
         status: 'Pierdute' as LeadStatus,
+        propertyId: agencyLeadId,
+        ...(sourcePropertyId ? { sourcePropertyId } : {}),
+        isSharedLead: false,
         ...(shouldStampCurrentAgent
           ? {
               agent: currentAgentIdentity.name,
@@ -1910,10 +1961,15 @@ export const Home: React.FC = () => {
             }
           : {}),
       };
-      await leadsService.updateLeadData(leadId, lostPayload);
-      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...lostPayload } : l));
-      setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...lostPayload } : prev);
-      toast.success("Leadul a fost marcat ca Pierdut.");
+      const persisted = await leadsService.updateLeadData(leadId, lostPayload);
+      const resolvedPropertyId = persisted?.propertyId || agencyLeadId;
+      const mergedPayload: Partial<Lead> = {
+        ...lostPayload,
+        propertyId: resolvedPropertyId,
+      };
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPayload } : l));
+      setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...mergedPayload } : prev);
+      toast.success(`Leadul a fost marcat ca Pierdut (#${resolvedPropertyId}).`);
     } catch (e) {
       console.error("Failed to mark lead as lost:", e);
       toast.error("Eroare la mutarea în Pierdute!");
@@ -1962,7 +2018,7 @@ export const Home: React.FC = () => {
     try {
       const leadObj = leads.find(l => l.id === leadId);
       let newPropId = leadObj?.propertyId;
-      if (!newPropId || newPropId.startsWith('L')) {
+      if (!newPropId || newPropId.startsWith('L') || isDailyLeadId(newPropId)) {
         newPropId = await entityIdService.getNextId('property');
       }
 

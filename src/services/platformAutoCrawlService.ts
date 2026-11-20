@@ -25,6 +25,12 @@ import { hydrateEntityTimestamps } from "../core/crm/svc_crm-client";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { resolveAreaFromAd } from "../utils/zoneResolutionUtils";
 import { syncPublicShareSnapshotsBatch } from "./publicShareService";
+import {
+  formatDailyLeadId,
+  getDailyLeadDateKey,
+  getMaxDailyLeadSequenceForDate,
+  isDailyLeadId,
+} from "../utils/leadIdUtils";
 import type { Lead } from "./leadsService";
 
 export const SHARED_LEADS_COLLECTION = "platform_shared_leads";
@@ -148,25 +154,19 @@ function buildSharedLeadDocId(url: string, index: number): string {
   return `shl_${Date.now()}_${hash.toString(36)}_${index}`;
 }
 
-function isValidSequentialLeadId(value: unknown): boolean {
-  return typeof value === "string" && /^L\d+$/i.test(value.trim());
-}
-
-function extractNumericLeadNumber(value: unknown): number {
-  if (typeof value !== "string") return 0;
-  const m = value.trim().match(/^L(\d+)$/i);
-  if (!m) return 0;
-  const n = parseInt(m[1], 10);
-  return Number.isFinite(n) && n > 0 ? n : 0;
-}
-
-function getMaxNumericSharedLeadNumber(leads: Array<{ propertyId?: string }>): number {
-  let maxNum = 0;
-  for (const lead of leads) {
-    const n = extractNumericLeadNumber(lead.propertyId);
-    if (n > maxNum) maxNum = n;
+function extractDateKeyFromLeadRecord(data: Record<string, any>): string {
+  const raw = data?.createdAt || data?.updatedAt;
+  if (raw && typeof raw?.toDate === "function") {
+    try {
+      return getDailyLeadDateKey(raw.toDate());
+    } catch {
+      return getDailyLeadDateKey();
+    }
   }
-  return maxNum;
+  if (typeof raw === "string" || typeof raw === "number") {
+    return getDailyLeadDateKey(raw);
+  }
+  return getDailyLeadDateKey();
 }
 
 function replaceEmbeddedPropertyId(
@@ -376,11 +376,14 @@ export const platformAutoCrawlService = {
           await batch.commit();
         }
       }
-      // Reset sequential shared-lead counter so new crawls start cleanly from L1
+      // Reset daily shared-lead counters so new crawls start cleanly from YYYY-MM-DD-1
       await setDoc(
         doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID),
         {
           lead: 0,
+          dailyCounters: {},
+          lastDailyDate: "",
+          lastDailyCount: 0,
           updatedBy: auth.currentUser?.email || "super_admin",
           updatedAt: new Date().toISOString(),
         },
@@ -394,22 +397,25 @@ export const platformAutoCrawlService = {
   },
 
   /**
-   * Atomically reserves `count` sequential lead IDs (`L1`, `L2`, `L3`, ...)
-   * in Firestore under `platform_auto_crawl/counters`.
+   * Atomically reserves `count` daily incremental lead IDs (`YYYY-MM-DD-1`, `YYYY-MM-DD-2`, ...)
+   * in Firestore under `platform_auto_crawl/counters`, resetting cleanly to `1` each day.
    */
-  async reserveSequentialLeadIds(
+  async reserveDailySharedLeadIds(
     count: number,
-    fallbackExistingLeads: Lead[] = []
+    fallbackExistingLeads: Lead[] = [],
+    explicitDateKey?: string
   ): Promise<string[]> {
     if (count <= 0) return [];
+    const dateKey = explicitDateKey || getDailyLeadDateKey();
     const counterRef = doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID);
 
-    // Inspect live collection max so counter is never behind existing L<N> docs
-    let liveMax = getMaxNumericSharedLeadNumber(fallbackExistingLeads);
+    // Inspect live collection max for today so counter is never behind existing YYYY-MM-DD-N docs
+    let liveMax = getMaxDailyLeadSequenceForDate(fallbackExistingLeads, dateKey);
     try {
       const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
-      const snapMax = getMaxNumericSharedLeadNumber(
-        snap.docs.map((d) => d.data() as { propertyId?: string })
+      const snapMax = getMaxDailyLeadSequenceForDate(
+        snap.docs.map((d) => d.data() as { propertyId?: string }),
+        dateKey
       );
       if (snapMax > liveMax) liveMax = snapMax;
     } catch {
@@ -418,16 +424,26 @@ export const platformAutoCrawlService = {
 
     const startNum = await runTransaction(db, async (tx) => {
       const counterSnap = await tx.get(counterRef);
+      const counterData = counterSnap.exists() ? (counterSnap.data() as Record<string, any>) : {};
+      const existingDailyCounters: Record<string, number> =
+        counterData?.dailyCounters && typeof counterData.dailyCounters === "object"
+          ? { ...counterData.dailyCounters }
+          : {};
       const storedVal =
-        counterSnap.exists() && typeof counterSnap.data()?.lead === "number"
-          ? Math.max(0, Math.floor(counterSnap.data().lead))
+        typeof existingDailyCounters[dateKey] === "number" &&
+        Number.isFinite(existingDailyCounters[dateKey])
+          ? Math.max(0, Math.floor(existingDailyCounters[dateKey]))
           : 0;
       const base = Math.max(storedVal, liveMax);
       const nextEnd = base + count;
+      existingDailyCounters[dateKey] = nextEnd;
+
       tx.set(
         counterRef,
         {
-          lead: nextEnd,
+          dailyCounters: existingDailyCounters,
+          lastDailyDate: dateKey,
+          lastDailyCount: nextEnd,
           updatedBy: auth.currentUser?.email || "super_admin",
           updatedAt: new Date().toISOString(),
         },
@@ -438,14 +454,14 @@ export const platformAutoCrawlService = {
 
     const ids: string[] = [];
     for (let i = 0; i < count; i++) {
-      ids.push(`L${startNum + i}`);
+      ids.push(formatDailyLeadId(dateKey, startNum + i));
     }
     return ids;
   },
 
   /**
-   * Repairs any previously imported shared leads that received non-sequential IDs
-   * (e.g., `L-L7KSG` from OLX slugs) into clean sequential `L1`, `L2`, `L3`, ...
+   * Repairs any previously imported shared leads that do not use the daily `YYYY-MM-DD-N` format
+   * (e.g., legacy `L1` or `L-L7KSG` slugs) into clean daily incremental IDs grouped by creation day.
    */
   async normalizeLegacySharedLeadIds(): Promise<number> {
     if (!auth.currentUser) return 0;
@@ -460,7 +476,7 @@ export const platformAutoCrawlService = {
       }));
 
       const broken = allDocs
-        .filter((entry) => !isValidSequentialLeadId(entry.data.propertyId))
+        .filter((entry) => !isDailyLeadId(entry.data.propertyId))
         .sort((a, b) => {
           const ta = Date.parse(String(a.data.createdAt || "")) || 0;
           const tb = Date.parse(String(b.data.createdAt || "")) || 0;
@@ -469,14 +485,19 @@ export const platformAutoCrawlService = {
 
       if (broken.length === 0) return 0;
 
-      let nextNum = getMaxNumericSharedLeadNumber(
-        allDocs.map((entry) => ({ propertyId: entry.data.propertyId }))
-      );
+      const maxByDate = new Map<string, number>();
+      const allPropertyRecords = allDocs.map((entry) => ({ propertyId: entry.data.propertyId }));
 
       let updatedCount = 0;
       for (const entry of broken) {
-        nextNum += 1;
-        const newPropId = `L${nextNum}`;
+        const dateKey = extractDateKeyFromLeadRecord(entry.data);
+        if (!maxByDate.has(dateKey)) {
+          maxByDate.set(dateKey, getMaxDailyLeadSequenceForDate(allPropertyRecords, dateKey));
+        }
+        const nextSeq = (maxByDate.get(dateKey) || 0) + 1;
+        maxByDate.set(dateKey, nextSeq);
+
+        const newPropId = formatDailyLeadId(dateKey, nextSeq);
         const oldPropId = typeof entry.data.propertyId === "string" ? entry.data.propertyId : "";
         const updatedDoc = replaceEmbeddedPropertyId(
           {
@@ -491,25 +512,39 @@ export const platformAutoCrawlService = {
         updatedCount += 1;
       }
 
-      const counterRef = doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID);
-      await runTransaction(db, async (tx) => {
-        const counterSnap = await tx.get(counterRef);
-        const storedVal =
-          counterSnap.exists() && typeof counterSnap.data()?.lead === "number"
-            ? Math.max(0, Math.floor(counterSnap.data().lead))
-            : 0;
-        if (nextNum > storedVal) {
-          tx.set(
-            counterRef,
-            {
-              lead: nextNum,
-              updatedBy: auth.currentUser?.email || "super_admin",
-              updatedAt: new Date().toISOString(),
-            },
-            { merge: true }
-          );
-        }
-      });
+      if (maxByDate.size > 0) {
+        const counterRef = doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID);
+        await runTransaction(db, async (tx) => {
+          const counterSnap = await tx.get(counterRef);
+          const counterData = counterSnap.exists() ? (counterSnap.data() as Record<string, any>) : {};
+          const existingDailyCounters: Record<string, number> =
+            counterData?.dailyCounters && typeof counterData.dailyCounters === "object"
+              ? { ...counterData.dailyCounters }
+              : {};
+          let changed = false;
+          for (const [dateKey, maxSeq] of maxByDate.entries()) {
+            const storedVal =
+              typeof existingDailyCounters[dateKey] === "number"
+                ? Math.max(0, Math.floor(existingDailyCounters[dateKey]))
+                : 0;
+            if (maxSeq > storedVal) {
+              existingDailyCounters[dateKey] = maxSeq;
+              changed = true;
+            }
+          }
+          if (changed) {
+            tx.set(
+              counterRef,
+              {
+                dailyCounters: existingDailyCounters,
+                updatedBy: auth.currentUser?.email || "super_admin",
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            );
+          }
+        });
+      }
 
       return updatedCount;
     } catch (err) {
@@ -621,12 +656,17 @@ export const platformAutoCrawlService = {
       itemsToSave.push({ item, idx, normUrl, slugId });
     }
 
-    const reservedIds = await this.reserveSequentialLeadIds(itemsToSave.length, existingLeads);
+    const todayDateKey = getDailyLeadDateKey();
+    const reservedIds = await this.reserveDailySharedLeadIds(
+      itemsToSave.length,
+      existingLeads,
+      todayDateKey
+    );
 
     for (let i = 0; i < itemsToSave.length; i++) {
       const { item, idx } = itemsToSave[i];
       const docId = buildSharedLeadDocId(String(item.url || ""), idx);
-      const propertyId = reservedIds[i] || `L${i + 1}`;
+      const propertyId = reservedIds[i] || formatDailyLeadId(todayDateKey, i + 1);
       const nowIso = new Date().toISOString();
 
       const originalTitle = clampString(

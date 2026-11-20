@@ -3,6 +3,7 @@ import {
   extractRootDomainFromHost,
 } from "../core/tenancy/svc_tenant-resolution";
 import { DEFAULT_DEV_TENANT } from "../core/tenancy/typ_tenant-context";
+import { isDailyLeadId } from "./leadIdUtils";
 
 export type ShareEntityKind = "lead" | "property" | "cerere";
 
@@ -152,7 +153,7 @@ export function getCurrentAgencySubdomain(
 
 function isCerereShareTarget(target: ShareTargetInput): boolean {
   const code = String(target.propertyId || "").trim().toUpperCase();
-  if (code.startsWith("P") || code.startsWith("L")) return false;
+  if (code.startsWith("P") || code.startsWith("L") || isDailyLeadId(code)) return false;
   if (code.startsWith("R") || code.startsWith("C")) return true;
 
   const status = String(target.status || "");
@@ -186,7 +187,7 @@ export function detectShareEntityKind(
 
   if (typeof target === "string") {
     const upper = target.trim().toUpperCase();
-    if (/^L\d+$/i.test(upper)) return "lead";
+    if (/^L\d+$/i.test(upper) || isDailyLeadId(upper)) return "lead";
     if (/^(?:C|R)\d+$/i.test(upper)) return "cerere";
     if (/^P\d+$/i.test(upper)) return "property";
     return "property";
@@ -217,7 +218,7 @@ export function detectShareEntityKind(
     return "property";
   }
 
-  if (code.startsWith("L")) {
+  if (code.startsWith("L") || isDailyLeadId(code)) {
     return "lead";
   }
 

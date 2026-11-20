@@ -634,7 +634,7 @@ export const PgPlatformAutoCrawl: React.FC = () => {
                             <div className="flex items-center gap-2 flex-wrap">
                               {lead.propertyId && (
                                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#051D35]/10 text-[#051D35] tabular-nums">
-                                  {lead.propertyId}
+                                  #{lead.propertyId}
                                 </span>
                               )}
                               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-[#8A6736] border border-amber-200/70">

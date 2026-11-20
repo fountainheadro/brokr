@@ -7,6 +7,13 @@ import {
   toDisplayLeadStatus,
   toDisplayStaffStatus,
 } from "./svc_crm-normalizer";
+import {
+  formatDailyLeadId,
+  getDailyLeadDateKey,
+  getMaxDailyLeadSequenceForDate,
+  isAgencyLeadId,
+  isDailyLeadId,
+} from "../../utils/leadIdUtils";
 
 export const CRM_TENANT_COLLECTIONS = [
   "leads",
@@ -25,6 +32,7 @@ export type CrmTenantCollection = (typeof CRM_TENANT_COLLECTIONS)[number];
 
 export type CrmEntityType =
   | "lead"
+  | "daily_lead"
   | "request"
   | "cerere"
   | "property"
@@ -78,7 +86,12 @@ function normalizeCounterKey(type: CrmEntityType): string {
 
 function isCererePayload(l: Record<string, any>): boolean {
   if (!l) return false;
-  if (l.propertyId && (String(l.propertyId).startsWith("P") || String(l.propertyId).startsWith("L"))) {
+  if (
+    l.propertyId &&
+    (String(l.propertyId).startsWith("P") ||
+      String(l.propertyId).startsWith("L") ||
+      isDailyLeadId(l.propertyId))
+  ) {
     return false;
   }
   if (l.propertyId && String(l.propertyId).startsWith("R")) return true;
@@ -198,8 +211,15 @@ export class CrmTenantStoreService {
 
   private static async computeMaxExistingNumber(
     tenantId: string,
-    type: CrmEntityType
+    type: CrmEntityType,
+    dateKey?: string
   ): Promise<number> {
+    if (type === "daily_lead") {
+      const targetDate = dateKey || getDailyLeadDateKey();
+      const allLeads = await this.list(tenantId, "leads");
+      return getMaxDailyLeadSequenceForDate(allLeads, targetDate);
+    }
+
     const key = normalizeCounterKey(type);
     const prefix = PREFIX_MAP[type] || "X";
     let regex = new RegExp(`^${prefix}(\\d+)$`, "i");
@@ -244,10 +264,13 @@ export class CrmTenantStoreService {
   /**
    * Generates an isolated sequential entity ID strictly within `/tenants/{tenantId}/counters/entities`.
    * Agency A and Agency B maintain independent P/R/L/C/S/D/A numbering sequences.
+   * For `daily_lead`, generates `YYYY-MM-DD-N` resetting to 1 each day.
    */
   public static async getNextEntityId(tenantId: string, type: CrmEntityType): Promise<string> {
     const safeTenant = assertSafePathSegment(tenantId, "tenantId");
-    const key = normalizeCounterKey(type);
+    const isDaily = type === "daily_lead";
+    const dateKey = isDaily ? getDailyLeadDateKey() : "";
+    const key = isDaily ? `daily_lead_${dateKey}` : normalizeCounterKey(type);
     const prefix = PREFIX_MAP[type] || "X";
 
     const nextNum = await PersistentStoreService.withKeyMutex(
@@ -260,7 +283,7 @@ export class CrmTenantStoreService {
           );
 
           if (!counters || typeof counters[key] !== "number") {
-            const maxExisting = await this.computeMaxExistingNumber(safeTenant, type);
+            const maxExisting = await this.computeMaxExistingNumber(safeTenant, type, dateKey);
             counters = {
               ...(counters || {}),
               tenantId: safeTenant,
@@ -286,7 +309,7 @@ export class CrmTenantStoreService {
           PersistentStoreService.get<Record<string, any>>(storeKey, "entities") || null;
 
         if (!counters || typeof counters[key] !== "number") {
-          const maxExisting = await this.computeMaxExistingNumber(safeTenant, type);
+          const maxExisting = await this.computeMaxExistingNumber(safeTenant, type, dateKey);
           counters = {
             ...(counters || {}),
             tenantId: safeTenant,
@@ -304,6 +327,9 @@ export class CrmTenantStoreService {
       }
     );
 
+    if (isDaily) {
+      return formatDailyLeadId(dateKey, nextNum);
+    }
     return `${prefix}${nextNum}`;
   }
 
@@ -451,14 +477,22 @@ export class CrmTenantStoreService {
       if (typeof doc.status === "string") {
         doc.status = toDisplayLeadStatus(doc.status) || doc.status;
       }
+      const isSelectedOrLost = doc.status === "ListaMea" || doc.status === "Pierdute";
       if (!doc.propertyId) {
         if (isCererePayload(doc)) {
           doc.propertyId = await this.getNextEntityId(safeTenant, "cerere");
         } else if (PROPRIETATI_STATUSES.has(doc.status)) {
           doc.propertyId = await this.getNextEntityId(safeTenant, "property");
-        } else {
+        } else if (isSelectedOrLost) {
           doc.propertyId = await this.getNextEntityId(safeTenant, "lead");
+        } else {
+          doc.propertyId = await this.getNextEntityId(safeTenant, "daily_lead");
         }
+      } else if (isSelectedOrLost && !isAgencyLeadId(doc.propertyId)) {
+        if (!doc.sourcePropertyId) {
+          doc.sourcePropertyId = doc.propertyId;
+        }
+        doc.propertyId = await this.getNextEntityId(safeTenant, "lead");
       }
       doc.lastMovedAt = doc.lastMovedAt || now;
     } else if (collectionName === "contacts" && !doc.contactId) {
@@ -614,8 +648,19 @@ export class CrmTenantStoreService {
     if (
       collectionName === "leads" &&
       sanitized.status &&
+      (updated.status === "ListaMea" || updated.status === "Pierdute") &&
+      !isAgencyLeadId(updated.propertyId)
+    ) {
+      if (updated.propertyId && !updated.sourcePropertyId) {
+        updated.sourcePropertyId = updated.propertyId;
+      }
+      updated.propertyId = await this.getNextEntityId(safeTenant, "lead");
+    }
+    if (
+      collectionName === "leads" &&
+      sanitized.status &&
       (PROPRIETATI_STATUSES.has(updated.status) || updated.status === "Activa") &&
-      (!updated.propertyId || String(updated.propertyId).startsWith("L"))
+      (!updated.propertyId || isAgencyLeadId(updated.propertyId) || isDailyLeadId(updated.propertyId))
     ) {
       updated.propertyId = await this.getNextEntityId(safeTenant, "property");
     }
