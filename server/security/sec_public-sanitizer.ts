@@ -1,3 +1,5 @@
+import { shouldUseModifiedAdContent } from "../../src/utils/publicContentUtils";
+
 const PRIVATE_TOP_LEVEL_KEYS = new Set([
   "ownerName",
   "ownerPhone",
@@ -131,6 +133,31 @@ export function sanitizePublicProperty<T extends Record<string, any>>(
     }
 
     cleaned.extractedData = extCopy;
+  }
+
+  // Ensure the exact original platform ad description is available on public shared pages
+  // for raw leads (even older crawled records that stored it in rawDescription/notes)
+  // while still keeping private fields like notes/rawDescription/owner PII stripped.
+  const existingOrigDesc =
+    typeof cleaned.extractedData?.originalDescription === "string"
+      ? cleaned.extractedData.originalDescription.trim()
+      : "";
+  if (!existingOrigDesc) {
+    const fallbackOrigDesc =
+      (typeof raw.extractedData?.originalDescription === "string" && raw.extractedData.originalDescription.trim()) ||
+      (typeof raw.rawDescription === "string" && raw.rawDescription.trim()) ||
+      (typeof raw.originalText === "string" && raw.originalText.trim()) ||
+      (!shouldUseModifiedAdContent(raw) && typeof raw.extractedData?.crmData?.descriere?.continut === "string"
+        ? raw.extractedData.crmData.descriere.continut.trim()
+        : "") ||
+      (!shouldUseModifiedAdContent(raw) && typeof raw.notes === "string" ? raw.notes.trim() : "");
+
+    if (fallbackOrigDesc) {
+      cleaned.extractedData = {
+        ...(cleaned.extractedData && typeof cleaned.extractedData === "object" ? cleaned.extractedData : {}),
+        originalDescription: fallbackOrigDesc,
+      };
+    }
   }
 
   return cleaned as Partial<T>;

@@ -12,7 +12,9 @@ import {
   Inbox, 
   FileText, 
   Compass, 
-  UserPlus 
+  UserPlus,
+  Clock,
+  CornerDownLeft
 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { leadsService, Lead, isCerereLead } from "../services/leadsService";
@@ -27,6 +29,14 @@ import { ProfileModal } from "./ProfileModal";
 import { StatsModal } from "./StatsModal";
 import { auth } from "../lib/firebase";
 import { onAuthStateChanged } from "firebase/auth";
+import {
+  getRecentSearches,
+  saveRecentSearch,
+  saveRecentFreeTextSearch,
+  removeRecentSearch,
+  clearRecentSearches,
+  type RecentSearchEntry,
+} from "../utils/recentSearchUtils";
 
 interface HeaderProps {
   onAddClick?: () => void;
@@ -97,6 +107,9 @@ export const Header: React.FC<HeaderProps> = ({
   // Search state
   const [localQuery, setLocalQuery] = useState(searchQuery);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [recentSearches, setRecentSearches] = useState<RecentSearchEntry[]>(() =>
+    getRecentSearches("global")
+  );
   const searchContainerRef = useRef<HTMLDivElement>(null);
 
   const [allLeads, setAllLeads] = useState<Lead[]>([]);
@@ -132,7 +145,14 @@ export const Header: React.FC<HeaderProps> = ({
     if (onSearchChange) {
       onSearchChange(val);
     }
-    setIsSearchOpen(val.trim().length > 0);
+    setIsSearchOpen(val.trim().length > 0 || recentSearches.length > 0);
+  };
+
+  const commitGlobalFreeText = (rawText: string) => {
+    const trimmed = rawText.trim();
+    if (trimmed.length >= 2) {
+      setRecentSearches(saveRecentFreeTextSearch("global", trimmed));
+    }
   };
 
   // Click-outside listener for dropdowns
@@ -302,31 +322,127 @@ export const Header: React.FC<HeaderProps> = ({
     };
   }, [allLeads, allContacts, allPersonal, allDocuments, allActivities, localQuery]);
 
-  const handleSelectProperty = (lead: Lead) => {
+  const matchingRecentSearches = useMemo(() => {
+    const q = localQuery.toLowerCase().trim();
+    if (!q) return recentSearches;
+    return recentSearches.filter((entry) => {
+      const hay = `${entry.label} ${entry.subtitle || ""} ${entry.badge || ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [recentSearches, localQuery]);
+
+  const handleSelectProperty = (lead: Lead, kindOverride?: "property" | "cerere" | "lead") => {
+    const inferredKind: "property" | "cerere" | "lead" =
+      kindOverride ||
+      (isCerereLead(lead)
+        ? "cerere"
+        : lead.status === "Noi" ||
+            lead.status === "ListaMea" ||
+            lead.status === "Pierdute" ||
+            lead.status === "Nevalidata" ||
+            lead.status === "Calificata"
+          ? "lead"
+          : "property");
+    const defaultTitle =
+      inferredKind === "cerere"
+        ? "Cerere fără titlu"
+        : inferredKind === "lead"
+          ? "Lead fără titlu"
+          : "Proprietate fără titlu";
+    const label = lead.title?.trim() || defaultTitle;
+    const subtitle =
+      inferredKind === "cerere"
+        ? [lead.ownerName ? `Client: ${lead.ownerName}` : "", lead.price ? `Buget: ${lead.price}` : ""]
+            .filter(Boolean)
+            .join(" • ")
+        : [lead.zone || "Zonă nespecificată", lead.price || ""].filter(Boolean).join(" • ");
+
+    setRecentSearches(
+      saveRecentSearch("global", {
+        id: `${inferredKind}:${lead.id || lead.propertyId || label}`,
+        kind: inferredKind,
+        label,
+        subtitle,
+        entityId: lead.id,
+        badge: lead.propertyId ? `#${lead.propertyId}` : undefined,
+        queryText: label,
+      })
+    );
     setIsSearchOpen(false);
     if (location.pathname !== '/') navigate('/');
     onSelectLead?.(lead);
   };
 
   const handleSelectContact = (contact: Contact) => {
+    const fullName = `${contact.firstName || ""} ${contact.lastName || ""}`.trim() || "Contact";
+    setRecentSearches(
+      saveRecentSearch("global", {
+        id: `contact:${contact.id || contact.contactId || fullName}`,
+        kind: "contact",
+        label: fullName,
+        subtitle: [contact.type, contact.phone].filter(Boolean).join(" • "),
+        entityId: contact.id,
+        badge: contact.contactId ? `#${contact.contactId}` : undefined,
+        queryText: fullName,
+      })
+    );
     setIsSearchOpen(false);
     if (location.pathname !== '/') navigate('/');
     onSelectContact?.(contact);
   };
 
   const handleSelectPersonal = (member: PersonalMember) => {
+    const label = member.name?.trim() || "Membru echipă";
+    setRecentSearches(
+      saveRecentSearch("global", {
+        id: `personal:${member.id || member.personalId || label}`,
+        kind: "personal",
+        label,
+        subtitle: [member.role, member.phone].filter(Boolean).join(" • "),
+        entityId: member.id,
+        badge: member.personalId ? `#${member.personalId}` : undefined,
+        queryText: label,
+      })
+    );
     setIsSearchOpen(false);
     if (location.pathname !== '/') navigate('/');
     onSelectPersonal?.(member);
   };
 
   const handleSelectDocument = (doc: DocumentItem) => {
+    const label = doc.title?.trim() || "Document";
+    setRecentSearches(
+      saveRecentSearch("global", {
+        id: `document:${doc.id || doc.documentId || label}`,
+        kind: "document",
+        label,
+        subtitle: [doc.type, doc.propertyId ? `Prop: #${doc.propertyId}` : ""].filter(Boolean).join(" • "),
+        entityId: doc.id,
+        badge: doc.documentId ? `#${doc.documentId}` : undefined,
+        queryText: label,
+      })
+    );
     setIsSearchOpen(false);
     if (location.pathname !== '/') navigate('/');
     onSelectDocument?.(doc);
   };
 
   const handleSelectActivity = (activity: Activity) => {
+    const displayId = activity.activityId || (activity as any).tourId;
+    const label = activity.clientName?.trim() || activity.type || "Activitate";
+    setRecentSearches(
+      saveRecentSearch("global", {
+        id: `activity:${activity.id || displayId || label}`,
+        kind: "activity",
+        label,
+        subtitle: [`${activity.date || ""} ${activity.hour || ""}`.trim(), activity.type]
+          .filter(Boolean)
+          .join(" • "),
+        entityId: activity.id,
+        badge: displayId ? `#${displayId}` : undefined,
+        queryText: label,
+      })
+    );
     setIsSearchOpen(false);
     if (location.pathname !== '/') navigate('/');
     if (onSelectActivity) {
@@ -335,6 +451,78 @@ export const Header: React.FC<HeaderProps> = ({
       onSelectTour(activity as any);
     } else {
       navigate('/?calendar=true');
+    }
+  };
+
+  const handleSelectRecentGlobalEntry = (entry: RecentSearchEntry) => {
+    if (entry.kind === "text") {
+      const nextQuery = entry.queryText || entry.label;
+      setLocalQuery(nextQuery);
+      onSearchChange?.(nextQuery);
+      setRecentSearches(saveRecentFreeTextSearch("global", nextQuery));
+      setIsSearchOpen(true);
+      return;
+    }
+
+    if (entry.entityId) {
+      if (entry.kind === "property" || entry.kind === "cerere" || entry.kind === "lead") {
+        const found = allLeads.find((l) => l.id === entry.entityId);
+        if (found) {
+          handleSelectProperty(found, entry.kind);
+          return;
+        }
+      } else if (entry.kind === "contact") {
+        const found = allContacts.find((c) => c.id === entry.entityId);
+        if (found) {
+          handleSelectContact(found);
+          return;
+        }
+      } else if (entry.kind === "personal") {
+        const found = allPersonal.find((p) => p.id === entry.entityId);
+        if (found) {
+          handleSelectPersonal(found);
+          return;
+        }
+      } else if (entry.kind === "document") {
+        const found = allDocuments.find((d) => d.id === entry.entityId);
+        if (found) {
+          handleSelectDocument(found);
+          return;
+        }
+      } else if (entry.kind === "activity") {
+        const found = allActivities.find((a) => a.id === entry.entityId);
+        if (found) {
+          handleSelectActivity(found);
+          return;
+        }
+      }
+    }
+
+    // Fallback: populate query if entity no longer exists
+    const fallbackQuery = entry.queryText || entry.label;
+    setLocalQuery(fallbackQuery);
+    onSearchChange?.(fallbackQuery);
+    setIsSearchOpen(true);
+  };
+
+  const getRecentKindLabel = (kind: RecentSearchEntry["kind"]): string => {
+    switch (kind) {
+      case "lead":
+        return "Lead";
+      case "cerere":
+        return "Cerere";
+      case "property":
+        return "Proprietate";
+      case "contact":
+        return "Contact";
+      case "personal":
+        return "Personal";
+      case "document":
+        return "Document";
+      case "activity":
+        return "Activitate";
+      default:
+        return "Căutare";
     }
   };
 
@@ -355,11 +543,21 @@ export const Header: React.FC<HeaderProps> = ({
             value={localQuery}
             onChange={(e) => handleQueryChange(e.target.value)}
             onFocus={() => {
-              if (localQuery.trim().length > 0) {
+              const latest = getRecentSearches("global");
+              setRecentSearches(latest);
+              if (localQuery.trim().length > 0 || latest.length > 0) {
                 setIsSearchOpen(true);
               }
             }}
-            placeholder="Caută proprietati, cereri, contacte, personal, documente sau vizionări..."
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && localQuery.trim().length >= 2) {
+                e.preventDefault();
+                commitGlobalFreeText(localQuery);
+              } else if (e.key === "Escape") {
+                setIsSearchOpen(false);
+              }
+            }}
+            placeholder="Caută proprietati, cereri, lead-uri, contacte, personal, documente sau vizionări..."
             className="w-full h-full pl-11 pr-10 text-xs leading-[48px] text-gray-900 placeholder:text-gray-400 bg-transparent border-0 focus:outline-none focus:ring-0 font-sans cursor-text"
           />
           {localQuery && (
@@ -375,17 +573,101 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           )}
 
-          {/* Instant Search Results Dropdown */}
-          {isSearchOpen && localQuery.trim().length > 0 && (
+          {/* Instant Search Results & Recent Searches Dropdown */}
+          {isSearchOpen && (localQuery.trim().length > 0 || recentSearches.length > 0) && (
             <div className="absolute left-0 right-0 top-full mt-0 bg-white border border-gray-200 border-t-0 shadow-2xl z-[250] max-h-[480px] overflow-y-auto divide-y divide-gray-100">
-              {totalResults === 0 ? (
-                <div className="py-8 px-4 text-center text-xs text-gray-500">
-                  Niciun rezultat găsit pentru <span className="font-semibold text-gray-800">"{localQuery}"</span>
+              {/* Căutate recent */}
+              {matchingRecentSearches.length > 0 && (
+                <div>
+                  <div className="px-4 py-2 bg-gray-50/90 text-[10px] font-semibold uppercase tracking-wider text-gray-500 border-b border-gray-100 flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <Clock size={12} className="text-gray-400" />
+                      Căutate recent
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRecentSearches(clearRecentSearches("global"));
+                      }}
+                      className="text-[10px] font-medium normal-case tracking-normal text-gray-400 hover:text-gray-700 cursor-pointer"
+                    >
+                      Șterge
+                    </button>
+                  </div>
+                  <div className="divide-y divide-gray-50">
+                    {matchingRecentSearches.map((entry) => (
+                      <div
+                        key={entry.id}
+                        onClick={() => handleSelectRecentGlobalEntry(entry)}
+                        className="w-full px-4 py-2 flex items-center justify-between hover:bg-gray-50/80 transition-colors cursor-pointer text-left select-none group"
+                      >
+                        <div className="flex items-center gap-3 min-w-0 pr-3">
+                          <div className="w-7 h-7 rounded-md bg-gray-100/80 border border-gray-200 text-gray-500 flex items-center justify-center shrink-0">
+                            <Clock size={13} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-2">
+                              <span className="truncate">{entry.label}</span>
+                              {entry.badge && (
+                                <span className="text-[10px] font-sans font-normal tabular-nums px-1 py-0 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0">
+                                  {entry.badge}
+                                </span>
+                              )}
+                            </div>
+                            {entry.subtitle && (
+                              <div className="text-[11px] text-gray-500 font-normal truncate mt-0.5">
+                                {entry.subtitle}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[10px] font-normal px-2 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-600">
+                            {getRecentKindLabel(entry.kind)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setRecentSearches(removeRecentSearch("global", entry.id));
+                            }}
+                            className="p-1 text-gray-300 hover:text-gray-600 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                            title="Elimină din căutări recente"
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ) : (
-                <>
-                  {/* 1. Proprietati (#P... / #L...) */}
-                  {matchedProperties.length > 0 && (
+              )}
+
+              {localQuery.trim().length > 0 && (
+                totalResults === 0 ? (
+                  <div className="py-6 px-4 text-center space-y-2">
+                    <div className="text-xs text-gray-500">
+                      Niciun rezultat găsit pentru <span className="font-semibold text-gray-800">"{localQuery}"</span>
+                    </div>
+                    {localQuery.trim().length >= 2 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          commitGlobalFreeText(localQuery);
+                          setIsSearchOpen(false);
+                        }}
+                        className="inline-flex items-center gap-1.5 text-[11px] font-medium text-[#051D35] bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded-md cursor-pointer transition-colors"
+                      >
+                        <CornerDownLeft size={11} />
+                        <span>Salvează căutarea „{localQuery.trim()}”</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <>
+                    {/* 1. Proprietati (#P... / #L...) */}
+                    {matchedProperties.length > 0 && (
                     <div>
                       <div className="px-4 py-2 bg-gray-50/90 text-[10px] font-semibold uppercase tracking-wider text-gray-500 border-b border-gray-100 flex items-center justify-between">
                         <span className="flex items-center gap-2">
@@ -511,7 +793,7 @@ export const Header: React.FC<HeaderProps> = ({
                               </div>
                             </div>
                             <span className="text-[10px] font-normal px-2 py-1 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
-                              {lead.status}
+                              {lead.status === "ListaMea" ? "Noi" : lead.status}
                             </span>
                           </div>
                         ))}
@@ -707,7 +989,29 @@ export const Header: React.FC<HeaderProps> = ({
                       </div>
                     </div>
                   )}
+                  {localQuery.trim().length >= 2 && (
+                    <div
+                      onClick={() => {
+                        commitGlobalFreeText(localQuery);
+                        setIsSearchOpen(false);
+                      }}
+                      className="px-4 py-2 bg-gray-50/70 hover:bg-gray-100/80 transition-colors cursor-pointer flex items-center justify-between gap-2 text-[11px] text-[#051D35]"
+                    >
+                      <span className="flex items-center gap-2 truncate">
+                        <Search size={12} className="text-[#BE9662] shrink-0" />
+                        <span className="truncate">
+                          Caută text liber:{" "}
+                          <strong className="font-semibold">„{localQuery.trim()}”</strong>
+                        </span>
+                      </span>
+                      <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 shrink-0">
+                        <CornerDownLeft size={10} />
+                        Enter
+                      </span>
+                    </div>
+                  )}
                 </>
+                )
               )}
             </div>
           )}

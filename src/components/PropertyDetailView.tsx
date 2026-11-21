@@ -48,6 +48,7 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
+import { resolvePublicDisplayTitle, resolvePublicDisplayDescription } from "../utils/publicContentUtils";
 import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
@@ -425,11 +426,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   // Pre-fill enquiry form message
   useEffect(() => {
     if (lead) {
-      const pTitle = lead.extractedData?.crmData?.descriere?.titlu || lead.title || "proprietatea prezentată";
+      const pTitle = isPublicShared
+        ? resolvePublicDisplayTitle(lead, "proprietatea prezentată")
+        : (lead.extractedData?.crmData?.descriere?.titlu || lead.title || "proprietatea prezentată");
       const pId = lead.propertyId || lead.id || "";
       setFormMessage(`Bună ziua, sunt interesat de proprietatea ${pId ? `[#${pId}] ` : ""}"${pTitle}". Vă rog să mă contactați pentru detalii sau o vizionare.`);
     }
-  }, [lead]);
+  }, [lead, isPublicShared]);
 
   const getScrollContainer = (node: HTMLElement | null): HTMLElement | Window => {
     if (mainScrollRef.current) return mainScrollRef.current;
@@ -797,7 +800,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   const crmData = lead?.extractedData?.crmData;
   const isRent = lead?.transactionType === "Închiriere" || crmData?.detaliiGenerale?.tranzactie === "Închiriere";
-  const displayTitle = crmData?.descriere?.titlu || lead?.title || "Proprietate Rezidențială";
+  const displayTitle = isPublicShared
+    ? resolvePublicDisplayTitle(lead, "Proprietate Rezidențială")
+    : (crmData?.descriere?.titlu || lead?.title || "Proprietate Rezidențială");
   const internalCode = lead?.propertyId || (lead?.id ? `P${lead.id.slice(0, 4)}` : "P41");
   const exactId = lead?.propertyId || (lead?.id ? (lead.id.length > 8 ? lead.id.slice(-6).toUpperCase() : lead.id) : internalCode);
   const categoria = crmData?.detaliiGenerale?.categoria || lead?.categoria || "Apartament";
@@ -1064,6 +1069,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     addressDetails.zona
   ]);
 
+  const publicSharedDescription = useMemo(
+    () => resolvePublicDisplayDescription(lead, summaryDescription),
+    [lead, summaryDescription]
+  );
+
   // Real author of the lead generation (the user who initialized importing the data)
   const leadAuthor = useMemo(() => {
     const l = lead as any;
@@ -1108,6 +1118,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     const saved = (lead as any)?.extractedData?.presentationSections || {};
     return {
       introducere: {
+        titlu: crmData?.descriere?.titlu || lead?.title || saved.introducere?.titlu || displayTitle,
         summary: saved.introducere?.summary || summaryDescription
       },
       configuratie: {
@@ -1209,12 +1220,14 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         ...(saved.tranzactie || {})
       }
     };
-  }, [lead, summaryDescription, suprafataUtila, compartimentare, etaj, anConstructie, camere, bai, balcoane, stareInterior, formattedPrice, defaultCommission]);
+  }, [lead, crmData?.descriere?.titlu, displayTitle, summaryDescription, suprafataUtila, compartimentare, etaj, anConstructie, camere, bai, balcoane, stareInterior, formattedPrice, defaultCommission]);
 
   const [sectionData, setSectionData] = useState<Record<string, Record<string, string>>>(initialPresentationSections);
   const [editingSection, setEditingSection] = useState<string | null>(null);
   const [draftSectionData, setDraftSectionData] = useState<Record<string, Record<string, string>>>({});
+  const [titleFocused, setTitleFocused] = useState(false);
   const [introFocused, setIntroFocused] = useState(false);
+  const introTitleInputRef = useRef<HTMLInputElement>(null);
   const introTextareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Photos state and inline editing
@@ -1448,12 +1461,37 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           updates["extractedData.crmData.pret.detalii.pret"] = updatedSec["Preț"];
         }
       } else if (sectionId === "introducere") {
-        if (updatedSec["summary"]) {
+        const trimmedTitle = (updatedSec["titlu"] || "").trim();
+        if (trimmedTitle) {
+          updates["title"] = trimmedTitle;
+          updates["extractedData.crmData.descriere.titlu"] = trimmedTitle;
+        }
+        if (updatedSec["summary"] !== undefined) {
           updates["extractedData.crmData.descriere.continut"] = updatedSec["summary"];
         }
       }
 
       await leadsService.updateLeadData(lead.id, updates);
+
+      if (onUpdateLead && sectionId === "introducere") {
+        const trimmedTitle = (updatedSec["titlu"] || "").trim();
+        onUpdateLead({
+          ...(trimmedTitle ? { title: trimmedTitle } : {}),
+          extractedData: {
+            ...(lead.extractedData || {}),
+            presentationSections: nextSectionData,
+            crmData: {
+              ...(lead.extractedData?.crmData || {}),
+              descriere: {
+                ...(lead.extractedData?.crmData?.descriere || {}),
+                ...(trimmedTitle ? { titlu: trimmedTitle } : {}),
+                ...(updatedSec["summary"] !== undefined ? { continut: updatedSec["summary"] } : {}),
+              },
+            },
+          } as any,
+        });
+      }
+
       toast.success("Modificările au fost salvate cu succes!");
     } catch (e) {
       console.error("Failed to save inline changes:", e);
@@ -1990,53 +2028,102 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 />
               </div>
 
-              <div className="p-5 font-sans">
-                <label
-                  onClick={() => {
-                    if (editingSection === "introducere") introTextareaRef.current?.focus();
-                  }}
-                  className={`flex items-center gap-2 px-2 text-[12px] leading-4 ${
-                    isPublicShared ? "mb-[8px]" : "mb-1"
-                  } font-semibold text-[#051D35] transition-colors select-none ${
-                    editingSection === "introducere" ? "cursor-pointer" : ""
-                  }`}
-                >
-                  <span>Descriere proprietate</span>
-                  {editingSection === "introducere" && introFocused && (
-                    <span
-                      className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
-                      title="Mod focus activ"
-                    />
-                  )}
-                </label>
+              <div className={`p-5 font-sans ${!isPublicShared ? "space-y-4" : ""}`}>
+                {!isPublicShared && (
+                  <div>
+                    <label
+                      onClick={() => {
+                        if (editingSection === "introducere") introTitleInputRef.current?.focus();
+                      }}
+                      className={`flex items-center gap-2 px-2 text-[12px] leading-4 mb-1 font-semibold text-[#051D35] transition-colors select-none ${
+                        editingSection === "introducere" ? "cursor-pointer" : ""
+                      }`}
+                    >
+                      <span>Titlu</span>
+                      {editingSection === "introducere" && titleFocused && (
+                        <span
+                          className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
+                          title="Mod focus activ"
+                        />
+                      )}
+                    </label>
 
-                {editingSection === "introducere" ? (
-                  <textarea
-                    ref={introTextareaRef}
-                    rows={5}
-                    value={draftSectionData["introducere"]?.["summary"] ?? (sectionData["introducere"]?.["summary"] || summaryDescription)}
-                    onChange={(e) => handleFieldChange("introducere", "summary", e.target.value)}
-                    onFocus={() => setIntroFocused(true)}
-                    onBlur={() => setIntroFocused(false)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Escape") (e.target as HTMLElement).blur();
-                    }}
-                    className={`w-full !px-2 !py-2 !min-h-[120px] rounded-md border text-[12px] font-sans font-normal leading-[1.6] outline-none shadow-none resize-y select-text transition-all ${
-                      introFocused
-                        ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
-                        : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
-                    }`}
-                    placeholder="Descrierea proprietății..."
-                  />
-                ) : (
-                  <div
-                    className={`w-full px-2 ${
-                      isPublicShared ? "py-0 h-auto" : "py-2 min-h-[120px]"
-                    } rounded-md border border-transparent bg-transparent text-[12px] text-gray-700 leading-[1.6] font-normal whitespace-pre-line select-text font-sans`}
-                  >
-                    {sectionData["introducere"]?.["summary"] || summaryDescription}
+                    {editingSection === "introducere" ? (
+                      <input
+                        ref={introTitleInputRef}
+                        type="text"
+                        value={draftSectionData["introducere"]?.["titlu"] ?? (sectionData["introducere"]?.["titlu"] || displayTitle)}
+                        onChange={(e) => handleFieldChange("introducere", "titlu", e.target.value)}
+                        onFocus={() => setTitleFocused(true)}
+                        onBlur={() => setTitleFocused(false)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Escape") (e.target as HTMLElement).blur();
+                        }}
+                        className={`w-full !h-9 !px-2 rounded-md border text-[12px] font-sans font-normal leading-5 outline-none shadow-none select-text transition-all ${
+                          titleFocused
+                            ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
+                            : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
+                        }`}
+                        placeholder="Introdu titlul proprietății..."
+                      />
+                    ) : (
+                      <div className="w-full px-2 py-2 rounded-md border border-transparent bg-transparent text-[12px] text-gray-800 leading-5 font-normal select-text font-sans">
+                        {sectionData["introducere"]?.["titlu"] || displayTitle}
+                      </div>
+                    )}
                   </div>
                 )}
+
+                <div>
+                  <label
+                    onClick={() => {
+                      if (editingSection === "introducere") introTextareaRef.current?.focus();
+                    }}
+                    className={`flex items-center gap-2 px-2 text-[12px] leading-4 ${
+                      isPublicShared ? "mb-[8px]" : "mb-1"
+                    } font-semibold text-[#051D35] transition-colors select-none ${
+                      editingSection === "introducere" ? "cursor-pointer" : ""
+                    }`}
+                  >
+                    <span>{isPublicShared ? "Descriere proprietate" : "Descriere"}</span>
+                    {editingSection === "introducere" && introFocused && (
+                      <span
+                        className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
+                        title="Mod focus activ"
+                      />
+                    )}
+                  </label>
+
+                  {editingSection === "introducere" ? (
+                    <textarea
+                      ref={introTextareaRef}
+                      rows={5}
+                      value={draftSectionData["introducere"]?.["summary"] ?? (sectionData["introducere"]?.["summary"] || summaryDescription)}
+                      onChange={(e) => handleFieldChange("introducere", "summary", e.target.value)}
+                      onFocus={() => setIntroFocused(true)}
+                      onBlur={() => setIntroFocused(false)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Escape") (e.target as HTMLElement).blur();
+                      }}
+                      className={`w-full !px-2 !py-2 !min-h-[120px] rounded-md border text-[12px] font-sans font-normal leading-[1.6] outline-none shadow-none resize-y select-text transition-all ${
+                        introFocused
+                          ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
+                          : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
+                      }`}
+                      placeholder="Descrierea proprietății..."
+                    />
+                  ) : (
+                    <div
+                      className={`w-full px-2 ${
+                        isPublicShared ? "py-0 h-auto" : "py-2 min-h-[120px]"
+                      } rounded-md border border-transparent bg-transparent text-[12px] text-gray-700 leading-[1.6] font-normal whitespace-pre-line select-text font-sans`}
+                    >
+                      {isPublicShared
+                        ? publicSharedDescription
+                        : (sectionData["introducere"]?.["summary"] || summaryDescription)}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 

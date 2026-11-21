@@ -16,6 +16,9 @@ import {
   MapPin,
   Phone,
   User,
+  Link2,
+  Plus,
+  Code2,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { CmpPlatformLayout } from "../../ui/platform/cmp_platform-layout";
@@ -39,6 +42,7 @@ import {
   DEFAULT_PLATFORM_AUTO_CRAWL_CONFIG,
   type PlatformAutoCrawlConfig,
 } from "../../services/platformAutoCrawlService";
+import { CrawlBlockedError } from "../../utils/importPropertyFromCrawl";
 import type { Lead } from "../../services/leadsService";
 
 export const PgPlatformAutoCrawl: React.FC = () => {
@@ -52,6 +56,11 @@ export const PgPlatformAutoCrawl: React.FC = () => {
   const [isScanning, setIsScanning] = useState<boolean>(false);
   const [isClearingAll, setIsClearingAll] = useState<boolean>(false);
   const [confirmClearAll, setConfirmClearAll] = useState<boolean>(false);
+  const [manualUrl, setManualUrl] = useState<string>("");
+  const [manualHtml, setManualHtml] = useState<string>("");
+  const [showManualHtmlFallback, setShowManualHtmlFallback] = useState<boolean>(false);
+  const [isImportingUrl, setIsImportingUrl] = useState<boolean>(false);
+  const [manualUrlError, setManualUrlError] = useState<string | null>(null);
 
   const configRef = useRef<PlatformAutoCrawlConfig>(config);
   const sharedLeadsRef = useRef<Lead[]>(sharedLeads);
@@ -279,6 +288,56 @@ export const PgPlatformAutoCrawl: React.FC = () => {
     }
   };
 
+  const handleManualUrlImport = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isImportingUrl || !user) return;
+    const trimmed = manualUrl.trim();
+    if (!trimmed) {
+      setManualUrlError("Introdu un URL valid al anunțului.");
+      return;
+    }
+
+    setIsImportingUrl(true);
+    setManualUrlError(null);
+    try {
+      const result = await platformAutoCrawlService.importSingleUrlAsSharedLead({
+        url: trimmed,
+        html: manualHtml.trim() || undefined,
+        existingLeads: sharedLeadsRef.current,
+      });
+
+      setManualUrl("");
+      setManualHtml("");
+      setShowManualHtmlFallback(false);
+      setManualUrlError(null);
+
+      await persistConfig(
+        {
+          ...configRef.current,
+          lastScanNotice: result.notice,
+        },
+        false
+      );
+
+      toast.success(`Anunțul #${result.propertyId} a fost importat și distribuit către toate agențiile.`);
+    } catch (err: any) {
+      if (err instanceof CrawlBlockedError) {
+        setShowManualHtmlFallback(true);
+        const blockedMsg =
+          err.message ||
+          "Site-ul extern a blocat accesul automat (403 / anti-bot). Deschide pagina în browser, copiază sursa HTML și lipește-o mai jos.";
+        setManualUrlError(blockedMsg);
+        toast.error("Site-ul a blocat accesul direct. Poți lipi sursa HTML mai jos.");
+      } else {
+        const msg = err?.message || "Nu s-a putut importa URL-ul introdus.";
+        setManualUrlError(msg);
+        toast.error(msg);
+      }
+    } finally {
+      setIsImportingUrl(false);
+    }
+  };
+
   const activeFilterCount = countActiveOlxFilters(config.filters);
 
   return (
@@ -307,7 +366,7 @@ export const PgPlatformAutoCrawl: React.FC = () => {
                 )}
               </div>
               <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-                Toate anunțurile preluate aici sunt salvate o singură dată la nivel de platformă și apar automat, complet și identic în secțiunea <strong className="text-[#051D35]">Lead-uri → Listate</strong> pentru fiecare agenție.
+                Toate anunțurile preluate aici sunt salvate o singură dată la nivel de platformă și apar automat, complet și identic în secțiunea <strong className="text-[#051D35]">Administrare Agenție → Piața Imobiliară</strong> pentru fiecare agenție.
               </p>
             </div>
           </div>
@@ -374,10 +433,102 @@ export const PgPlatformAutoCrawl: React.FC = () => {
           </div>
         )}
 
-        {/* Two-column layout: Schedule & Filters (left) + Imported Global Leads Feed (right) */}
+        {/* Two-column layout: Manual URL + Schedule & Filters (left) + Imported Global Leads Feed (right) */}
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
-          {/* Left column: Schedule + OLX Filters */}
+          {/* Left column: Manual Single URL + Schedule + OLX Filters */}
           <div className="xl:col-span-5 space-y-5">
+            {/* Manual Single URL Import Card */}
+            <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-2xs space-y-3.5">
+              <div className="flex items-center justify-between gap-2 pb-3 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <Link2 size={16} className="text-[#BE9662]" />
+                  <h3 className="text-xs font-semibold text-[#051D35]">
+                    Import Manual URL (Un singur anunț)
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowManualHtmlFallback((prev) => !prev)}
+                  className={`h-7 px-2.5 inline-flex items-center gap-1 text-[11px] font-medium rounded-md border transition-colors cursor-pointer ${
+                    showManualHtmlFallback
+                      ? "text-[#051D35] bg-amber-50 border-amber-200"
+                      : "text-gray-600 hover:text-[#051D35] bg-gray-50 hover:bg-gray-100 border-gray-200"
+                  }`}
+                >
+                  <Code2 size={12} />
+                  <span>{showManualHtmlFallback ? "Ascunde HTML" : "Sursă HTML"}</span>
+                </button>
+              </div>
+
+              <p className="text-[11px] text-gray-500 leading-relaxed">
+                Lipește link-ul direct al unui anunț (ex. OLX.ro) pentru a-l extrage cu titlul și descrierea originală și a-l distribui imediat către toate agențiile.
+              </p>
+
+              <form onSubmit={(e) => void handleManualUrlImport(e)} className="space-y-3">
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={manualUrl}
+                    onChange={(e) => {
+                      setManualUrl(e.target.value);
+                      if (manualUrlError) setManualUrlError(null);
+                    }}
+                    placeholder="https://www.olx.ro/d/oferta/..."
+                    disabled={isImportingUrl}
+                    aria-label="URL anunț de importat manual"
+                    className="flex-1 h-9 px-3 text-xs bg-gray-50 border border-gray-200 rounded-md text-gray-800 placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors disabled:opacity-60"
+                  />
+                  <button
+                    type="submit"
+                    disabled={isImportingUrl || !manualUrl.trim()}
+                    className="h-9 px-3.5 inline-flex items-center justify-center gap-1.5 text-xs font-semibold text-white bg-[#051D35] hover:bg-[#0a2b4a] rounded-md transition-colors cursor-pointer shadow-2xs disabled:opacity-50 shrink-0"
+                  >
+                    {isImportingUrl ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin text-[#BE9662]" />
+                        <span>Se importă...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Plus size={14} className="text-[#BE9662]" />
+                        <span>Importă URL</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {showManualHtmlFallback && (
+                  <div className="space-y-1.5 pt-1">
+                    <label
+                      htmlFor="platform-manual-html-input"
+                      className="block text-[11px] font-medium text-[#051D35]"
+                    >
+                      Cod sursă HTML (opțional — util dacă site-ul blochează accesul direct)
+                    </label>
+                    <textarea
+                      id="platform-manual-html-input"
+                      rows={4}
+                      value={manualHtml}
+                      onChange={(e) => setManualHtml(e.target.value)}
+                      disabled={isImportingUrl}
+                      placeholder="Deschide anunțul în browser, apasă Ctrl+U (sau Inspect → Copy outerHTML) și lipește aici conținutul HTML..."
+                      className="w-full p-2.5 text-[11px] font-mono bg-gray-50 border border-gray-200 rounded-md text-gray-800 placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors resize-y disabled:opacity-60"
+                    />
+                  </div>
+                )}
+
+                {manualUrlError && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2 px-3 py-2 rounded-md bg-red-50 border border-red-200 text-[11px] text-red-800"
+                  >
+                    <AlertCircle size={14} className="text-red-600 shrink-0 mt-0.5" />
+                    <span className="leading-relaxed">{manualUrlError}</span>
+                  </div>
+                )}
+              </form>
+            </div>
+
             {/* Schedule & Age Card */}
             <div className="bg-white border border-gray-200 rounded-lg p-5 shadow-2xs space-y-4">
               <div className="flex items-center justify-between gap-2 pb-3 border-b border-gray-100">
@@ -635,6 +786,11 @@ export const PgPlatformAutoCrawl: React.FC = () => {
                               {lead.propertyId && (
                                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#051D35]/10 text-[#051D35] tabular-nums">
                                   #{lead.propertyId}
+                                </span>
+                              )}
+                              {lead.source === "platform_manual_crawl" && (
+                                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
+                                  Manual
                                 </span>
                               )}
                               <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-[#8A6736] border border-amber-200/70">

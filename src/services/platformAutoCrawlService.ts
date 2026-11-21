@@ -31,6 +31,7 @@ import {
   getMaxDailyLeadSequenceForDate,
   isDailyLeadId,
 } from "../utils/leadIdUtils";
+import { CrawlBlockedError } from "../utils/importPropertyFromCrawl";
 import type { Lead } from "./leadsService";
 
 export const SHARED_LEADS_COLLECTION = "platform_shared_leads";
@@ -154,6 +155,15 @@ function buildSharedLeadDocId(url: string, index: number): string {
   return `shl_${Date.now()}_${hash.toString(36)}_${index}`;
 }
 
+function toProxiedImageUrl(u: string | undefined | null): string {
+  if (!u || typeof u !== "string") return "";
+  const normalized = u.trim().startsWith("//") ? "https:" + u.trim() : u.trim();
+  if (normalized.startsWith("http") && !normalized.includes("/api/proxy-image")) {
+    return `/api/proxy-image?url=${encodeURIComponent(normalized)}`;
+  }
+  return normalized;
+}
+
 function extractDateKeyFromLeadRecord(data: Record<string, any>): string {
   const raw = data?.createdAt || data?.updatedAt;
   if (raw && typeof raw?.toDate === "function") {
@@ -208,6 +218,14 @@ export interface AutoCrawlRunResult {
   saveErrors: string[];
   notice: AutoCrawlScanNotice | null;
   warning?: string;
+}
+
+export interface ManualSingleUrlImportResult {
+  lead: Lead;
+  propertyId: string;
+  title: string;
+  zone: string;
+  notice: AutoCrawlScanNotice;
 }
 
 export const platformAutoCrawlService = {
@@ -800,5 +818,284 @@ export const platformAutoCrawlService = {
     }
 
     return { addedCount, skippedCount, saveErrors, notice };
+  },
+
+  async importSingleUrlAsSharedLead({
+    url,
+    html,
+    existingLeads = [],
+  }: {
+    url: string;
+    html?: string;
+    existingLeads?: Lead[];
+  }): Promise<ManualSingleUrlImportResult> {
+    if (!auth.currentUser) {
+      throw new Error("Autentificarea Super Admin este necesară pentru a importa un anunț.");
+    }
+
+    let normalizedInputUrl = String(url || "").trim();
+    if (!normalizedInputUrl) {
+      throw new Error("Introdu un URL valid al anunțului.");
+    }
+    if (!/^https?:\/\//i.test(normalizedInputUrl)) {
+      normalizedInputUrl = `https://${normalizedInputUrl}`;
+    }
+
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(normalizedInputUrl);
+    } catch {
+      throw new Error("URL-ul introdus nu este valid. Verifică formatul (ex: https://www.olx.ro/d/oferta/...).");
+    }
+    if (
+      (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") ||
+      !parsedUrl.hostname.includes(".")
+    ) {
+      throw new Error("URL-ul introdus trebuie să fie o adresă web validă (http:// sau https://).");
+    }
+
+    const normUrl = normalizeCrawlUrl(normalizedInputUrl);
+    const slugId = extractOlxSlugId(normalizedInputUrl);
+
+    const duplicateInMemory = existingLeads.find((lead) => {
+      if (!lead.url) return false;
+      const existingNorm = normalizeCrawlUrl(lead.url);
+      if (normUrl && existingNorm && existingNorm === normUrl) return true;
+      const existingSlug = extractOlxSlugId(lead.url);
+      if (slugId && existingSlug && existingSlug === slugId) return true;
+      return false;
+    });
+    if (duplicateInMemory) {
+      const refLabel = duplicateInMemory.propertyId ? ` (#${duplicateInMemory.propertyId})` : "";
+      throw new Error(`Acest anunț a fost deja importat în lista globală${refLabel}.`);
+    }
+
+    const docId = buildSharedLeadDocId(normalizedInputUrl, 0);
+    try {
+      const existingSnap = await getDoc(doc(db, SHARED_LEADS_COLLECTION, docId));
+      if (existingSnap.exists()) {
+        const existingData = existingSnap.data() as Record<string, any>;
+        const refLabel = existingData?.propertyId ? ` (#${existingData.propertyId})` : "";
+        throw new Error(`Acest anunț a fost deja importat în lista globală${refLabel}.`);
+      }
+    } catch (dupErr: any) {
+      if (dupErr instanceof Error && dupErr.message.includes("a fost deja importat")) {
+        throw dupErr;
+      }
+    }
+
+    const trimmedHtml = typeof html === "string" ? html.trim() : "";
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    let crawlRes: Response;
+    try {
+      const authHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
+      crawlRes = await fetch("/api/crawl", {
+        method: "POST",
+        headers: authHeaders,
+        body: JSON.stringify({
+          url: normalizedInputUrl,
+          ...(trimmedHtml ? { html: trimmedHtml } : {}),
+        }),
+        signal: controller.signal,
+      });
+    } catch (fetchErr: any) {
+      if (fetchErr?.name === "AbortError") {
+        throw new Error("Timpul de așteptare a expirat la accesarea URL-ului. Încearcă din nou.");
+      }
+      throw fetchErr;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+
+    if (!crawlRes.ok) {
+      const errorText = await crawlRes.text();
+      let parsed: any = null;
+      try {
+        parsed = JSON.parse(errorText);
+      } catch {}
+      const parsedMsg =
+        parsed?.error?.message ||
+        (typeof parsed?.error === "string" ? parsed.error : "") ||
+        `Extragerea a eșuat (HTTP ${crawlRes.status})`;
+      if (
+        parsed?.code === "UPSTREAM_ACCESS_BLOCKED" ||
+        parsed?.upstreamStatus === 403 ||
+        parsed?.upstreamStatus === 429 ||
+        parsedMsg.includes("403") ||
+        parsedMsg.toLowerCase().includes("anti-bot")
+      ) {
+        throw new CrawlBlockedError(parsedMsg, parsed?.upstreamStatus || 403);
+      }
+      throw new Error(parsedMsg);
+    }
+
+    const contentTypeHeader = crawlRes.headers.get("content-type");
+    if (!contentTypeHeader || !contentTypeHeader.includes("application/json")) {
+      throw new Error("Serverul a returnat un răspuns invalid la extragerea URL-ului.");
+    }
+
+    const crawlData = await crawlRes.json();
+    const {
+      title,
+      price,
+      zone,
+      ownerName,
+      ownerPhone,
+      transactionType: crawledTrans,
+      categoria: crawledCat,
+      crmData,
+      coverImage,
+    } = crawlData;
+
+    const originalTitle = clampString(
+      crawlData.originalTitle || title || crmData?.descriere?.titlu,
+      500,
+      "Anunț imobiliar"
+    );
+    const originalDescription = clampString(
+      crawlData.description || crmData?.descriere?.continut || crawlData.text || "",
+      10000,
+      ""
+    );
+
+    if (crmData?.descriere) {
+      crmData.descriere.titlu = originalTitle;
+      crmData.descriere.continut = originalDescription;
+    }
+
+    let resolvedPrice = typeof price === "string" && price.trim() ? price.trim() : "N/A";
+    if (
+      resolvedPrice !== "N/A" &&
+      (resolvedPrice.toLowerCase().includes("ron") || resolvedPrice.toLowerCase().includes("lei"))
+    ) {
+      const digits = parseFloat(resolvedPrice.replace(/[^0-9.,]/g, "").replace(",", "."));
+      if (!Number.isNaN(digits) && digits > 0) {
+        const inEur = Math.round(digits / 4.97);
+        const isRentTrans = String(crawledTrans || "").toLowerCase().includes("inchir");
+        resolvedPrice = `${inEur.toLocaleString("ro-RO")} €${isRentTrans ? " / lună" : ""}`;
+      }
+    }
+
+    const cleanCover = coverImage ? toProxiedImageUrl(coverImage) : undefined;
+    const rawImages =
+      Array.isArray(crawlData.images) && crawlData.images.length > 0
+        ? crawlData.images
+        : coverImage
+          ? [coverImage]
+          : [];
+    const safeImages = rawImages
+      .map((u: string) => toProxiedImageUrl(u))
+      .filter((u: string) => typeof u === "string" && u.trim().length > 0)
+      .slice(0, 100);
+
+    if (crmData?.imagini) {
+      const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
+      categories.forEach((cat) => {
+        if (Array.isArray(crmData.imagini[cat])) {
+          crmData.imagini[cat] = crmData.imagini[cat].map((item: any) => {
+            if (typeof item === "string") return toProxiedImageUrl(item);
+            if (item && item.original) return { ...item, original: toProxiedImageUrl(item.original) };
+            return item;
+          });
+        }
+      });
+    }
+
+    const resolvedZone = resolveAreaFromAd({
+      rawZone: zone,
+      city: crmData?.detaliiGenerale?.localizare?.oras || "București",
+      title: originalTitle,
+      description: originalDescription,
+      url: normalizedInputUrl,
+    });
+
+    await this.normalizeLegacySharedLeadIds().catch(() => 0);
+
+    const todayDateKey = getDailyLeadDateKey();
+    const reservedIds = await this.reserveDailySharedLeadIds(1, existingLeads, todayDateKey);
+    const propertyId = reservedIds[0] || formatDailyLeadId(todayDateKey, 1);
+
+    const nowIso = new Date().toISOString();
+    const creatorName =
+      auth.currentUser.displayName ||
+      (auth.currentUser.email ? auth.currentUser.email.split("@")[0] : "Super Admin");
+    const creatorEmail = auth.currentUser.email || "";
+
+    const finalExtractedData = crmData
+      ? {
+          crmData,
+          presentationSections: crawlData.presentationSections || null,
+          automationSource: crawlData.automationSource || null,
+          originalTitle,
+          markdownMarketing: originalDescription,
+          summary:
+            crawlData.presentationSections?.introducere?.summary ||
+            `${crawledCat || "Proprietate"} ${crmData.caracteristici?.detalii?.camere || "2"} camere în ${resolvedZone || "București"}, ${resolvedPrice}`,
+          originalDescription,
+          ...(crawlData.publishedAt || crawlData.publishedAtLabel || crawlData.sellerType
+            ? {
+                olxMeta: {
+                  originalTitle,
+                  publishedAt: crawlData.publishedAt || null,
+                  publishedAtLabel: crawlData.publishedAtLabel || "",
+                  sellerType: crawlData.sellerType || "",
+                },
+              }
+            : {}),
+        }
+      : undefined;
+
+    const normalizedTransactionType =
+      String(crawledTrans || "").toLowerCase().includes("vanz") ||
+      String(crawledTrans || "").toLowerCase().includes("vânz")
+        ? "Vânzare"
+        : "Închiriere";
+
+    const docPayload = stripUndefinedDeep({
+      id: docId,
+      propertyId,
+      url: clampString(normalizedInputUrl, 2048),
+      title: originalTitle,
+      zone: clampString(resolvedZone, 200, "București"),
+      price: clampString(resolvedPrice, 100, "N/A"),
+      ownerName: clampString(ownerName, 200, "Proprietar"),
+      ownerPhone: clampString(ownerPhone, 100, "Nespecificat"),
+      transactionType: normalizedTransactionType,
+      categoria: clampString(crawledCat, 100, "Apartament"),
+      status: "Noi",
+      leadType: "Proprietar",
+      coverImage: cleanCover || safeImages[0] || undefined,
+      images: safeImages,
+      notes: originalDescription,
+      extractedData: finalExtractedData,
+      isSharedLead: true,
+      source: "platform_manual_crawl",
+      createdByName: clampString(creatorName, 200, "Super Admin"),
+      createdByEmail: clampString(creatorEmail, 200),
+      author: clampString(creatorName, 200, "Super Admin"),
+      agent: "Platform Manual Crawl",
+      createdAt: nowIso,
+      updatedAt: nowIso,
+      lastMovedAt: nowIso,
+    });
+
+    await setDoc(doc(db, SHARED_LEADS_COLLECTION, docId), docPayload);
+
+    const notice: AutoCrawlScanNotice = {
+      type: "success",
+      title: `URL importat manual (#${propertyId})`,
+      message: `„${originalTitle}” (${clampString(resolvedZone, 200, "București")}) a fost adăugat și distribuit automat către toate agențiile.`,
+      timestamp: Date.now(),
+    };
+
+    return {
+      lead: docPayload as Lead,
+      propertyId,
+      title: originalTitle,
+      zone: clampString(resolvedZone, 200, "București"),
+      notice,
+    };
   },
 };

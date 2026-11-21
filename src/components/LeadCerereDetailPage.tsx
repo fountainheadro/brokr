@@ -258,6 +258,9 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
     initialSuprafata !== undefined && initialSuprafata !== null ? String(initialSuprafata) : ""
   );
   const [zoneDraft, setZoneDraft] = useState<string>(lead.zone || "");
+  const [titleDraft, setTitleDraft] = useState<string>(
+    lead.title || lead.extractedData?.crmData?.descriere?.titlu || ""
+  );
   const [notesDraft, setNotesDraft] = useState<string>(lead.notes || "");
 
   // Drafts for Section 2: Caracteristici Suplimentare
@@ -308,16 +311,19 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
       setCamereDraft(nextRooms !== undefined && nextRooms !== null ? String(nextRooms) : "");
       setSuprafataDraft(nextSuprafata !== undefined && nextSuprafata !== null ? String(nextSuprafata) : "");
       setZoneDraft(lead.zone || "");
+      setTitleDraft(lead.title || lead.extractedData?.crmData?.descriere?.titlu || "");
       setNotesDraft(lead.notes || "");
     }
   }, [
     editingPropertyInfo,
     lead.id,
+    lead.title,
     lead.price,
     lead.transactionType,
     lead.categoria,
     lead.zone,
     lead.notes,
+    lead.extractedData?.crmData?.descriere?.titlu,
     lead.extractedData?.crmData?.caracteristici?.detalii?.camere,
     lead.extractedData?.crmData?.caracteristici?.suprafete?.utila,
   ]);
@@ -380,6 +386,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
     const cleanZone = zoneDraft.trim() || "București";
     const cleanCamere = camereDraft.trim();
     const cleanSuprafata = suprafataDraft.trim();
+    const cleanTitle = titleDraft.trim() || lead.title || "";
     const cleanNotes = notesDraft;
 
     const currentCrm = lead.extractedData?.crmData;
@@ -395,6 +402,14 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                     ...currentCrm.detaliiGenerale,
                     tranzactie: transactionDraft,
                     categoria: categoriaDraft,
+                  },
+                }
+              : {}),
+            ...(cleanTitle && currentCrm
+              ? {
+                  descriere: {
+                    ...(currentCrm.descriere || {}),
+                    titlu: cleanTitle,
                   },
                 }
               : {}),
@@ -425,6 +440,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
       : undefined;
 
     const payload: Partial<Lead> = {
+      ...(cleanTitle ? { title: cleanTitle } : {}),
       price: cleanPrice,
       transactionType: transactionDraft,
       categoria: categoriaDraft,
@@ -763,6 +779,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 setCamereDraft(rooms !== undefined && rooms !== null ? String(rooms) : "");
                 setSuprafataDraft(suprafata !== undefined && suprafata !== null ? String(suprafata) : "");
                 setZoneDraft(lead.zone || "");
+                setTitleDraft(lead.title || lead.extractedData?.crmData?.descriere?.titlu || "");
                 setNotesDraft(lead.notes || "");
                 setEditingPropertyInfo(true);
               }}
@@ -858,15 +875,30 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
             </div>
           </div>
 
-          <div className={`border-t border-gray-100 ${editingPropertyInfo ? "pt-[16px]" : "pt-4"}`}>
+          <div
+            className={`border-t border-gray-100 ${
+              editingPropertyInfo ? "pt-[16px] space-y-[16px]" : "pt-4 space-y-4"
+            }`}
+          >
             <InlineDetailField
-              label="Note"
+              label="Titlu"
+              value={lead.title || lead.extractedData?.crmData?.descriere?.titlu || ""}
+              editValue={titleDraft}
+              isEditing={editingPropertyInfo}
+              onChange={setTitleDraft}
+              placeholder="Introdu titlul proprietății..."
+              emptyText="Fără titlu"
+              valueClassName="text-gray-900 font-normal"
+            />
+
+            <InlineDetailField
+              label="Descriere"
               value={lead.notes || ""}
               editValue={notesDraft}
               isEditing={editingPropertyInfo}
               onChange={setNotesDraft}
-              placeholder="Adaugă note sau cerințe..."
-              emptyText="Fără note adăugate"
+              placeholder="Adaugă descriere..."
+              emptyText="Fără descriere adăugată"
               multiline
               rows={1}
               autoHeightMaxRows={10}
@@ -1541,7 +1573,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
         {/* Footer Status & Actions */}
         <div className="px-4 py-3 bg-white border border-gray-200 rounded-xl flex flex-wrap items-center justify-between gap-2 shadow-2xs">
           <span className="text-[11px] text-gray-400 font-semibold">
-            Status: <span className="text-gray-700 font-normal">{lead.status === "ListaMea" ? "Selectate" : lead.status === "Noi" ? "Listate" : lead.status}</span>
+            Status: <span className="text-gray-700 font-normal">{lead.status === "ListaMea" || lead.status === "Noi" ? "Noi" : lead.status}</span>
           </span>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -1565,7 +1597,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 ) : (
                   <Bookmark size={12} className="text-[#BE9662]" />
                 )}
-                <span>{addingToMyList ? "Se adaugă..." : "Adaugă în Selectate"}</span>
+                <span>{addingToMyList ? "Se adaugă..." : "Adaugă în Noi"}</span>
               </button>
             )}
 
@@ -1591,7 +1623,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 }}
                 className="h-8 px-3 rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition-colors cursor-pointer"
               >
-                Reactivează în Listate
+                Reactivează în Noi
               </button>
             )}
 

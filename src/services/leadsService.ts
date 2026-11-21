@@ -8,7 +8,7 @@ import {
 } from '../core/crm/svc_crm-normalizer';
 import { automationSettingsService } from './automationSettingsService';
 import { buildTitleFromAutomationRule } from '../utils/titleAutomationEngine';
-import { platformAutoCrawlService, normalizeCrawlUrl } from './platformAutoCrawlService';
+import { platformAutoCrawlService } from './platformAutoCrawlService';
 import { isAgencyLeadId, isDailyLeadId } from '../utils/leadIdUtils';
 
 export { toCanonicalLeadStatus, toDisplayLeadStatus, type CanonicalLeadStatus };
@@ -36,7 +36,6 @@ export type LeadStatus =
   | 'Contract';
 
 export const LEADS_STATUSES: LeadStatus[] = [
-  'Noi',
   'ListaMea',
   'Pierdute'
 ];
@@ -271,44 +270,11 @@ export const leadsService = {
   },
 
   subscribeToLeads: (callback: (leads: Lead[]) => void) => {
-    let agencyLeads: Lead[] = [];
-    let sharedLeads: Lead[] = [];
-
-    const emitMerged = () => {
-      const overriddenIds = new Set<string>();
-      const overriddenUrls = new Set<string>();
-
-      for (const l of agencyLeads) {
-        if (l.id) overriddenIds.add(l.id);
-        if (l.sharedLeadId) overriddenIds.add(l.sharedLeadId);
-        if (l.url) {
-          const norm = normalizeCrawlUrl(l.url);
-          if (norm) overriddenUrls.add(norm);
-        }
-      }
-
-      const merged: Lead[] = [...agencyLeads];
-      for (const s of sharedLeads) {
-        const sid = s.id || '';
-        const normUrl = s.url ? normalizeCrawlUrl(s.url) : '';
-        if ((sid && overriddenIds.has(sid)) || (normUrl && overriddenUrls.has(normUrl))) {
-          continue;
-        }
-        merged.push({
-          ...s,
-          status: mapStatus(s.status || 'Noi'),
-        });
-      }
-
-      merged.sort((a, b) => getLeadTimeMs(b) - getLeadTimeMs(a));
-      callback(merged);
-    };
-
-    const unsubAgency = crmApiClient.subscribe<Lead>(
+    return crmApiClient.subscribe<Lead>(
       LEADS_COLLECTION,
       (items) => {
-        agencyLeads = items;
-        emitMerged();
+        const sorted = [...items].sort((a, b) => getLeadTimeMs(b) - getLeadTimeMs(a));
+        callback(sorted);
       },
       {
         transform: (leads) =>
@@ -318,16 +284,6 @@ export const leadsService = {
           })),
       }
     );
-
-    const unsubShared = platformAutoCrawlService.subscribeToSharedLeads((items) => {
-      sharedLeads = items;
-      emitMerged();
-    });
-
-    return () => {
-      unsubAgency();
-      unsubShared();
-    };
   },
 
   getLead: async (leadId: string): Promise<Lead | null> => {

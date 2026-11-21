@@ -7,6 +7,7 @@ import {
   countActiveOlxFilters,
 } from "../utils/olxFilterUtils";
 import { OlxLeadFilterForm } from "./OlxLeadFilterPanel";
+import type { Lead } from "../services/leadsService";
 
 export type OlxLeadDrawerMode = "filter" | "autoScan";
 
@@ -58,6 +59,8 @@ interface OlxLeadDrawerProps {
   maxAdAgeHours?: number;
   onMaxAdAgeChange?: (hours: number) => void;
   lastScanAt?: number | null;
+  searchableItems?: Lead[];
+  onSelectSearchItem?: (item: Lead) => void;
 }
 
 export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
@@ -77,6 +80,8 @@ export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
   maxAdAgeHours = DEFAULT_OLX_MAX_AD_AGE_HOURS,
   onMaxAdAgeChange,
   lastScanAt = null,
+  searchableItems,
+  onSelectSearchItem,
 }) => {
   const activeCount = countActiveOlxFilters(filters);
   const isAutoScan = mode === "autoScan";
@@ -319,7 +324,7 @@ export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
                   </div>
 
                   <p className="text-[11px] font-normal text-gray-500 leading-relaxed">
-                    Scanează periodic pagina OLX.ro conform filtrelor și intervalului de vechime selectat, adăugând automat anunțurile noi în categoria <strong className="font-semibold text-[#051D35]">Listate</strong>.
+                    Scanează periodic pagina OLX.ro conform filtrelor și intervalului de vechime selectat, adăugând automat anunțurile noi în <strong className="font-semibold text-[#051D35]">Piața Imobiliară</strong>.
                     {lastScanAt && (
                       <span className="block mt-1 text-[10px] text-gray-400">
                         Ultima scanare: {new Date(lastScanAt).toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
@@ -333,6 +338,8 @@ export const OlxLeadDrawer: React.FC<OlxLeadDrawerProps> = ({
                 filters={filters}
                 onChange={onChange}
                 pageContext={resolvedContext}
+                searchableItems={searchableItems}
+                onSelectSearchItem={onSelectSearchItem}
               />
             </div>
 

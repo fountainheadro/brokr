@@ -3,7 +3,36 @@ import { useParams, Link } from "react-router-dom";
 import { Lead } from "../services/leadsService";
 import { PropertyDetailView } from "../components/PropertyDetailView";
 import { PublicContentShield } from "../components/PublicContentShield";
+import {
+  resolvePublicDisplayTitle,
+  formatOpenGraphDescription,
+} from "../utils/publicContentUtils";
 import { Loader2, AlertCircle } from "lucide-react";
+
+function upsertMetaTag(
+  attr: "name" | "property",
+  key: string,
+  content: string
+): void {
+  const selector = `meta[${attr}="${key}"]`;
+  let el = document.head.querySelector(selector) as HTMLMetaElement | null;
+  if (!el) {
+    el = document.createElement("meta");
+    el.setAttribute(attr, key);
+    document.head.appendChild(el);
+  }
+  el.setAttribute("content", content);
+}
+
+function upsertCanonicalLink(href: string): void {
+  let el = document.head.querySelector('link[rel="canonical"]') as HTMLLinkElement | null;
+  if (!el) {
+    el = document.createElement("link");
+    el.setAttribute("rel", "canonical");
+    document.head.appendChild(el);
+  }
+  el.setAttribute("href", href);
+}
 
 export const SharedProperty: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -101,10 +130,40 @@ export const SharedProperty: React.FC = () => {
     if (loading) {
       document.title = "Loading page...";
     } else if (lead) {
-      const pageTitle = lead.title || lead.extractedData?.crmData?.descriere?.titlu || "Proprietate imobiliară";
+      const pageTitle = resolvePublicDisplayTitle(lead, "Proprietate imobiliară");
+      const pageDescription = formatOpenGraphDescription(
+        lead,
+        "Proprietate imobiliară prezentată de brokr."
+      );
+      const shareUrl = window.location.href.split("#")[0];
+      const encodedId = id ? encodeURIComponent(id) : "";
+      const ogImageUrl = encodedId
+        ? `${window.location.origin}/api/og-image/${encodedId}.jpg`
+        : `${window.location.origin}/og-default.jpg`;
+
       document.title = `${pageTitle} • brokr.`;
+      upsertCanonicalLink(shareUrl);
+      upsertMetaTag("name", "description", pageDescription);
+      upsertMetaTag("property", "og:type", "website");
+      upsertMetaTag("property", "og:locale", "ro_RO");
+      upsertMetaTag("property", "og:site_name", "brokr.");
+      upsertMetaTag("property", "og:url", shareUrl);
+      upsertMetaTag("property", "og:title", pageTitle);
+      upsertMetaTag("property", "og:description", pageDescription);
+      upsertMetaTag("property", "og:image", ogImageUrl);
+      upsertMetaTag("property", "og:image:secure_url", ogImageUrl);
+      upsertMetaTag("property", "og:image:type", "image/jpeg");
+      upsertMetaTag("property", "og:image:width", "1200");
+      upsertMetaTag("property", "og:image:height", "630");
+      upsertMetaTag("property", "og:image:alt", pageTitle);
+      upsertMetaTag("name", "twitter:card", "summary_large_image");
+      upsertMetaTag("name", "twitter:url", shareUrl);
+      upsertMetaTag("name", "twitter:title", pageTitle);
+      upsertMetaTag("name", "twitter:description", pageDescription);
+      upsertMetaTag("name", "twitter:image", ogImageUrl);
+      upsertMetaTag("name", "twitter:image:alt", pageTitle);
     }
-  }, [loading, lead]);
+  }, [loading, lead, id]);
 
   const blockContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();

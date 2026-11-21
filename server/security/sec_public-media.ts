@@ -292,8 +292,8 @@ export async function applyPublicImageProtections(
   let outBuffer: Buffer;
   let outMime: string;
 
+  const detectedMime = detectImageMagicBytes(rawBuffer)?.mime || "image/jpeg";
   try {
-    const detectedMime = detectImageMagicBytes(rawBuffer)?.mime || "image/jpeg";
     const resized = await createThumbnail({
       buffer: rawBuffer,
       mimeType: detectedMime,
@@ -306,12 +306,17 @@ export async function applyPublicImageProtections(
     outBuffer = resized.data;
     outMime = resized.mimeType;
   } catch {
-    const img = await readImageWithFallback(rawBuffer);
-    if (img.width > capWidth || img.height > capWidth) {
-      img.scaleToFit({ w: capWidth, h: capWidth });
+    try {
+      const img = await readImageWithFallback(rawBuffer);
+      if (img.width > capWidth || img.height > capWidth) {
+        img.scaleToFit({ w: capWidth, h: capWidth });
+      }
+      outBuffer = await img.getBuffer("image/jpeg" as any, { quality: 88 });
+      outMime = "image/jpeg";
+    } catch {
+      outBuffer = rawBuffer;
+      outMime = detectedMime;
     }
-    outBuffer = await img.getBuffer("image/jpeg" as any, { quality: 88 });
-    outMime = "image/jpeg";
   }
 
   if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {

@@ -1,44 +1,138 @@
-import React, { Suspense, lazy } from "react";
+import React, { Component, Suspense, lazy } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { NotificationManager } from "./components/NotificationManager";
 import { NotificationProvider } from "./components/NotificationProvider";
 import { AuthProvider } from "./core/auth/ctx_auth";
 import { TenantProvider, useTenantContext } from "./core/tenancy/ctx_tenant";
-
-// Route-level lazy loading for performance & modular architecture
-const Home = lazy(() => import("./pages/Home").then((m) => ({ default: m.Home })));
-const SharedProperty = lazy(() => import("./pages/SharedProperty").then((m) => ({ default: m.SharedProperty })));
-const PgDesignSystemShowcase = lazy(() => import("./pages/pg_design-system-showcase").then((m) => ({ default: m.PgDesignSystemShowcase })));
-
 import { MolPreviewBanner } from "./ui/molecules/platform/mol_preview-banner";
 
+const RELOAD_GUARD_KEY = "brokr_lazy_chunk_reload_ts";
+
+function isDynamicImportError(err: unknown): boolean {
+  const msg = String((err as any)?.message || err || "");
+  return (
+    msg.includes("Failed to fetch dynamically imported module") ||
+    msg.includes("Importing a module script failed") ||
+    msg.includes("Loading chunk") ||
+    msg.includes("ChunkLoadError")
+  );
+}
+
+/**
+ * Resilient React.lazy wrapper that retries transient dynamic import failures
+ * (e.g. during dev server restarts or post-deploy chunk hash changes) before
+ * performing a single guarded page refresh.
+ */
+function lazyWithRetry<T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>,
+  retries = 3
+): React.LazyExoticComponent<T> {
+  return lazy(async () => {
+    let lastError: unknown;
+    const delays = [350, 800, 1500];
+
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await factory();
+      } catch (err) {
+        lastError = err;
+        if (!isDynamicImportError(err) || attempt === retries) {
+          break;
+        }
+        const waitMs = delays[Math.min(attempt, delays.length - 1)];
+        await new Promise((resolve) => window.setTimeout(resolve, waitMs));
+      }
+    }
+
+    // One-shot guarded reload when a stale module/chunk hash persists after retries
+    if (typeof window !== "undefined" && isDynamicImportError(lastError)) {
+      try {
+        const lastReload = Number(window.sessionStorage.getItem(RELOAD_GUARD_KEY) || "0");
+        const now = Date.now();
+        if (!lastReload || now - lastReload > 15_000) {
+          window.sessionStorage.setItem(RELOAD_GUARD_KEY, String(now));
+          window.location.reload();
+          return await new Promise<{ default: T }>(() => {});
+        }
+      } catch {
+        // Ignore sessionStorage restrictions
+      }
+    }
+
+    throw lastError;
+  });
+}
+
+// Route-level lazy loading with automatic retry for transient chunk/module fetch errors
+const Home = lazyWithRetry(() => import("./pages/Home").then((m) => ({ default: m.Home })));
+const SharedProperty = lazyWithRetry(() => import("./pages/SharedProperty").then((m) => ({ default: m.SharedProperty })));
+const PgDesignSystemShowcase = lazyWithRetry(() => import("./pages/pg_design-system-showcase").then((m) => ({ default: m.PgDesignSystemShowcase })));
+
 // Platform Super Admin routes (lazy loaded)
-const PgPlatformDashboard = lazy(() => import("./pages/platform/pg_platform-dashboard").then((m) => ({ default: m.PgPlatformDashboard })));
-const PgPlatformAgencies = lazy(() => import("./pages/platform/pg_platform-agencies").then((m) => ({ default: m.PgPlatformAgencies })));
-const PgPlatformAgencyDetail = lazy(() => import("./pages/platform/pg_platform-agency-detail").then((m) => ({ default: m.PgPlatformAgencyDetail })));
-const PgPlatformAgencyTesting = lazy(() => import("./pages/platform/pg_platform-agency-testing").then((m) => ({ default: m.PgPlatformAgencyTesting })));
-const PgPlatformUsers = lazy(() => import("./pages/platform/pg_platform-users").then((m) => ({ default: m.PgPlatformUsers })));
-const PgPlatformDomains = lazy(() => import("./pages/platform/pg_platform-domains").then((m) => ({ default: m.PgPlatformDomains })));
-const PgPlatformAnalytics = lazy(() => import("./pages/platform/pg_platform-analytics").then((m) => ({ default: m.PgPlatformAnalytics })));
-const PgPlatformAiUsage = lazy(() => import("./pages/platform/pg_platform-ai-usage").then((m) => ({ default: m.PgPlatformAiUsage })));
-const PgPlatformAuditLogs = lazy(() => import("./pages/platform/pg_platform-audit-logs").then((m) => ({ default: m.PgPlatformAuditLogs })));
-const PgPlatformSettings = lazy(() => import("./pages/platform/pg_platform-settings").then((m) => ({ default: m.PgPlatformSettings })));
-const PgPlatformPlans = lazy(() => import("./pages/platform/pg_platform-plans").then((m) => ({ default: m.PgPlatformPlans })));
-const PgPlatformSubscriptions = lazy(() => import("./pages/platform/pg_platform-subscriptions").then((m) => ({ default: m.PgPlatformSubscriptions })));
-const PgPlatformModules = lazy(() => import("./pages/platform/pg_platform-modules").then((m) => ({ default: m.PgPlatformModules })));
-const PgPlatformUsage = lazy(() => import("./pages/platform/pg_platform-usage").then((m) => ({ default: m.PgPlatformUsage })));
-const PgPlatformBilling = lazy(() => import("./pages/platform/pg_platform-billing").then((m) => ({ default: m.PgPlatformBilling })));
-const PgPlatformMigration = lazy(() => import("./pages/platform/pg_platform-migration").then((m) => ({ default: m.PgPlatformMigration })));
-const PgPlatformAutomatizare = lazy(() => import("./pages/platform/pg_platform-automatizare").then((m) => ({ default: m.PgPlatformAutomatizare })));
-const PgPlatformAutoCrawl = lazy(() => import("./pages/platform/pg_platform-auto-crawl").then((m) => ({ default: m.PgPlatformAutoCrawl })));
-const PgAgencyAdminBoundary = lazy(() => import("./pages/platform/pg_agency-admin-boundary").then((m) => ({ default: m.PgAgencyAdminBoundary })));
-const PgAgencyAdminSettings = lazy(() => import("./pages/agency/pg_agency-admin-settings").then((m) => ({ default: m.PgAgencyAdminSettings })));
-const PgAgencyAdminMembers = lazy(() => import("./pages/agency/pg_agency-admin-members").then((m) => ({ default: m.PgAgencyAdminMembers })));
-const PgAgencyAdminSubscription = lazy(() => import("./pages/agency/pg_agency-admin-subscription").then((m) => ({ default: m.PgAgencyAdminSubscription })));
-const PgAgencyAdminAiConfig = lazy(() => import("./pages/agency/pg_agency-admin-ai-config").then((m) => ({ default: m.PgAgencyAdminAiConfig })));
-const PgAgencyAdminAutomatizare = lazy(() => import("./pages/agency/pg_agency-admin-automatizare").then((m) => ({ default: m.PgAgencyAdminAutomatizare })));
+const PgPlatformDashboard = lazyWithRetry(() => import("./pages/platform/pg_platform-dashboard").then((m) => ({ default: m.PgPlatformDashboard })));
+const PgPlatformAgencies = lazyWithRetry(() => import("./pages/platform/pg_platform-agencies").then((m) => ({ default: m.PgPlatformAgencies })));
+const PgPlatformAgencyDetail = lazyWithRetry(() => import("./pages/platform/pg_platform-agency-detail").then((m) => ({ default: m.PgPlatformAgencyDetail })));
+const PgPlatformAgencyTesting = lazyWithRetry(() => import("./pages/platform/pg_platform-agency-testing").then((m) => ({ default: m.PgPlatformAgencyTesting })));
+const PgPlatformUsers = lazyWithRetry(() => import("./pages/platform/pg_platform-users").then((m) => ({ default: m.PgPlatformUsers })));
+const PgPlatformDomains = lazyWithRetry(() => import("./pages/platform/pg_platform-domains").then((m) => ({ default: m.PgPlatformDomains })));
+const PgPlatformAnalytics = lazyWithRetry(() => import("./pages/platform/pg_platform-analytics").then((m) => ({ default: m.PgPlatformAnalytics })));
+const PgPlatformAiUsage = lazyWithRetry(() => import("./pages/platform/pg_platform-ai-usage").then((m) => ({ default: m.PgPlatformAiUsage })));
+const PgPlatformAuditLogs = lazyWithRetry(() => import("./pages/platform/pg_platform-audit-logs").then((m) => ({ default: m.PgPlatformAuditLogs })));
+const PgPlatformSettings = lazyWithRetry(() => import("./pages/platform/pg_platform-settings").then((m) => ({ default: m.PgPlatformSettings })));
+const PgPlatformPlans = lazyWithRetry(() => import("./pages/platform/pg_platform-plans").then((m) => ({ default: m.PgPlatformPlans })));
+const PgPlatformSubscriptions = lazyWithRetry(() => import("./pages/platform/pg_platform-subscriptions").then((m) => ({ default: m.PgPlatformSubscriptions })));
+const PgPlatformModules = lazyWithRetry(() => import("./pages/platform/pg_platform-modules").then((m) => ({ default: m.PgPlatformModules })));
+const PgPlatformUsage = lazyWithRetry(() => import("./pages/platform/pg_platform-usage").then((m) => ({ default: m.PgPlatformUsage })));
+const PgPlatformBilling = lazyWithRetry(() => import("./pages/platform/pg_platform-billing").then((m) => ({ default: m.PgPlatformBilling })));
+const PgPlatformMigration = lazyWithRetry(() => import("./pages/platform/pg_platform-migration").then((m) => ({ default: m.PgPlatformMigration })));
+const PgPlatformAutomatizare = lazyWithRetry(() => import("./pages/platform/pg_platform-automatizare").then((m) => ({ default: m.PgPlatformAutomatizare })));
+const PgPlatformAutoCrawl = lazyWithRetry(() => import("./pages/platform/pg_platform-auto-crawl").then((m) => ({ default: m.PgPlatformAutoCrawl })));
+const PgAgencyAdminBoundary = lazyWithRetry(() => import("./pages/platform/pg_agency-admin-boundary").then((m) => ({ default: m.PgAgencyAdminBoundary })));
+const PgAgencyAdminPiataImobiliara = lazyWithRetry(() => import("./pages/agency/pg_agency-admin-piata-imobiliara").then((m) => ({ default: m.PgAgencyAdminPiataImobiliara })));
+const PgAgencyAdminSettings = lazyWithRetry(() => import("./pages/agency/pg_agency-admin-settings").then((m) => ({ default: m.PgAgencyAdminSettings })));
+const PgAgencyAdminMembers = lazyWithRetry(() => import("./pages/agency/pg_agency-admin-members").then((m) => ({ default: m.PgAgencyAdminMembers })));
+const PgAgencyAdminSubscription = lazyWithRetry(() => import("./pages/agency/pg_agency-admin-subscription").then((m) => ({ default: m.PgAgencyAdminSubscription })));
+const PgAgencyAdminAiConfig = lazyWithRetry(() => import("./pages/agency/pg_agency-admin-ai-config").then((m) => ({ default: m.PgAgencyAdminAiConfig })));
+const PgAgencyAdminAutomatizare = lazyWithRetry(() => import("./pages/agency/pg_agency-admin-automatizare").then((m) => ({ default: m.PgAgencyAdminAutomatizare })));
 
+interface RouteErrorBoundaryState {
+  hasError: boolean;
+}
 
+class RouteErrorBoundary extends Component<{ children: React.ReactNode }, RouteErrorBoundaryState> {
+  state: RouteErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): RouteErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error("[App] Route rendering / module load error:", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="w-screen h-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center select-none">
+          <h2 className="text-sm font-semibold text-[#051D35] mb-1.5">
+            Pagina nu a putut fi încărcată
+          </h2>
+          <p className="text-xs text-gray-500 max-w-sm mb-4">
+            A apărut o întrerupere temporară la încărcarea aplicației. Reîncărcați pagina pentru a continua.
+          </p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 rounded-lg bg-[#051D35] text-white text-xs font-semibold hover:bg-[#0a2b4a] transition-colors cursor-pointer"
+          >
+            Reîncarcă pagina
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Loading fallback atom matching Brokr design tokens
 const RouteLoadingFallback = () => (
@@ -70,63 +164,66 @@ export default function App() {
         <TenantProvider>
           <NotificationProvider>
             <MolPreviewBanner />
-            <Suspense fallback={<RouteLoadingFallback />}>
-              <Routes>
-                <Route path="/" element={<RootRouteElement />} />
-                <Route
-                  path="/leads/:id"
-                  element={
-                    <>
-                      <NotificationManager />
-                      <Home />
-                    </>
-                  }
-                />
-                <Route
-                  path="/cereri/:id"
-                  element={
-                    <>
-                      <NotificationManager />
-                      <Home />
-                    </>
-                  }
-                />
-                <Route path="/calendar" element={<Navigate to="/?calendar=true" replace />} />
-                <Route path="/share/:id" element={<SharedProperty />} />
-                <Route path="/p/:id" element={<SharedProperty />} />
-                <Route path="/showcase" element={<PgDesignSystemShowcase />} />
-                <Route path="/design-system" element={<PgDesignSystemShowcase />} />
+            <RouteErrorBoundary>
+              <Suspense fallback={<RouteLoadingFallback />}>
+                <Routes>
+                  <Route path="/" element={<RootRouteElement />} />
+                  <Route
+                    path="/leads/:id"
+                    element={
+                      <>
+                        <NotificationManager />
+                        <Home />
+                      </>
+                    }
+                  />
+                  <Route
+                    path="/cereri/:id"
+                    element={
+                      <>
+                        <NotificationManager />
+                        <Home />
+                      </>
+                    }
+                  />
+                  <Route path="/calendar" element={<Navigate to="/?calendar=true" replace />} />
+                  <Route path="/share/:id" element={<SharedProperty />} />
+                  <Route path="/p/:id" element={<SharedProperty />} />
+                  <Route path="/showcase" element={<PgDesignSystemShowcase />} />
+                  <Route path="/design-system" element={<PgDesignSystemShowcase />} />
 
-                {/* Super Admin Platform Routes */}
-                <Route path="/platform" element={<Navigate to="/platform/dashboard" replace />} />
-                <Route path="/platform/dashboard" element={<PgPlatformDashboard />} />
-                <Route path="/platform/agencies" element={<PgPlatformAgencies />} />
-                <Route path="/platform/agencies/:tenant_id" element={<PgPlatformAgencyDetail />} />
-                <Route path="/platform/agency-testing" element={<PgPlatformAgencyTesting />} />
-                <Route path="/platform/users" element={<PgPlatformUsers />} />
-                <Route path="/platform/domains" element={<PgPlatformDomains />} />
-                <Route path="/platform/analytics" element={<PgPlatformAnalytics />} />
-                <Route path="/platform/ai-usage" element={<PgPlatformAiUsage />} />
-                <Route path="/platform/audit-logs" element={<PgPlatformAuditLogs />} />
-                <Route path="/platform/settings" element={<PgPlatformSettings />} />
-                <Route path="/platform/plans" element={<PgPlatformPlans />} />
-                <Route path="/platform/subscriptions" element={<PgPlatformSubscriptions />} />
-                <Route path="/platform/modules" element={<PgPlatformModules />} />
-                <Route path="/platform/usage" element={<PgPlatformUsage />} />
-                <Route path="/platform/billing" element={<PgPlatformBilling />} />
-                <Route path="/platform/migration" element={<PgPlatformMigration />} />
-                <Route path="/platform/automatizare" element={<PgPlatformAutomatizare />} />
-                <Route path="/platform/auto-crawl" element={<PgPlatformAutoCrawl />} />
+                  {/* Super Admin Platform Routes */}
+                  <Route path="/platform" element={<Navigate to="/platform/dashboard" replace />} />
+                  <Route path="/platform/dashboard" element={<PgPlatformDashboard />} />
+                  <Route path="/platform/agencies" element={<PgPlatformAgencies />} />
+                  <Route path="/platform/agencies/:tenant_id" element={<PgPlatformAgencyDetail />} />
+                  <Route path="/platform/agency-testing" element={<PgPlatformAgencyTesting />} />
+                  <Route path="/platform/users" element={<PgPlatformUsers />} />
+                  <Route path="/platform/domains" element={<PgPlatformDomains />} />
+                  <Route path="/platform/analytics" element={<PgPlatformAnalytics />} />
+                  <Route path="/platform/ai-usage" element={<PgPlatformAiUsage />} />
+                  <Route path="/platform/audit-logs" element={<PgPlatformAuditLogs />} />
+                  <Route path="/platform/settings" element={<PgPlatformSettings />} />
+                  <Route path="/platform/plans" element={<PgPlatformPlans />} />
+                  <Route path="/platform/subscriptions" element={<PgPlatformSubscriptions />} />
+                  <Route path="/platform/modules" element={<PgPlatformModules />} />
+                  <Route path="/platform/usage" element={<PgPlatformUsage />} />
+                  <Route path="/platform/billing" element={<PgPlatformBilling />} />
+                  <Route path="/platform/migration" element={<PgPlatformMigration />} />
+                  <Route path="/platform/automatizare" element={<PgPlatformAutomatizare />} />
+                  <Route path="/platform/auto-crawl" element={<PgPlatformAutoCrawl />} />
 
-                {/* Agency Administration Boundaries */}
-                <Route path="/agency/admin" element={<PgAgencyAdminBoundary />} />
-                <Route path="/agency/admin/settings" element={<PgAgencyAdminSettings />} />
-                <Route path="/agency/admin/members" element={<PgAgencyAdminMembers />} />
-                <Route path="/agency/admin/subscription" element={<PgAgencyAdminSubscription />} />
-                <Route path="/agency/admin/ai-config" element={<PgAgencyAdminAiConfig />} />
-                <Route path="/agency/admin/automatizare" element={<PgAgencyAdminAutomatizare />} />
-              </Routes>
-            </Suspense>
+                  {/* Agency Administration Boundaries */}
+                  <Route path="/agency/admin" element={<PgAgencyAdminBoundary />} />
+                  <Route path="/agency/admin/piata-imobiliara" element={<PgAgencyAdminPiataImobiliara />} />
+                  <Route path="/agency/admin/settings" element={<PgAgencyAdminSettings />} />
+                  <Route path="/agency/admin/members" element={<PgAgencyAdminMembers />} />
+                  <Route path="/agency/admin/subscription" element={<PgAgencyAdminSubscription />} />
+                  <Route path="/agency/admin/ai-config" element={<PgAgencyAdminAiConfig />} />
+                  <Route path="/agency/admin/automatizare" element={<PgAgencyAdminAutomatizare />} />
+                </Routes>
+              </Suspense>
+            </RouteErrorBoundary>
           </NotificationProvider>
         </TenantProvider>
       </AuthProvider>

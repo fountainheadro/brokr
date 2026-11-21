@@ -288,9 +288,9 @@ export function buildLeadAgentFilterOptions(params: {
     });
   }
 
-  // 3. Agents attributed on existing Selectate (ListaMea) or Pierdute agency leads
+  // 3. Agents attributed on existing Noi (ListaMea / agency Noi) or Pierdute agency leads
   for (const lead of leads) {
-    if (lead.status !== "ListaMea" && lead.status !== "Pierdute") continue;
+    if (lead.status !== "ListaMea" && lead.status !== "Pierdute" && lead.status !== "Noi") continue;
     if (lead.isSharedLead) continue;
     const rawName =
       cleanAgentDisplayName(lead.agent) ||

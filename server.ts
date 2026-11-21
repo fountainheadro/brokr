@@ -20,6 +20,13 @@ import { mwObservability } from "./server/middleware/mw_observability";
 import { logger } from "./src/core/logger/logger";
 import { sanitizePublicProperty } from "./server/security/sec_public-sanitizer";
 import {
+  resolvePublicDisplayTitle,
+  resolvePublicDisplayDescription,
+  extractOrderedPublicImageUrls,
+  resolvePublicFirstImageUrl,
+  formatOpenGraphDescription,
+} from "./src/utils/publicContentUtils";
+import {
   createPublicImageToken,
   verifyPublicImageToken,
   resolveInlinePublicDataUrl,
@@ -1705,8 +1712,8 @@ Returnează un JSON strict cu următoarele chei:
     return res.status(404).send("Default OG banner not found");
   }
 
-  // Dedicated OpenGraph image endpoint for WhatsApp, Facebook, iMessage, and Twitter
-  // Generates or serves cached standard 1200x630 JPEG images with 100% crawler compatibility
+  // Dedicated OpenGraph image endpoint for WhatsApp, Facebook, LinkedIn, Telegram, iMessage, and X/Twitter
+  // Uses the exact first image of the property and outputs a crawler-ready 1200x630 JPEG (< 285KB)
   app.get(["/api/og-image/:id", "/api/og-image/:id.jpg", "/api/og-image/:id.png"], async (req, res) => {
     let { id } = req.params;
     if (id) {
@@ -1717,55 +1724,38 @@ Returnează un JSON strict cu următoarele chei:
       return serveDefaultOgBanner(res);
     }
 
-    // 1. Serve from in-memory cache if available (instant < 5ms response for crawlers)
+    const versionParam = typeof req.query.v === "string" ? req.query.v.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) : "";
     const preferredTenantId = resolvePublicShareTenantId(req);
-    const ogCacheKey = `${preferredTenantId || "global"}:${id}`;
+    const ogCacheKey = `${preferredTenantId || "global"}:${id}:${versionParam}`;
     const cached = ogImageMemoryCache.get(ogCacheKey);
     if (cached && (Date.now() - cached.timestamp < 1000 * 60 * 60 * 24)) {
       res.setHeader("Content-Type", cached.mimeType);
-      res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400, immutable");
+      res.setHeader("Content-Length", String(cached.buffer.length));
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", versionParam ? "public, max-age=86400, s-maxage=86400, immutable" : "public, max-age=3600, s-maxage=3600");
       return res.send(cached.buffer);
     }
 
     try {
       const property = await fetchPropertyById(id, { preferredTenantId });
-      
-      // Collect candidate image URLs in priority order
-      const candidateUrls: string[] = [];
-      if (property?.coverImage) candidateUrls.push(property.coverImage);
-      if (Array.isArray(property?.images)) {
-        property.images.forEach((img: any) => {
-          if (typeof img === "string" && img) candidateUrls.push(img);
-        });
-      }
-      if (property?.extractedData?.crmData?.imagini) {
-        const crmImagini = property.extractedData.crmData.imagini;
-        const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
-        for (const cat of categories) {
-          const list = crmImagini[cat];
-          if (Array.isArray(list)) {
-            for (const item of list) {
-              const u = typeof item === "string" ? item : (item?.original || "");
-              if (u) candidateUrls.push(u);
-            }
-          }
-        }
-      }
+      const candidateUrls = extractOrderedPublicImageUrls(property);
 
       let rawBuffer: Buffer | null = null;
       let contentType = "image/jpeg";
       let chosenUrl = "";
+      let alreadyCleaned = false;
 
       for (let rawUrl of candidateUrls) {
         if (!rawUrl || typeof rawUrl !== "string") continue;
-        
+
         // Unwrap proxy URL if present
         if (rawUrl.includes("/api/proxy-image")) {
           try {
             const u = new URL(rawUrl, "https://placeholder.local");
             const extracted = u.searchParams.get("url");
             if (extracted) rawUrl = extracted;
-          } catch (e) {}
+          } catch {}
         }
 
         // Handle base64 dataUrl
@@ -1777,9 +1767,10 @@ Returnează un JSON strict cu următoarele chei:
               const mimeMatch = parts[0].match(/:(.*?);/);
               contentType = mimeMatch ? mimeMatch[1] : "image/jpeg";
               chosenUrl = rawUrl;
+              alreadyCleaned = false;
               break;
             }
-          } catch (e) {}
+          } catch {}
         }
 
         // Handle migrated cloud storage listing media URLs
@@ -1793,6 +1784,7 @@ Returnează un JSON strict cu următoarele chei:
             rawBuffer = buffer;
             contentType = metadata.mimeType || "image/jpeg";
             chosenUrl = rawUrl;
+            alreadyCleaned = false;
             break;
           } catch {
             // Continue to next candidate URL
@@ -1801,84 +1793,108 @@ Returnează un JSON strict cu următoarele chei:
 
         // Handle local uploads (prevent path traversal outside uploadsDir)
         if (rawUrl.startsWith("/uploads/")) {
-          const localPath = path.resolve("./public" + rawUrl);
+          const cleanRel = rawUrl.split("?")[0];
+          const localPath = path.resolve("./public" + cleanRel);
           if (localPath.startsWith(uploadsDir + path.sep) && fs.existsSync(localPath)) {
             rawBuffer = fs.readFileSync(localPath);
-            contentType = rawUrl.endsWith(".png") ? "image/png" : "image/jpeg";
+            contentType = cleanRel.endsWith(".png") ? "image/png" : "image/jpeg";
             chosenUrl = rawUrl;
+            alreadyCleaned = false;
             break;
           }
         }
 
-        // Handle external HTTP/HTTPS images with SSRF guard
+        // Handle external HTTP/HTTPS images using the hardened fetcher (Referer + retries + watermark cleaning)
         if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
           try {
-            const response = await safeFetchExternal(rawUrl, {
-              responseType: "arraybuffer",
-              timeout: 4500,
-              headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
-                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8"
-              }
+            const cleanedEntry = await fetchAndCleanExternalImage(rawUrl, {
+              maxAttempts: 2,
+              timeoutMs: 6500,
             });
-            if (response.status === 200 && response.data) {
-              rawBuffer = Buffer.isBuffer(response.data) ? response.data : Buffer.from(response.data);
-              const rawCt = response.headers["content-type"];
-              contentType = Array.isArray(rawCt) ? String(rawCt[0]) : (typeof rawCt === "string" ? rawCt : "image/jpeg");
+            if (cleanedEntry?.data && cleanedEntry.data.length > 0) {
+              rawBuffer = cleanedEntry.data;
+              contentType = cleanedEntry.mimeType || "image/jpeg";
               chosenUrl = rawUrl;
+              alreadyCleaned = true;
               break;
             }
-          } catch (fetchErr) {
+          } catch {
             // Continue to next candidate URL
           }
         }
       }
 
-      if (!rawBuffer) {
+      if (!rawBuffer || rawBuffer.length === 0) {
         return serveDefaultOgBanner(res);
       }
 
       let processedBuffer = rawBuffer;
       try {
-        // Clean watermark using detailed non-AI inpainting if present
-        processedBuffer = await cleanImageWatermarks(rawBuffer, contentType, chosenUrl);
-        let jimpBuffer = processedBuffer;
-        const isWebP = jimpBuffer.length > 12 && jimpBuffer[0] === 0x52 && jimpBuffer[1] === 0x49 && jimpBuffer[2] === 0x46 && jimpBuffer[3] === 0x46 && jimpBuffer.toString("ascii", 8, 12) === "WEBP";
-        if (isWebP) {
-          try {
-            jimpBuffer = await execConvert(["-", "png:-"], processedBuffer);
-          } catch (e) {}
+        if (!alreadyCleaned) {
+          processedBuffer = await cleanImageWatermarks(rawBuffer, contentType, chosenUrl);
         }
-        const img = await Jimp.read(jimpBuffer);
-        
-        // Scale to fit landscape dimensions (strict WhatsApp < 300KB thumbnail requirement)
-        if (img.width > 750 || img.height > 470) {
-          img.scaleToFit({ w: 750, h: 470 });
-        }
-        processedBuffer = await img.getBuffer("image/jpeg" as any);
-        if (processedBuffer.length > 295000) {
-          img.scaleToFit({ w: 640, h: 400 });
+
+        // Primary pipeline: ImageMagick natively handles JPEG/PNG/WebP/AVIF + EXIF orientation
+        // and produces an exact 1200x630 center-cropped progressive JPEG under WhatsApp's 300KB cap.
+        try {
+          const ogBaseArgs = [
+            "-",
+            "-auto-orient",
+            "-background",
+            "#0f172a",
+            "-flatten",
+            "-resize",
+            "1200x630^",
+            "-gravity",
+            "center",
+            "-extent",
+            "1200x630",
+            "-strip",
+            "-interlace",
+            "Plane",
+          ];
+          let converted = await execConvert([...ogBaseArgs, "-quality", "82", "jpg:-"], processedBuffer);
+          if (converted.length > 285000) {
+            converted = await execConvert([...ogBaseArgs, "-quality", "68", "jpg:-"], processedBuffer);
+          }
+          if (converted.length > 285000) {
+            converted = await execConvert([...ogBaseArgs, "-quality", "54", "jpg:-"], processedBuffer);
+          }
+          if (converted.length > 0) {
+            processedBuffer = converted;
+          }
+        } catch (imErr: any) {
+          // Fallback to Jimp if ImageMagick fails
+          console.warn(`[OG Image] ImageMagick fallback to Jimp:`, imErr?.message);
+          const img = await Jimp.read(processedBuffer);
+          img.cover({ w: 1200, h: 630 });
           processedBuffer = await img.getBuffer("image/jpeg" as any);
+          if (processedBuffer.length > 285000) {
+            img.scaleToFit({ w: 800, h: 420 });
+            processedBuffer = await img.getBuffer("image/jpeg" as any);
+          }
         }
       } catch (procErr: any) {
-        console.warn(`[OG Image] Jimp optimization warning:`, procErr?.message);
+        console.warn(`[OG Image] Optimization warning:`, procErr?.message);
         try {
           const fallbackImg = await Jimp.read(rawBuffer);
-          fallbackImg.scaleToFit({ w: 640, h: 400 });
+          fallbackImg.scaleToFit({ w: 800, h: 420 });
           processedBuffer = await fallbackImg.getBuffer("image/jpeg" as any);
-        } catch (e) {
+        } catch {
           processedBuffer = rawBuffer;
         }
       }
 
-      if (ogImageMemoryCache.size >= 100) {
+      if (ogImageMemoryCache.size >= 150) {
         const oldestKey = ogImageMemoryCache.keys().next().value;
         if (oldestKey !== undefined) ogImageMemoryCache.delete(oldestKey);
       }
       ogImageMemoryCache.set(ogCacheKey, { buffer: processedBuffer, mimeType: "image/jpeg", timestamp: Date.now() });
       res.setHeader("Content-Type", "image/jpeg");
       res.setHeader("Content-Length", String(processedBuffer.length));
-      res.setHeader("Cache-Control", "public, max-age=86400, s-maxage=86400, immutable");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cache-Control", versionParam ? "public, max-age=86400, s-maxage=86400, immutable" : "public, max-age=3600, s-maxage=3600");
       return res.send(processedBuffer);
     } catch (err: any) {
       console.warn(`[OG Image] Error generating preview image for property ${id}:`, err?.message);
@@ -1886,7 +1902,7 @@ Returnează un JSON strict cu următoarele chei:
     }
   });
 
-  // OpenGraph SSR route for rich link previews on WhatsApp, Facebook, iMessage, and Twitter
+  // OpenGraph SSR route for rich link previews on WhatsApp, Facebook, LinkedIn, Telegram, iMessage, and X/Twitter
   app.get(["/share/:id", "/p/:id"], async (req, res) => {
     try {
       const { id } = req.params;
@@ -1902,17 +1918,22 @@ Returnează un JSON strict cu următoarele chei:
       const preferredTenantId = resolvePublicShareTenantId(req);
       const property = await fetchPropertyById(id, { preferredTenantId });
 
-      const title = property?.extractedData?.crmData?.descriere?.titlu || property?.title || "Proprietate Imobiliară • brokr.";
-      let description = property?.extractedData?.crmData?.descriere?.continut || property?.description || "Proprietate imobiliară prezentată de brokr.";
-      description = description.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
-      if (description.length > 200) {
-        description = description.substring(0, 197) + "...";
-      }
+      const title = resolvePublicDisplayTitle(property, "Proprietate Imobiliară • brokr.");
+      const description = formatOpenGraphDescription(
+        property,
+        "Proprietate imobiliară prezentată de brokr."
+      );
 
       // Canonical URLs with guaranteed https protocol in production
       const baseUrl = getBaseUrl(req);
+      const encodedId = encodeURIComponent(id);
       const shareUrl = `${baseUrl}${req.path}`;
-      const ogImageUrl = `${baseUrl}/api/og-image/${id}.jpg`;
+      const firstImageUrl = resolvePublicFirstImageUrl(property);
+      const imageVersionSeed = `${firstImageUrl}|${property?.updatedAt || ""}`;
+      const imageVersion = property
+        ? crypto.createHash("sha256").update(imageVersionSeed).digest("hex").slice(0, 10)
+        : "";
+      const ogImageUrl = `${baseUrl}/api/og-image/${encodedId}.jpg${imageVersion ? `?v=${imageVersion}` : ""}`;
 
       if (!fs.existsSync(indexInfo.path)) {
         return res.status(404).send("Not found");
@@ -1951,7 +1972,7 @@ Returnează un JSON strict cu următoarele chei:
               if (jsFile) jsAsset = `/assets/${jsFile}`;
               if (cssFile) cssAsset = `/assets/${cssFile}`;
               if (jsAsset) break;
-            } catch (err) {
+            } catch {
               // ignore
             }
           }
@@ -1968,12 +1989,21 @@ Returnează un JSON strict cu următoarele chei:
         }
       }
 
-      const esc = (s: string) => String(s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const esc = (s: string) =>
+        String(s || "")
+          .replace(/&/g, "&amp;")
+          .replace(/"/g, "&quot;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
 
       const ogTags = `
+    <meta charset="UTF-8" />
     <title>${esc(title)}</title>
     <meta name="description" content="${esc(description)}" />
+    <link rel="canonical" href="${esc(shareUrl)}" />
     <meta property="og:type" content="website" />
+    <meta property="og:locale" content="ro_RO" />
+    <meta property="og:site_name" content="brokr." />
     <meta property="og:url" content="${esc(shareUrl)}" />
     <meta property="og:title" content="${esc(title)}" />
     <meta property="og:description" content="${esc(description)}" />
@@ -1983,16 +2013,19 @@ Returnează un JSON strict cu următoarele chei:
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="${esc(title)}" />
-    <meta property="og:site_name" content="brokr." />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="${esc(shareUrl)}" />
     <meta name="twitter:title" content="${esc(title)}" />
     <meta name="twitter:description" content="${esc(description)}" />
     <meta name="twitter:image" content="${esc(ogImageUrl)}" />
+    <meta name="twitter:image:alt" content="${esc(title)}" />
       `.trim();
 
-      // WhatsApp / Facebook / Twitter crawlers parse only the first ~10KB-50KB of HTML.
-      // Insert the OpenGraph tags right after <head> so crawlers immediately find them.
+      // WhatsApp / Facebook / Twitter / LinkedIn crawlers parse only the top of <head>.
+      // Strip stale/default meta tags and inject UTF-8 + OpenGraph tags right after <head>.
+      html = html.replace(/<meta\s+charset=["'][^"']+["']\s*\/?>/gi, '');
       html = html.replace(/<title>[\s\S]*?<\/title>/gi, '');
+      html = html.replace(/<link\s+rel=["']canonical["'][^>]*>/gi, '');
       html = html.replace(/<meta\s+name=["']description["'][^>]*>/gi, '');
       html = html.replace(/<meta\s+property=["']og:[^"']+["'][^>]*>/gi, '');
       html = html.replace(/<meta\s+name=["']twitter:[^"']+["'][^>]*>/gi, '');
@@ -2000,6 +2033,7 @@ Returnează un JSON strict cu următoarele chei:
       html = html.replace(/<head[^>]*>/i, (match) => `${match}\n${ogTags}\n`);
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
       res.send(html);
     } catch (err: any) {
       console.warn("[Server] /share/:id OpenGraph error:", err.message);

@@ -108,6 +108,8 @@ import {
   matchesLeadAgentFilter,
   resolveCurrentAgentIdentity,
 } from "../utils/leadAgentFilterUtils";
+import { platformAutoCrawlService } from "../services/platformAutoCrawlService";
+import { agencyMarketService } from "../services/agencyMarketService";
 
 const TABS: LeadStatus[] = [
   "Noi",
@@ -131,15 +133,15 @@ const TABS: LeadStatus[] = [
   "Sterse"
 ];
 
-const LEADS_TABS: LeadStatus[] = ["Noi", "ListaMea", "Pierdute"];
+const LEADS_TABS: LeadStatus[] = ["ListaMea", "Pierdute"];
 
 const CERERI_TABS: LeadStatus[] = ["Noua", "Calificare", "Matching", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
 const PROPRIETATI_TABS: LeadStatus[] = ["Noua", "Prospectare", "Colaborare", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
 const STATUS_LABELS: Record<string, string> = {
-  "Noi": "Listate",
-  "ListaMea": "Selectate",
+  "Noi": "Noi",
+  "ListaMea": "Noi",
   "Pierdute": "Pierdute",
   "Nevalidata": "Nevalidate",
   "Calificata": "Calificate",
@@ -377,7 +379,7 @@ export const Home: React.FC = () => {
     const normalized = subItem === 'Imobile' || subItem === 'Proprietăți' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
-      setActiveTab('Noi');
+      setActiveTab('ListaMea');
     } else if (normalized === 'Cereri') {
       setActiveTab('Noua');
     } else if (normalized === 'Proprietati') {
@@ -426,7 +428,7 @@ export const Home: React.FC = () => {
   // Compute live counts matching the sidebar definition
   const counts = useMemo(() => {
     const isCerere = (l: Lead) => isCerereLead(l);
-    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && (l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
+    const isLeadItem = (l: Lead) => !isCerere(l) && l.status !== 'Sterse' && !l.isSharedLead && (l.status === 'Noi' || l.status === 'ListaMea' || l.status === 'Pierdute' || l.status === 'Nevalidata' || l.status === 'Calificata');
     const isPropItem = (l: Lead) => !isCerere(l) && l.status !== 'Nevalidata' && l.status !== 'Calificata' && l.status !== 'Noi' && l.status !== 'ListaMea' && l.status !== 'Pierdute' && l.status !== 'Sterse';
 
     return {
@@ -437,6 +439,36 @@ export const Home: React.FC = () => {
       personal: personal.length
     };
   }, [leads, contacts, personal]);
+
+  // Page-scoped items for the drawer search auto-suggest (strictly limited to current page items)
+  const drawerSearchableItems = useMemo(() => {
+    if (currentFilterSection === 'Lead-uri') {
+      return leads.filter(
+        (l) =>
+          !isCerereLead(l) &&
+          l.status !== 'Sterse' &&
+          !l.isSharedLead &&
+          (l.status === 'ListaMea' ||
+            l.status === 'Pierdute' ||
+            l.status === 'Noi' ||
+            l.status === 'Nevalidata' ||
+            l.status === 'Calificata')
+      );
+    }
+    if (currentFilterSection === 'Cereri') {
+      return leads.filter((l) => isCerereLead(l) && l.status !== 'Sterse');
+    }
+    return leads.filter(
+      (l) =>
+        !isCerereLead(l) &&
+        l.status !== 'Nevalidata' &&
+        l.status !== 'Calificata' &&
+        l.status !== 'Noi' &&
+        l.status !== 'ListaMea' &&
+        l.status !== 'Pierdute' &&
+        l.status !== 'Sterse'
+    );
+  }, [leads, currentFilterSection]);
 
   // Specific tabs for each section: Lead-uri (Noi, Pierdute), Cereri, Imobile
   const sectionTabs = useMemo<LeadStatus[]>(() => {
@@ -1154,15 +1186,18 @@ export const Home: React.FC = () => {
         }
         if (activeSidebarItem === 'Lead-uri') {
           if (isCerereLead(lead)) return false;
-          if (lead.status === 'Sterse') return false;
+          if (lead.status === 'Sterse' || lead.isSharedLead) return false;
           if (activeTab === 'Pierdute') {
             return lead.status === 'Pierdute' && matchesLeadAgentFilter(lead, selectedLeadAgentOption);
           }
-          if (activeTab === 'ListaMea') {
-            return lead.status === 'ListaMea' && matchesLeadAgentFilter(lead, selectedLeadAgentOption);
-          }
-          // Default tab 'Noi' (Listate / global unprocessed list from super admin - never filtered by agent)
-          return lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata';
+          // Default tab 'ListaMea' (displayed as "Noi") includes copied & agency-local leads
+          return (
+            (lead.status === 'ListaMea' ||
+              lead.status === 'Noi' ||
+              lead.status === 'Nevalidata' ||
+              lead.status === 'Calificata') &&
+            matchesLeadAgentFilter(lead, selectedLeadAgentOption)
+          );
         }
         // Proprietăți: exclude cereri and non-property items
         if (isCerereLead(lead)) return false;
@@ -1365,6 +1400,84 @@ export const Home: React.FC = () => {
     }
   }, [user]);
 
+  // Background auto-match scheduler for Agency Admins configured in Piața Imobiliară
+  const leadsForAutoMatchRef = useRef<Lead[]>(leads);
+  leadsForAutoMatchRef.current = leads;
+  const currentAgentForAutoMatchRef = useRef(currentAgentIdentity);
+  currentAgentForAutoMatchRef.current = currentAgentIdentity;
+
+  useEffect(() => {
+    const role = tenantContext?.role;
+    const isAgencyAdmin = role === "agency_owner" || role === "agency_admin";
+    const tenantId = tenant?.id;
+    if (!user || !tenantId || !isAgencyAdmin) return;
+
+    let cancelled = false;
+    let isRunning = false;
+
+    const tick = async () => {
+      if (cancelled || isRunning) return;
+      try {
+        const cfg = await agencyMarketService.loadConfig(tenantId);
+        if (cancelled || cfg.matchIntervalMinutes <= 0) return;
+        const elapsedMs = Date.now() - (cfg.lastRunAt || 0);
+        if (elapsedMs < cfg.matchIntervalMinutes * 60 * 1000) return;
+
+        isRunning = true;
+        const sharedSnapshot = await new Promise<Lead[]>((resolve) => {
+          let settled = false;
+          const unsub = platformAutoCrawlService.subscribeToSharedLeads((items) => {
+            if (!settled) {
+              settled = true;
+              window.setTimeout(() => unsub(), 0);
+              resolve(items);
+            }
+          });
+          window.setTimeout(() => {
+            if (!settled) {
+              settled = true;
+              unsub();
+              resolve([]);
+            }
+          }, 5000);
+        });
+
+        if (cancelled) return;
+        const result = await agencyMarketService.runAutoMatchImport({
+          sharedLeads: sharedSnapshot,
+          agencyLeads: leadsForAutoMatchRef.current,
+          config: cfg,
+          actor: currentAgentForAutoMatchRef.current,
+        });
+
+        await agencyMarketService.saveConfig(tenantId, {
+          ...cfg,
+          lastRunAt: Date.now(),
+          lastNotice: result.notice,
+        });
+
+        if (result.copiedCount > 0) {
+          toast.success(
+            `Piața Imobiliară: ${result.copiedCount} ${result.copiedCount === 1 ? "anunț potrivit copiat" : "anunțuri potrivite copiate"} automat în Lead-uri → Noi.`
+          );
+        }
+      } catch (err) {
+        console.warn("[Home] Background agency market auto-match check failed:", err);
+      } finally {
+        isRunning = false;
+      }
+    };
+
+    const timerId = window.setInterval(() => {
+      void tick();
+    }, 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timerId);
+    };
+  }, [user?.uid, tenant?.id, tenantContext?.role]);
+
   const selectedLeadIdRef = useRef<string | undefined>(selectedLead?.id);
   selectedLeadIdRef.current = selectedLead?.id;
 
@@ -1381,7 +1494,7 @@ export const Home: React.FC = () => {
 
       if (leadMatch) {
         setActiveSidebarItem("Lead-uri");
-        setActiveTab((prev) => (prev === "Noi" || prev === "ListaMea" || prev === "Pierdute" ? prev : "Noi"));
+        setActiveTab((prev) => (prev === "ListaMea" || prev === "Pierdute" ? prev : "ListaMea"));
       } else if (cerereMatch) {
         setActiveSidebarItem("Cereri");
         setActiveTab((prev) => (CERERI_TABS.includes(prev) ? prev : "Noua"));
@@ -1880,8 +1993,8 @@ export const Home: React.FC = () => {
         setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...fallbackPatch } : prev);
         toast.success(
           persisted?.propertyId
-            ? `Leadul a fost adăugat în Selectate (#${persisted.propertyId}).`
-            : "Leadul a fost adăugat în Selectate."
+            ? `Leadul a fost adăugat în Noi (#${persisted.propertyId}).`
+            : "Leadul a fost adăugat în Noi."
         );
         return;
       }
@@ -1924,10 +2037,10 @@ export const Home: React.FC = () => {
       };
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPayload } : l));
       setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...mergedPayload } : prev);
-      toast.success(`Leadul a fost adăugat în Selectate (#${resolvedPropertyId}) cu titlul și descrierea formatate!`);
+      toast.success(`Leadul a fost adăugat în Noi (#${resolvedPropertyId}) cu titlul și descrierea formatate!`);
     } catch (e) {
-      console.error("Failed to add lead to Selectate:", e);
-      toast.error("Eroare la adăugarea în Selectate!");
+      console.error("Failed to add lead to Noi:", e);
+      toast.error("Eroare la adăugarea în Noi!");
       throw e;
     }
   };
@@ -1979,9 +2092,9 @@ export const Home: React.FC = () => {
 
   const handleReactivateLead = async (leadId: string) => {
     try {
-      await leadsService.updateLeadStatus(leadId, 'Noi');
-      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'Noi' } : l));
-      toast.success("Leadul a fost reactivat în Listate.");
+      await leadsService.updateLeadStatus(leadId, 'ListaMea');
+      setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'ListaMea' } : l));
+      toast.success("Leadul a fost reactivat în Noi.");
     } catch (e) {
       console.error("Failed to reactivate lead:", e);
       toast.error("Eroare la reactivarea leadului!");
@@ -2172,28 +2285,6 @@ export const Home: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-3">
-                    {/* In-page Quick Search */}
-                    <div className="relative w-56 sm:w-64">
-                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                      <input
-                        type="text"
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        placeholder={sectionHeaderInfo.searchPlaceholder}
-                        className="w-full h-8 pl-9 pr-7 text-xs font-normal bg-gray-50 border border-gray-200 rounded-md placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-gray-400 transition-colors font-sans"
-                      />
-                      {searchQuery && (
-                        <button
-                          type="button"
-                          onClick={() => setSearchQuery("")}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
-                          title="Șterge căutarea"
-                        >
-                          <X size={12} />
-                        </button>
-                      )}
-                    </div>
-
                     {/* Action buttons per section */}
                     {activeSidebarItem === 'Lead-uri' && (
                       <button
@@ -2238,10 +2329,12 @@ export const Home: React.FC = () => {
                       const tabCount = leads.filter(l => {
                         if (activeSidebarItem === 'Lead-uri') {
                           if (isCerereLead(l)) return false;
-                          if (l.status === 'Sterse') return false;
+                          if (l.status === 'Sterse' || l.isSharedLead) return false;
                           if (tab === 'Pierdute') return l.status === 'Pierdute' && matchesLeadAgentFilter(l, selectedLeadAgentOption);
-                          if (tab === 'ListaMea') return l.status === 'ListaMea' && matchesLeadAgentFilter(l, selectedLeadAgentOption);
-                          return l.status === 'Noi' || l.status === 'Nevalidata' || l.status === 'Calificata';
+                          return (
+                            (l.status === 'ListaMea' || l.status === 'Noi' || l.status === 'Nevalidata' || l.status === 'Calificata') &&
+                            matchesLeadAgentFilter(l, selectedLeadAgentOption)
+                          );
                         }
                         if (activeSidebarItem === 'Cereri') {
                           if (!isCerereLead(l)) return false;
@@ -2258,12 +2351,10 @@ export const Home: React.FC = () => {
                       const hasNew = leads.some(lead => {
                         let isMatch = false;
                         if (activeSidebarItem === 'Lead-uri') {
-                          isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && (
+                          isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && !lead.isSharedLead && (
                             tab === 'Pierdute'
                               ? (lead.status === 'Pierdute' && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
-                              : tab === 'ListaMea'
-                                ? (lead.status === 'ListaMea' && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
-                                : (lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata')
+                              : ((lead.status === 'ListaMea' || lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata') && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
                           );
                         } else if (activeSidebarItem === 'Cereri') {
                           isMatch = isCerereLead(lead) && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'AreInteres' : lead.status === tab);
@@ -2338,7 +2429,7 @@ export const Home: React.FC = () => {
                         <Users size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                         <select
                           aria-label="Filtrează după agent"
-                          title="Filtrează lead-urile din Selectate și Pierdute după agent"
+                          title="Filtrează lead-urile din Noi și Pierdute după agent"
                           value={selectedLeadAgent}
                           onChange={(e) => setSelectedLeadAgent(e.target.value)}
                           className={`h-7 max-w-[180px] border rounded-md pl-7 pr-6 text-xs font-normal appearance-none focus:outline-none transition-colors cursor-pointer truncate ${
@@ -2381,6 +2472,11 @@ export const Home: React.FC = () => {
                   filters={activeFilters}
                   onChange={setActiveFilters}
                   onReset={() => setActiveFilters({ ...DEFAULT_OLX_LEAD_FILTERS })}
+                  searchableItems={drawerSearchableItems}
+                  onSelectSearchItem={(item) => {
+                    setIsOlxFilterOpen(false);
+                    handleLeadClick(item);
+                  }}
                 />
 
             {/* Content */}

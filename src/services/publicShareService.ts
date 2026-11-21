@@ -5,6 +5,12 @@ import {
   resolveShareCode,
   type ShareEntityKind,
 } from "../utils/shareUtils";
+import {
+  resolvePublicDisplayDescription,
+  resolvePublicDisplayTitle,
+  resolvePublicFirstImageUrl,
+  shouldUseModifiedAdContent,
+} from "../utils/publicContentUtils";
 import type { Lead } from "./leadsService";
 
 export const PUBLIC_SHARES_COLLECTION = "public_shares";
@@ -55,9 +61,12 @@ function stripUndefinedDeep<T>(value: T): T {
   return value;
 }
 
-function sanitizeExtractedDataForPublicShare(rawExtracted: any): Record<string, any> | undefined {
-  if (!rawExtracted || typeof rawExtracted !== "object") return undefined;
-  const cloned = JSON.parse(JSON.stringify(rawExtracted));
+function sanitizeExtractedDataForPublicShare(
+  rawExtracted: any,
+  lead?: Partial<Lead> | null
+): Record<string, any> | undefined {
+  const hasRaw = rawExtracted && typeof rawExtracted === "object";
+  const cloned: Record<string, any> = hasRaw ? JSON.parse(JSON.stringify(rawExtracted)) : {};
   delete cloned.url;
   delete cloned.sourceUrl;
   delete cloned.rawHtml;
@@ -86,6 +95,27 @@ function sanitizeExtractedDataForPublicShare(rawExtracted: any): Record<string, 
     delete cloned.crmData.owner;
   }
 
+  // Ensure description is available on the public snapshot for OpenGraph & shared page rendering
+  // without leaking top-level `notes` or owner PII.
+  if (lead) {
+    const rawLead = lead as Record<string, any>;
+    const existingOrigDesc =
+      typeof cloned.originalDescription === "string" ? cloned.originalDescription.trim() : "";
+    if (!existingOrigDesc) {
+      const fallbackOrigDesc =
+        (typeof rawLead.originalDescription === "string" && rawLead.originalDescription.trim()) ||
+        (typeof rawLead.description === "string" && rawLead.description.trim()) ||
+        (typeof rawLead.rawDescription === "string" && rawLead.rawDescription.trim()) ||
+        (!shouldUseModifiedAdContent(rawLead) && typeof rawLead.notes === "string"
+          ? rawLead.notes.trim()
+          : "");
+      if (fallbackOrigDesc) {
+        cloned.originalDescription = fallbackOrigDesc;
+      }
+    }
+  }
+
+  if (Object.keys(cloned).length === 0) return undefined;
   return stripUndefinedDeep(cloned);
 }
 
@@ -152,12 +182,17 @@ export async function publishPublicShareSnapshot(
 
   const title =
     clampStr(
-      lead.title || lead.extractedData?.crmData?.descriere?.titlu || `Proprietate #${shareCode}`,
+      resolvePublicDisplayTitle(lead, "") ||
+        lead.title ||
+        lead.extractedData?.crmData?.descriere?.titlu ||
+        `Proprietate #${shareCode}`,
       500
     ) || `Proprietate #${shareCode}`;
+  const firstImage = resolvePublicFirstImageUrl(lead);
+  const resolvedDesc = resolvePublicDisplayDescription(lead, "");
   const updatedAt = toIsoString(lead.updatedAt);
 
-  const fingerprint = `${docId}|${title}|${lead.price || ""}|${lead.zone || ""}|${lead.status || ""}|${updatedAt}`;
+  const fingerprint = `${docId}|${title}|${firstImage}|${resolvedDesc.length}|${lead.price || ""}|${lead.zone || ""}|${lead.status || ""}|${updatedAt}`;
   if (!options?.force && publishedFingerprintCache.get(docId) === fingerprint) {
     return true;
   }
@@ -180,9 +215,9 @@ export async function publishPublicShareSnapshot(
     parcare: clampStr(lead.parcare, 200),
     sursaIncalzire: clampStr(lead.sursaIncalzire, 200),
     modIncalzire: clampStr(lead.modIncalzire, 200),
-    coverImage: clampStr(lead.coverImage, 2048),
+    coverImage: clampStr(lead.coverImage || firstImage, 2048),
     images: rawImages,
-    extractedData: sanitizeExtractedDataForPublicShare(lead.extractedData),
+    extractedData: sanitizeExtractedDataForPublicShare(lead.extractedData, lead),
     author: clampStr(lead.author, 200),
     agent: clampStr(lead.agent, 200),
     isPublicSnapshot: true,

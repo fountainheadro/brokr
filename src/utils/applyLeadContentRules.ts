@@ -280,6 +280,17 @@ export async function applyLeadTitleAndDescriptionRules(params: {
   const updatedExtractedData = {
     ...extracted,
     ...(updatedCrmData ? { crmData: updatedCrmData } : {}),
+    ...(extracted?.presentationSections
+      ? {
+          presentationSections: {
+            ...extracted.presentationSections,
+            introducere: {
+              ...(extracted.presentationSections.introducere || {}),
+              summary: formattedDescription,
+            },
+          },
+        }
+      : {}),
     automationSource,
     originalTitle: sourceTitle,
     originalDescription: sourceDescription,

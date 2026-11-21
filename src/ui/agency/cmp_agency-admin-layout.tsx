@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import {
+  Store,
   Building,
   Settings,
   Users,
@@ -36,6 +37,13 @@ export const CmpAgencyAdminLayout: React.FC<AgencyAdminLayoutProps> = ({
       id: "grp_admin_core",
       title: "Administrare Agenție",
       items: [
+        {
+          id: "piata-imobiliara",
+          label: "Piața Imobiliară",
+          onClick: () => navigate("/agency/admin/piata-imobiliara"),
+          icon: <Store size={16} />,
+          active: location.pathname === "/agency/admin/piata-imobiliara",
+        },
         {
           id: "overview",
           label: "Panou General",

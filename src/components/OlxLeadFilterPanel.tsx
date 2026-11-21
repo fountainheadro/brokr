@@ -1,5 +1,13 @@
-import React, { useState, useRef, useEffect } from "react";
-import { Search, X } from "lucide-react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
+import {
+  Search,
+  X,
+  Clock,
+  Inbox,
+  ClipboardList,
+  Building2,
+  CornerDownLeft,
+} from "lucide-react";
 import {
   OlxLeadFilters,
   PropertyFilterPageContext,
@@ -12,11 +20,82 @@ import {
   normalizeRoText,
 } from "../utils/olxFilterUtils";
 import { ZONA_OPTIONS } from "../constants";
+import type { Lead } from "../services/leadsService";
+import {
+  getRecentSearches,
+  saveRecentSearch,
+  saveRecentFreeTextSearch,
+  removeRecentSearch,
+  clearRecentSearches,
+  type RecentSearchEntry,
+  type RecentSearchScope,
+  type RecentSearchEntityType,
+} from "../utils/recentSearchUtils";
 
 interface OlxLeadFilterFormProps {
   filters: OlxLeadFilters;
   onChange: (next: OlxLeadFilters) => void;
   pageContext?: PropertyFilterPageContext;
+  searchableItems?: Lead[];
+  onSelectSearchItem?: (item: Lead) => void;
+}
+
+const LOCAL_STATUS_LABELS: Record<string, string> = {
+  ListaMea: "Noi",
+  Noi: "Noi",
+  Pierdute: "Pierdute",
+  Noua: "Nouă",
+  Activa: "Active",
+  AreInteres: "Nouă",
+};
+
+function getPagePlaceholder(pageContext: PropertyFilterPageContext): string {
+  if (pageContext === "Lead-uri") return "Caută lead-uri (titlu, telefon, zonă, ID, preț)...";
+  if (pageContext === "Cereri") return "Caută cereri (client, zonă, ID, buget)...";
+  if (pageContext === "Proprietati") return "Caută proprietăți (titlu, zonă, ID, preț)...";
+  return "ex: metrou, Titan, mobilat...";
+}
+
+function getPageEntityMeta(pageContext: PropertyFilterPageContext): {
+  kind: RecentSearchEntityType;
+  sectionLabel: string;
+  emptyTitle: string;
+  accentBg: string;
+  accentText: string;
+  accentBorder: string;
+  badgeBg: string;
+} {
+  if (pageContext === "Cereri") {
+    return {
+      kind: "cerere",
+      sectionLabel: "Cereri",
+      emptyTitle: "Cerere fără titlu",
+      accentBg: "bg-amber-100/60",
+      accentText: "text-amber-700",
+      accentBorder: "border-amber-200",
+      badgeBg: "bg-amber-50/70",
+    };
+  }
+  if (pageContext === "Proprietati") {
+    return {
+      kind: "property",
+      sectionLabel: "Proprietăți",
+      emptyTitle: "Proprietate fără titlu",
+      accentBg: "bg-[#BE9662]/10",
+      accentText: "text-[#BE9662]",
+      accentBorder: "border-[#BE9662]/25",
+      badgeBg: "bg-gray-50",
+    };
+  }
+  return {
+    kind: "lead",
+    sectionLabel: "Lead-uri",
+    emptyTitle: "Lead fără titlu",
+    accentBg: "bg-emerald-100/60",
+    accentText: "text-emerald-700",
+    accentBorder: "border-emerald-200",
+    badgeBg: "bg-emerald-50/60",
+  };
 }
 
 const MultiSelectChips: React.FC<{
@@ -60,11 +139,35 @@ export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
   filters,
   onChange,
   pageContext = "autoScan",
+  searchableItems = [],
+  onSelectSearchItem,
 }) => {
   const [currentZoneInput, setCurrentZoneInput] = useState("");
   const [showZoneDropdown, setShowZoneDropdown] = useState(false);
   const zoneContainerRef = useRef<HTMLDivElement>(null);
   const zoneDropdownRef = useRef<HTMLDivElement>(null);
+
+  const isLocalSuggestEnabled =
+    pageContext === "Lead-uri" ||
+    pageContext === "Cereri" ||
+    pageContext === "Proprietati";
+  const recentScope: RecentSearchScope | null = isLocalSuggestEnabled ? pageContext : null;
+
+  const [isSearchDropdownOpen, setIsSearchDropdownOpen] = useState(false);
+  const [recentSearches, setRecentSearches] = useState<RecentSearchEntry[]>(() =>
+    recentScope ? getRecentSearches(recentScope) : []
+  );
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Refresh recent searches whenever scope changes
+  useEffect(() => {
+    if (recentScope) {
+      setRecentSearches(getRecentSearches(recentScope));
+    } else {
+      setRecentSearches([]);
+    }
+  }, [recentScope]);
 
   const selectedZones = Array.isArray(filters.zones) ? filters.zones : [];
 
@@ -76,11 +179,12 @@ export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (
-        zoneContainerRef.current &&
-        !zoneContainerRef.current.contains(event.target as Node)
-      ) {
+      const target = event.target as Node;
+      if (zoneContainerRef.current && !zoneContainerRef.current.contains(target)) {
         setShowZoneDropdown(false);
+      }
+      if (searchContainerRef.current && !searchContainerRef.current.contains(target)) {
+        setIsSearchDropdownOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
@@ -92,6 +196,122 @@ export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
       zoneDropdownRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   }, [showZoneDropdown, currentZoneInput, filteredZones.length]);
+
+  const entityMeta = useMemo(() => getPageEntityMeta(pageContext), [pageContext]);
+
+  const normalizedQuery = normalizeRoText(filters.searchText);
+
+  const matchingRecentSearches = useMemo(() => {
+    if (!isLocalSuggestEnabled) return [];
+    if (!normalizedQuery) return recentSearches;
+    return recentSearches.filter((entry) => {
+      const hay = normalizeRoText(`${entry.label} ${entry.subtitle || ""} ${entry.badge || ""}`);
+      return hay.includes(normalizedQuery);
+    });
+  }, [isLocalSuggestEnabled, recentSearches, normalizedQuery]);
+
+  const suggestedItems = useMemo(() => {
+    if (!isLocalSuggestEnabled || !normalizedQuery) return [];
+    const tokens = normalizedQuery.split(" ").filter(Boolean);
+    return searchableItems
+      .filter((item) => {
+        const hay = normalizeRoText(
+          [
+            item.title,
+            item.zone,
+            item.price,
+            item.ownerName,
+            item.ownerPhone,
+            item.propertyId,
+            item.id,
+            item.categoria,
+            item.notes,
+          ]
+            .filter(Boolean)
+            .join(" ")
+        );
+        return tokens.every((t) => hay.includes(t));
+      })
+      .slice(0, 6);
+  }, [isLocalSuggestEnabled, normalizedQuery, searchableItems]);
+
+  const commitFreeTextSearch = (rawText: string) => {
+    const trimmed = rawText.trim();
+    if (recentScope && trimmed.length >= 2) {
+      setRecentSearches(saveRecentFreeTextSearch(recentScope, trimmed));
+    }
+  };
+
+  const handleSelectSuggestedItem = (item: Lead) => {
+    if (recentScope) {
+      const displayTitle = item.title?.trim() || entityMeta.emptyTitle;
+      const subtitleParts =
+        pageContext === "Cereri"
+          ? [item.ownerName ? `Client: ${item.ownerName}` : "", item.price ? `Buget: ${item.price}` : ""]
+          : [item.zone || "Zonă nespecificată", item.price || ""];
+      setRecentSearches(
+        saveRecentSearch(recentScope, {
+          id: `${entityMeta.kind}:${item.id || item.propertyId || displayTitle}`,
+          kind: entityMeta.kind,
+          label: displayTitle,
+          subtitle: subtitleParts.filter(Boolean).join(" • "),
+          entityId: item.id,
+          badge: item.propertyId ? `#${item.propertyId}` : undefined,
+          queryText: displayTitle,
+        })
+      );
+    }
+    setIsSearchDropdownOpen(false);
+    onSelectSearchItem?.(item);
+  };
+
+  const handleSelectRecentEntry = (entry: RecentSearchEntry) => {
+    if (entry.kind === "text") {
+      const nextText = entry.queryText || entry.label;
+      onChange({ ...filters, searchText: nextText });
+      if (recentScope) {
+        setRecentSearches(saveRecentFreeTextSearch(recentScope, nextText));
+      }
+      setIsSearchDropdownOpen(false);
+      return;
+    }
+
+    if (entry.entityId && onSelectSearchItem) {
+      const found = searchableItems.find((item) => item.id === entry.entityId);
+      if (found) {
+        handleSelectSuggestedItem(found);
+        return;
+      }
+    }
+
+    // Fallback to filtering by label if item is no longer in list
+    const fallbackText = entry.queryText || entry.label;
+    onChange({ ...filters, searchText: fallbackText });
+    setIsSearchDropdownOpen(false);
+  };
+
+  const handleRemoveRecent = (e: React.MouseEvent, entryId: string) => {
+    e.stopPropagation();
+    if (!recentScope) return;
+    setRecentSearches(removeRecentSearch(recentScope, entryId));
+  };
+
+  const handleClearRecent = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!recentScope) return;
+    setRecentSearches(clearRecentSearches(recentScope));
+  };
+
+  const renderEntityIcon = (size = 13) => {
+    if (pageContext === "Cereri") return <ClipboardList size={size} />;
+    if (pageContext === "Proprietati") return <Building2 size={size} />;
+    return <Inbox size={size} />;
+  };
+
+  const showSearchDropdown =
+    isLocalSuggestEnabled &&
+    isSearchDropdownOpen &&
+    (filters.searchText.trim().length > 0 || recentSearches.length > 0);
 
   const handleSelectZone = (selectedZone: string) => {
     if (!selectedZones.includes(selectedZone)) {
@@ -134,8 +354,8 @@ export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Text de căutat */}
-      <div className="space-y-1.5">
+      {/* Text de căutat (with page-scoped auto-suggest + recent searches) */}
+      <div ref={searchContainerRef} className="space-y-1.5 relative">
         <label className="block text-[12px] font-semibold text-[#051D35]">
           Text de căutat
         </label>
@@ -145,22 +365,205 @@ export const OlxLeadFilterForm: React.FC<OlxLeadFilterFormProps> = ({
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none"
           />
           <input
+            ref={searchInputRef}
             type="text"
             value={filters.searchText}
-            onChange={(e) => onChange({ ...filters, searchText: e.target.value })}
-            placeholder="ex: metrou, Titan, mobilat..."
+            onChange={(e) => {
+              onChange({ ...filters, searchText: e.target.value });
+              if (isLocalSuggestEnabled) {
+                setIsSearchDropdownOpen(true);
+              }
+            }}
+            onFocus={() => {
+              if (isLocalSuggestEnabled) {
+                setRecentSearches(getRecentSearches(pageContext));
+                setIsSearchDropdownOpen(true);
+              }
+            }}
+            onBlur={() => {
+              if (isLocalSuggestEnabled && filters.searchText.trim().length >= 2) {
+                commitFreeTextSearch(filters.searchText);
+              }
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && isLocalSuggestEnabled) {
+                e.preventDefault();
+                commitFreeTextSearch(filters.searchText);
+                setIsSearchDropdownOpen(false);
+              } else if (e.key === "Escape") {
+                setIsSearchDropdownOpen(false);
+              }
+            }}
+            placeholder={getPagePlaceholder(pageContext)}
             className="w-full h-8 pl-8 pr-7 text-[12px] font-normal bg-gray-50 border border-gray-200 rounded-md placeholder:text-gray-400 focus:outline-none focus:bg-white focus:border-[#051D35] transition-colors"
           />
           {filters.searchText && (
             <button
               type="button"
-              onClick={() => onChange({ ...filters, searchText: "" })}
+              onClick={() => {
+                onChange({ ...filters, searchText: "" });
+                searchInputRef.current?.focus();
+              }}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 cursor-pointer"
+              title="Șterge căutarea"
             >
               <X size={12} />
             </button>
           )}
         </div>
+
+        {/* Page-Scoped Auto-Suggest & Recent Searches Dropdown */}
+        {showSearchDropdown && (
+          <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-lg shadow-xl z-50 max-h-[320px] overflow-y-auto divide-y divide-gray-100">
+            {/* Căutate recent */}
+            {matchingRecentSearches.length > 0 && (
+              <div>
+                <div className="px-3 py-1.5 bg-gray-50/90 text-[10px] font-semibold uppercase tracking-wider text-gray-500 border-b border-gray-100 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Clock size={11} className="text-gray-400" />
+                    Căutate recent
+                  </span>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={handleClearRecent}
+                    className="text-[10px] font-medium normal-case tracking-normal text-gray-400 hover:text-gray-700 cursor-pointer"
+                  >
+                    Șterge
+                  </button>
+                </div>
+                <div className="divide-y divide-gray-50">
+                  {matchingRecentSearches.map((entry) => (
+                    <div
+                      key={entry.id}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => handleSelectRecentEntry(entry)}
+                      className="px-3 py-2 flex items-center justify-between gap-2 hover:bg-gray-50 transition-colors cursor-pointer group"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Clock size={12} className="text-gray-400 shrink-0" />
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-gray-800 truncate flex items-center gap-1.5">
+                            <span className="truncate">{entry.label}</span>
+                            {entry.badge && (
+                              <span className="text-[10px] font-normal px-1 py-0 rounded bg-gray-100 text-gray-600 border border-gray-200 tabular-nums shrink-0">
+                                {entry.badge}
+                              </span>
+                            )}
+                          </div>
+                          {entry.subtitle && (
+                            <div className="text-[10px] text-gray-400 truncate mt-0.5">
+                              {entry.subtitle}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => handleRemoveRecent(e, entry.id)}
+                        className="p-1 text-gray-300 hover:text-gray-600 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shrink-0"
+                        title="Elimină din căutări recente"
+                      >
+                        <X size={11} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Page-scoped suggestions when typing */}
+            {filters.searchText.trim().length > 0 && (
+              <div>
+                <div className={`px-3 py-1.5 ${entityMeta.badgeBg} text-[10px] font-semibold uppercase tracking-wider text-gray-600 border-b border-gray-100 flex items-center justify-between`}>
+                  <span className="flex items-center gap-1.5">
+                    <span className={entityMeta.accentText}>{renderEntityIcon(11)}</span>
+                    {entityMeta.sectionLabel} ({suggestedItems.length})
+                  </span>
+                </div>
+
+                {suggestedItems.length === 0 ? (
+                  <div className="px-3 py-3 text-[11px] text-gray-500 text-center">
+                    Niciun rezultat direct. Textul filtrat rămâne activ pe listă.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-50">
+                    {suggestedItems.map((item) => {
+                      const statusDisplay = LOCAL_STATUS_LABELS[item.status] || item.status;
+                      return (
+                        <div
+                          key={item.id || item.propertyId || item.title}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => handleSelectSuggestedItem(item)}
+                          className="px-3 py-2 flex items-center justify-between gap-2 hover:bg-gray-50/90 transition-colors cursor-pointer text-left select-none"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div
+                              className={`w-6 h-6 rounded-md ${entityMeta.accentBg} border ${entityMeta.accentBorder} ${entityMeta.accentText} flex items-center justify-center shrink-0`}
+                            >
+                              {renderEntityIcon(12)}
+                            </div>
+                            <div className="min-w-0">
+                              <div className="text-xs font-semibold text-gray-900 truncate flex items-center gap-1.5">
+                                <span className="truncate">
+                                  {item.title || entityMeta.emptyTitle}
+                                </span>
+                                {item.propertyId && (
+                                  <span className="text-[10px] font-normal tabular-nums px-1 py-0 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0">
+                                    #{item.propertyId}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-gray-500 truncate flex items-center gap-1.5 mt-0.5">
+                                <span>
+                                  {pageContext === "Cereri"
+                                    ? item.ownerName || "Client nespecificat"
+                                    : item.zone || "Zonă nespecificată"}
+                                </span>
+                                {item.price && (
+                                  <>
+                                    <span>•</span>
+                                    <span className="tabular-nums text-gray-700">{item.price}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                          <span className="text-[10px] font-normal px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-600 shrink-0">
+                            {statusDisplay}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Free text search commit action */}
+                <div
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    commitFreeTextSearch(filters.searchText);
+                    setIsSearchDropdownOpen(false);
+                  }}
+                  className="px-3 py-2 bg-gray-50/70 hover:bg-gray-100/80 transition-colors cursor-pointer flex items-center justify-between gap-2 text-[11px] text-[#051D35]"
+                >
+                  <span className="flex items-center gap-1.5 truncate">
+                    <Search size={11} className="text-[#BE9662] shrink-0" />
+                    <span className="truncate">
+                      Caută text liber:{" "}
+                      <strong className="font-semibold">„{filters.searchText.trim()}”</strong>
+                    </span>
+                  </span>
+                  <span className="inline-flex items-center gap-1 text-[10px] text-gray-400 shrink-0">
+                    <CornerDownLeft size={10} />
+                    Enter
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Tip Lead (exclusiv pentru secțiunea Lead-uri) */}

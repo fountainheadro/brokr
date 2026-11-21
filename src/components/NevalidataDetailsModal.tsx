@@ -166,6 +166,12 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       currentExtracted.crmData.detaliiGenerale.categoria = categoria;
       currentExtracted.crmData.detaliiGenerale.tranzactie = transactionType === "Închiriere" ? "Inchiriere" : "Vanzare";
       currentExtracted.crmData.detaliiGenerale.proprietar = ownerName;
+      if (title.trim()) {
+        currentExtracted.crmData.descriere = {
+          ...(currentExtracted.crmData.descriere || {}),
+          titlu: title.trim(),
+        };
+      }
       if (!currentExtracted.crmData.detaliiGenerale.localizare) {
         currentExtracted.crmData.detaliiGenerale.localizare = {
           oras: oras,
@@ -265,7 +271,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       onClose();
     } catch (e) {
       console.error(e);
-      toast.error("Eroare la adăugarea în Selectate!");
+      toast.error("Eroare la adăugarea în Noi!");
     } finally {
       setSaving(false);
     }
@@ -295,9 +301,9 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       if (onReactivate) {
         await onReactivate(lead.id!);
       } else {
-        await onSaveLead(lead.id!, { status: 'Noi' });
+        await onSaveLead(lead.id!, { status: 'ListaMea' });
       }
-      toast.success("Leadul a fost reactivat în Listate.");
+      toast.success("Leadul a fost reactivat în Noi.");
       onClose();
     } catch (e) {
       console.error(e);
@@ -353,7 +359,7 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                       ? 'bg-rose-50 text-rose-700 border-rose-200' 
                       : 'bg-emerald-50 text-emerald-700 border-emerald-200'
                   }`}>
-                    STATUS: {lead.status === 'Pierdute' ? 'PIERDUT' : lead.status === 'ListaMea' ? 'SELECTAT' : 'LISTAT'}
+                    STATUS: {lead.status === 'Pierdute' ? 'PIERDUT' : 'NOU'}
                   </span>
                 </div>
               </div>
@@ -595,17 +601,17 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
               </div>
             </div>
 
-            {/* Notițe / Observații */}
+            {/* Descriere */}
             <div className="pt-3 border-t border-gray-100">
               <label className="block text-gray-700 font-semibold mb-1 flex items-center gap-2">
                 <FileText size={12} className="text-[#BE9662]" />
-                <span>Observații / Detalii Interne</span>
+                <span>Descriere</span>
               </label>
               <textarea
                 rows={2}
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                placeholder="Observații despre lead sau imobil..."
+                placeholder="Descrierea proprietății..."
                 className="w-full p-2 border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-white text-xs font-normal text-gray-800 resize-none placeholder:text-gray-400"
               />
             </div>
@@ -654,10 +660,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   onClick={handleAddToMyList}
                   disabled={saving}
                   className="h-8 px-3 bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
-                  title="Mută leadul în Selectate"
+                  title="Mută leadul în Noi"
                 >
                   <Bookmark size={12} className="text-[#BE9662]" />
-                  <span>Adaugă în Selectate</span>
+                  <span>Adaugă în Noi</span>
                 </button>
               )}
 
@@ -667,10 +673,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   onClick={handleReactivate}
                   disabled={saving}
                   className="h-8 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
-                  title="Re-activează leadul în Listate"
+                  title="Re-activează leadul în Noi"
                 >
                   <RotateCcw size={12} className="text-amber-600" />
-                  <span>Reactivează în Listate</span>
+                  <span>Reactivează în Noi</span>
                 </button>
               ) : (
                 <button

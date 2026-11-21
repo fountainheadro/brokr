@@ -248,13 +248,13 @@ export const CalificataDetailsModal: React.FC<CalificataDetailsModalProps> = ({
                 </div>
               </div>
 
-              {/* Observații / Notițe */}
+              {/* Descriere */}
               <div className="pt-4 border-t border-gray-100">
                 <label className="block text-[11px] font-semibold text-gray-500 mb-1">
-                  Observații / Detalii Interne
+                  Descriere
                 </label>
                 <div className="text-[13px] font-normal text-gray-700 whitespace-pre-wrap leading-relaxed min-h-[48px]">
-                  {lead.notes || "Fără observații suplimentare."}
+                  {lead.notes || "Fără descriere adăugată."}
                 </div>
               </div>
 
