@@ -5,9 +5,19 @@ import { PersistentStoreService } from "../database/svc_persistent-store";
 import { CustomClaimsService } from "../auth/svc_custom-claims";
 
 const COL_MEMBERSHIPS = "tenant_memberships";
+const COL_INVITES = "tenant_invites";
+
+export interface TenantMemberListEntry extends TenantMembershipRecord {
+  isPendingInvite?: boolean;
+  invitedByEmail?: string;
+}
 
 function getMembershipKey(tenantId: string, userId: string): string {
   return `${tenantId}::${userId}`;
+}
+
+function getInviteKey(tenantId: string, email: string): string {
+  return `${tenantId}::${email.toLowerCase().trim()}`;
 }
 
 const SEED_MEMBERSHIPS: TenantMembershipRecord[] = [
@@ -1040,5 +1050,383 @@ export class TenantMembershipService {
     }
 
     return this.listTenantMembers(tenantId);
+  }
+
+  /**
+   * Lists all agency members AND pending email invitations from Cloud Firestore
+   * (`/tenants/{tenantId}/users` + `/tenants/{tenantId}/invites`).
+   * Bound users take precedence over pending invites with the same email.
+   */
+  public static async listTenantMembersWithInvitesAsync(
+    tenantId: string
+  ): Promise<TenantMemberListEntry[]> {
+    const byEmail = new Map<string, TenantMemberListEntry>();
+
+    if (process.env.NODE_ENV === "test" && !PersistentStoreService.isRemoteFirestoreConfigured()) {
+      for (const mem of this.listTenantMembers(tenantId)) {
+        const key = (mem.email || mem.userId).toLowerCase().trim();
+        byEmail.set(key, { ...mem, isPendingInvite: false });
+      }
+      const cachedInvites = PersistentStoreService.getAll<TenantMembershipRecord>(COL_INVITES);
+      for (const [k, inv] of Object.entries(cachedInvites)) {
+        if (!k.startsWith(`${tenantId}::`) || !inv?.email) continue;
+        const emailKey = inv.email.toLowerCase().trim();
+        if (!byEmail.has(emailKey)) {
+          byEmail.set(emailKey, {
+            ...inv,
+            id: emailKey,
+            userId: emailKey,
+            status: "invited",
+            isPendingInvite: true,
+          });
+        }
+      }
+      return Array.from(byEmail.values());
+    }
+
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+      const [remoteUsers, remoteInvites] = await Promise.all([
+        PersistentStoreService.remoteListAtPath<TenantMembershipRecord>(
+          `tenants/${tenantId}/users`,
+          300,
+          20,
+          { silentOnStatuses: [403] }
+        ).catch(() => [] as TenantMembershipRecord[]),
+        PersistentStoreService.remoteListAtPath<
+          TenantMembershipRecord & { invitedByEmail?: string }
+        >(`tenants/${tenantId}/invites`, 300, 20, { silentOnStatuses: [403] }).catch(
+          () => [] as Array<TenantMembershipRecord & { invitedByEmail?: string }>
+        ),
+      ]);
+
+      for (const u of remoteUsers) {
+        if (u && u.userId) {
+          PersistentStoreService.setCacheOnly(
+            COL_MEMBERSHIPS,
+            getMembershipKey(tenantId, u.userId),
+            u
+          );
+          const emailKey = (u.email || u.userId).toLowerCase().trim();
+          byEmail.set(emailKey, {
+            ...u,
+            isPendingInvite: false,
+          });
+        }
+      }
+
+      for (const inv of remoteInvites) {
+        const rawEmail = inv?.email || inv?.id || inv?.userId || "";
+        const emailKey = rawEmail.toLowerCase().trim();
+        if (!emailKey || !emailKey.includes("@")) continue;
+        PersistentStoreService.setCacheOnly(COL_INVITES, getInviteKey(tenantId, emailKey), inv);
+        if (!byEmail.has(emailKey)) {
+          byEmail.set(emailKey, {
+            ...inv,
+            id: emailKey,
+            tenantId,
+            userId: emailKey,
+            email: emailKey,
+            name: inv.name || emailKey.split("@")[0],
+            role: inv.role || "agent",
+            status: inv.status === "suspended" || inv.status === "revoked" ? inv.status : "invited",
+            isPendingInvite: true,
+            invitedByEmail: inv.invitedByEmail,
+          });
+        }
+      }
+
+      // Include built-in seed members for this tenant not yet in Firestore users/invites
+      for (const seed of SEED_MEMBERSHIPS) {
+        if (seed.tenantId === tenantId) {
+          const emailKey = seed.email.toLowerCase().trim();
+          if (!byEmail.has(emailKey)) {
+            byEmail.set(emailKey, {
+              ...seed,
+              isPendingInvite: false,
+            });
+          }
+        }
+      }
+
+      return Array.from(byEmail.values());
+    }
+
+    return this.listTenantMembers(tenantId).map((m) => ({ ...m, isPendingInvite: false }));
+  }
+
+  /**
+   * Persists a new (or updated) member invitation directly into Cloud Firestore at
+   * `/tenants/{tenantId}/invites/{normalizedEmail}` (and updates an existing bound user if
+   * that email has already logged into this tenant).
+   *
+   * NOTE: Stored with `status: "active"` in `/invites/{email}` so `firestore.rules`'s
+   * `isSelfBindingFromActiveInvite()` allows the invited user to auto-bind their real
+   * Firebase UID on first Google sign-in, while returning `status: "invited"` +
+   * `isPendingInvite: true` to the Agency Admin UI until first login completes.
+   */
+  public static async inviteMemberAsync(
+    actorMembership: TenantMembershipRecord,
+    input: { email: string; name: string; role: UserRole }
+  ): Promise<TenantMemberListEntry> {
+    if (actorMembership.role !== "agency_owner" && actorMembership.role !== "agency_admin") {
+      throw new ForbiddenError("Doar proprietarul sau administratorul agenției pot invita membri noi.");
+    }
+
+    if (input.role === "agency_owner" && actorMembership.role !== "agency_owner") {
+      throw new ForbiddenError("Doar proprietarul agenției poate atribui rolul de proprietar.");
+    }
+
+    const normalizedEmail = String(input.email || "").toLowerCase().trim();
+    if (!normalizedEmail || !normalizedEmail.includes("@") || normalizedEmail.includes("/")) {
+      throw new AppError({
+        message: "Adresa de email introdusă nu este validă.",
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
+    }
+
+    if (actorMembership.email && actorMembership.email.toLowerCase().trim() === normalizedEmail) {
+      throw new ForbiddenError("Nu vă puteți invita sau modifica propriul cont prin invitație.");
+    }
+
+    const tenantId = actorMembership.tenantId;
+    const cleanName = String(input.name || "").trim() || normalizedEmail.split("@")[0];
+    const now = new Date().toISOString();
+    const isRemote =
+      process.env.NODE_ENV !== "test" || PersistentStoreService.isRemoteFirestoreConfigured();
+
+    // Check if this email already belongs to a bound member in /tenants/{tenantId}/users
+    if (isRemote) {
+      await TenantResolutionService.ensureTenantExistsInFirestore(tenantId);
+      const existingUsers = await PersistentStoreService.remoteRunQueryAtPath<TenantMembershipRecord>(
+        `tenants/${tenantId}`,
+        {
+          from: [{ collectionId: "users" }],
+          where: {
+            fieldFilter: {
+              field: { fieldPath: "email" },
+              op: "EQUAL",
+              value: { stringValue: normalizedEmail },
+            },
+          },
+          limit: 5,
+        },
+        { silentOnStatuses: [403] }
+      ).catch(() => [] as Array<{ docId: string; data: TenantMembershipRecord }>);
+
+      if (existingUsers.length > 0 && existingUsers[0].data) {
+        const existing = existingUsers[0].data;
+        const docId = existingUsers[0].docId || existing.userId;
+        if (existing.role === "agency_owner" && actorMembership.role !== "agency_owner") {
+          throw new ForbiddenError(
+            "Doar proprietarul agenției poate modifica un membru cu rol de proprietar."
+          );
+        }
+
+        const roleChanged = existing.role !== input.role || existing.status !== "active";
+        const nextAuthVersion = roleChanged
+          ? (existing.authVersion ?? 1) + 1
+          : (existing.authVersion ?? 1);
+
+        const updatedUser: TenantMembershipRecord = {
+          ...existing,
+          id: docId,
+          tenantId,
+          userId: existing.userId || docId,
+          email: normalizedEmail,
+          name: cleanName || existing.name,
+          role: input.role,
+          status: "active",
+          authVersion: nextAuthVersion,
+          permissions: defaultPermissionsForRole(input.role),
+          updatedAt: now,
+        };
+
+        await PersistentStoreService.remoteSetAtPath(
+          `tenants/${tenantId}/users/${docId}`,
+          updatedUser
+        );
+        PersistentStoreService.setCacheOnly(
+          COL_MEMBERSHIPS,
+          getMembershipKey(tenantId, updatedUser.userId),
+          updatedUser
+        );
+
+        if (roleChanged) {
+          const tenantRec = TenantResolutionService.getTenantById(tenantId);
+          void CustomClaimsService.syncUserClaims(updatedUser.userId, {
+            tenantId,
+            role: updatedUser.role,
+            tenantStatus: tenantRec?.status || "active",
+            userAuthVersion: nextAuthVersion,
+            tenantAuthVersion: tenantRec?.authVersion ?? 1,
+          }).catch(() => {});
+        }
+
+        return {
+          ...updatedUser,
+          isPendingInvite: false,
+        };
+      }
+
+      // Persist invite document directly to /tenants/{tenantId}/invites/{normalizedEmail}
+      const existingInvite = await PersistentStoreService.remoteGetAtPath<TenantMembershipRecord>(
+        `tenants/${tenantId}/invites/${normalizedEmail}`,
+        { silentOnStatuses: [403] }
+      ).catch(() => null);
+
+      const inviteRecord: TenantMembershipRecord & {
+        invitePending: boolean;
+        invitedBy: string;
+        invitedByEmail: string;
+      } = {
+        id: normalizedEmail,
+        tenantId,
+        userId: normalizedEmail,
+        email: normalizedEmail,
+        name: cleanName,
+        role: input.role,
+        status: "active",
+        invitePending: true,
+        invitedBy: actorMembership.userId,
+        invitedByEmail: actorMembership.email || "",
+        authVersion: 1,
+        permissions: defaultPermissionsForRole(input.role),
+        createdAt: existingInvite?.createdAt || now,
+        updatedAt: now,
+      };
+
+      await PersistentStoreService.remoteSetAtPath(
+        `tenants/${tenantId}/invites/${normalizedEmail}`,
+        inviteRecord
+      );
+      PersistentStoreService.setCacheOnly(
+        COL_INVITES,
+        getInviteKey(tenantId, normalizedEmail),
+        inviteRecord
+      );
+
+      // Best-effort sync to /tenants/{tenantId}/staff so the invited member also appears in Personal
+      try {
+        const existingStaff = await PersistentStoreService.remoteListAtPath<Record<string, any>>(
+          `tenants/${tenantId}/staff`,
+          200,
+          5,
+          { silentOnStatuses: [403] }
+        );
+        const alreadyInStaff = existingStaff.some(
+          (s) => String(s?.email || "").toLowerCase().trim() === normalizedEmail
+        );
+        if (!alreadyInStaff) {
+          const staffDocId = `stf_${normalizedEmail.replace(/[^a-z0-9]/g, "_").slice(0, 64)}`;
+          await PersistentStoreService.remoteSetAtPath(`tenants/${tenantId}/staff/${staffDocId}`, {
+            id: staffDocId,
+            staffId: staffDocId,
+            personalId: staffDocId,
+            tenantId,
+            tenant_id: tenantId,
+            name: cleanName,
+            role: input.role,
+            phone: "",
+            email: normalizedEmail,
+            status: "Activ",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+      } catch {
+        // Non-fatal: invite document itself is already persisted in Firestore
+      }
+
+      return {
+        ...inviteRecord,
+        status: "invited",
+        isPendingInvite: true,
+      };
+    }
+
+    // Offline unit test mode
+    const existingLocal = this.listTenantMembers(tenantId).find(
+      (m) => (m.email || "").toLowerCase().trim() === normalizedEmail
+    );
+    if (existingLocal) {
+      if (existingLocal.role === "agency_owner" && actorMembership.role !== "agency_owner") {
+        throw new ForbiddenError(
+          "Doar proprietarul agenției poate modifica un membru cu rol de proprietar."
+        );
+      }
+      const updatedLocal: TenantMembershipRecord = {
+        ...existingLocal,
+        name: cleanName || existingLocal.name,
+        role: input.role,
+        status: "active",
+        permissions: defaultPermissionsForRole(input.role),
+        updatedAt: now,
+      };
+      this.setMembership(updatedLocal);
+      return { ...updatedLocal, isPendingInvite: false };
+    }
+
+    const localInvite: TenantMembershipRecord & {
+      invitePending: boolean;
+      invitedBy: string;
+      invitedByEmail: string;
+    } = {
+      id: normalizedEmail,
+      tenantId,
+      userId: normalizedEmail,
+      email: normalizedEmail,
+      name: cleanName,
+      role: input.role,
+      status: "active",
+      invitePending: true,
+      invitedBy: actorMembership.userId,
+      invitedByEmail: actorMembership.email || "",
+      authVersion: 1,
+      permissions: defaultPermissionsForRole(input.role),
+      createdAt: now,
+      updatedAt: now,
+    };
+    PersistentStoreService.set(COL_INVITES, getInviteKey(tenantId, normalizedEmail), localInvite);
+    return {
+      ...localInvite,
+      status: "invited",
+      isPendingInvite: true,
+    };
+  }
+
+  /**
+   * Cancels / deletes a pending email invitation from `/tenants/{tenantId}/invites/{email}`.
+   */
+  public static async revokeInviteAsync(
+    actorMembership: TenantMembershipRecord,
+    rawEmail: string
+  ): Promise<boolean> {
+    if (actorMembership.role !== "agency_owner" && actorMembership.role !== "agency_admin") {
+      throw new ForbiddenError("Doar proprietarul sau administratorul agenției pot anula invitațiile.");
+    }
+
+    const normalizedEmail = decodeURIComponent(String(rawEmail || "")).toLowerCase().trim();
+    if (!normalizedEmail || !normalizedEmail.includes("@") || normalizedEmail.includes("/")) {
+      throw new AppError({
+        message: "Adresa de email pentru invitație nu este validă.",
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
+    }
+
+    const tenantId = actorMembership.tenantId;
+    const isRemote =
+      process.env.NODE_ENV !== "test" || PersistentStoreService.isRemoteFirestoreConfigured();
+
+    if (isRemote) {
+      await PersistentStoreService.remoteDeleteAtPath(
+        `tenants/${tenantId}/invites/${normalizedEmail}`
+      );
+      PersistentStoreService.deleteCacheOnly(COL_INVITES, getInviteKey(tenantId, normalizedEmail));
+      return true;
+    }
+
+    return PersistentStoreService.delete(COL_INVITES, getInviteKey(tenantId, normalizedEmail));
   }
 }

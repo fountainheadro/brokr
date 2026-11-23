@@ -8,7 +8,11 @@ import {
 import { TenantMembershipService } from "../../src/core/tenancy/svc_tenant-membership";
 import { CrmTenantStoreService } from "../../src/core/crm/svc_crm-tenant-store";
 import { createSuccessResponse, createErrorResponse } from "../../src/core/api/api_response";
-import { updateMembershipRoleValidator, updateMembershipStatusValidator } from "../../src/core/tenancy/sch_tenant-membership";
+import {
+  inviteTenantMemberValidator,
+  updateMembershipRoleValidator,
+  updateMembershipStatusValidator,
+} from "../../src/core/tenancy/sch_tenant-membership";
 import { AppError } from "../../src/core/errors/app_error";
 import { requireModule, requireQuota } from "../middleware/mw_entitlement";
 import { QuotaService } from "../../src/core/subscription/svc_quota";
@@ -81,11 +85,35 @@ tenantRouter.get("/me", requireTenantContext, (req: Request, res: Response) => {
 });
 
 /**
- * Protected: Lists active members of the authenticated user's agency directly from Firestore.
+ * Protected: Lists members of the authenticated user's agency directly from Firestore.
+ * - Default: returns active members (used by CRM agent pickers).
+ * - `?includeAll=true` (agency_owner / agency_admin only): returns all bound members AND pending invitations.
  */
 tenantRouter.get("/members", requireTenantContext, async (req: Request, res: Response) => {
   try {
     const tenantId = req.tenantContext!.tenantId;
+    const includeAll =
+      String(req.query.includeAll || "").toLowerCase() === "true" &&
+      (req.membership?.role === "agency_owner" || req.membership?.role === "agency_admin");
+
+    if (includeAll) {
+      const allEntries = await TenantMembershipService.listTenantMembersWithInvitesAsync(tenantId);
+      const formatted = allEntries.map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        name: m.name,
+        email: m.email,
+        role: m.role,
+        status: m.status,
+        isPendingInvite: Boolean(m.isPendingInvite),
+        invitedByEmail: m.invitedByEmail,
+        createdAt: m.createdAt,
+        updatedAt: m.updatedAt,
+      }));
+      res.json(createSuccessResponse(formatted));
+      return;
+    }
+
     const members = (await TenantMembershipService.listTenantMembersAsync(tenantId))
       .filter((m) => m.status === "active")
       .map((m) => ({
@@ -103,6 +131,93 @@ tenantRouter.get("/members", requireTenantContext, async (req: Request, res: Res
       .json(createErrorResponse("INTERNAL_ERROR", err?.message || "Eroare la citirea echipei agenției."));
   }
 });
+
+/**
+ * Protected: Persists a new member invitation directly into Cloud Firestore (`/tenants/{tenantId}/invites/{email}`).
+ * Restricted to agency_owner or agency_admin.
+ */
+tenantRouter.post(
+  "/members/invite",
+  requireTenantContext,
+  requireRole(["agency_owner", "agency_admin"]),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = req.membership!;
+      const email = String(req.body?.email || "").trim().toLowerCase();
+      const name = String(req.body?.name || "").trim() || (email.includes("@") ? email.split("@")[0] : "");
+      const role = String(req.body?.role || "agent").trim();
+
+      const validator = inviteTenantMemberValidator();
+      const validation = validator.validate({ email, name, role: role as any });
+      if (!validation.isValid) {
+        res
+          .status(400)
+          .json(
+            createErrorResponse(
+              "VALIDATION_ERROR",
+              validation.errors[0]?.message || "Date de invitație invalide.",
+              validation.errors
+            )
+          );
+        return;
+      }
+
+      const invited = await TenantMembershipService.inviteMemberAsync(actor, {
+        email,
+        name,
+        role: role as any,
+      });
+
+      res.status(201).json(
+        createSuccessResponse({
+          id: invited.id,
+          userId: invited.userId,
+          name: invited.name,
+          email: invited.email,
+          role: invited.role,
+          status: invited.status,
+          isPendingInvite: Boolean(invited.isPendingInvite),
+          invitedByEmail: invited.invitedByEmail,
+          createdAt: invited.createdAt,
+          updatedAt: invited.updatedAt,
+        })
+      );
+    } catch (error: any) {
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json(createErrorResponse(error.code, error.message));
+        return;
+      }
+      res
+        .status(500)
+        .json(createErrorResponse("INTERNAL_ERROR", error?.message || "Eroare la salvarea invitației în baza de date."));
+    }
+  }
+);
+
+/**
+ * Protected: Cancels/deletes a pending invitation from Cloud Firestore.
+ */
+tenantRouter.delete(
+  "/members/invites/:email",
+  requireTenantContext,
+  requireRole(["agency_owner", "agency_admin"]),
+  async (req: Request, res: Response) => {
+    try {
+      const actor = req.membership!;
+      const email = req.params.email;
+      await TenantMembershipService.revokeInviteAsync(actor, email);
+      res.json(createSuccessResponse({ deleted: true, email: decodeURIComponent(email).toLowerCase() }));
+    } catch (error: any) {
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json(createErrorResponse(error.code, error.message));
+        return;
+      }
+      res
+        .status(500)
+        .json(createErrorResponse("INTERNAL_ERROR", error?.message || "Eroare la anularea invitației."));
+    }
+  }
+);
 
 /**
  * Protected: Lists leads strictly scoped to the authenticated tenant directly from Firestore.
