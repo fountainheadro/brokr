@@ -10,12 +10,12 @@ automationRouter.use(requireTenantContext);
 
 /**
  * GET /api/tenant/automation/title-rule
- * Retrieves the agency's configured external ad title extraction & formatting rule.
+ * Retrieves the agency's configured external ad title extraction & formatting rule directly from Firestore.
  */
-automationRouter.get("/title-rule", (req: Request, res: Response) => {
+automationRouter.get("/title-rule", async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
-    const record = AutomationConfigRepository.getByTenantId(tenantContext.tenantId);
+    const record = await AutomationConfigRepository.getByTenantIdAsync(tenantContext.tenantId);
     res.json(createSuccessResponse(record));
   } catch (err: any) {
     res
@@ -26,16 +26,16 @@ automationRouter.get("/title-rule", (req: Request, res: Response) => {
 
 /**
  * PUT /api/tenant/automation/title-rule
- * Updates the agency's external ad title rule (agency_owner or agency_admin only).
+ * Updates the agency's external ad title rule permanently in Firestore (agency_owner or agency_admin only).
  */
 automationRouter.put(
   "/title-rule",
   requireRole(["agency_owner", "agency_admin"]),
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
       const tenantContext = req.tenantContext!;
       const payload = req.body?.titleRule || req.body;
-      const updated = AutomationConfigRepository.saveTitleRule(
+      const updated = await AutomationConfigRepository.saveTitleRuleAsync(
         tenantContext.tenantId,
         payload,
         tenantContext.userEmail
@@ -51,15 +51,15 @@ automationRouter.put(
 
 /**
  * POST /api/tenant/automation/title-rule/reset
- * Resets the title rule to platform defaults.
+ * Resets the title rule to platform defaults permanently in Firestore.
  */
 automationRouter.post(
   "/title-rule/reset",
   requireRole(["agency_owner", "agency_admin"]),
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
       const tenantContext = req.tenantContext!;
-      const reset = AutomationConfigRepository.resetTitleRule(
+      const reset = await AutomationConfigRepository.resetTitleRuleAsync(
         tenantContext.tenantId,
         tenantContext.userEmail
       );

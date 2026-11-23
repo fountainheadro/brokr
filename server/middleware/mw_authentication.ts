@@ -6,18 +6,29 @@ import { Request, Response, NextFunction } from "express";
 import { UnauthorizedError } from "../../src/core/errors/app_error";
 import { createErrorResponse } from "../../src/core/api/api_response";
 import { logger } from "../../src/core/logger/logger";
+import { PersistentStoreService } from "../../src/core/database/svc_persistent-store";
+
+export interface AuthenticatedTokenClaims {
+  tid?: string;
+  role?: string;
+  tst?: string;
+  uVer?: number;
+  tVer?: number;
+}
 
 export interface AuthenticatedUser {
   uid: string;
   email: string;
   name?: string;
   emailVerified?: boolean;
+  claims?: AuthenticatedTokenClaims;
 }
 
 declare global {
   namespace Express {
     interface Request {
       authUser?: AuthenticatedUser;
+      authToken?: string;
     }
   }
 }
@@ -104,6 +115,16 @@ async function getFirebasePublicCerts(forceRefresh = false): Promise<Record<stri
   return cachedCerts;
 }
 
+function extractCompactClaims(payload: Record<string, any>): AuthenticatedTokenClaims | undefined {
+  const claims: AuthenticatedTokenClaims = {};
+  if (typeof payload.tid === "string" && payload.tid.trim()) claims.tid = payload.tid.trim();
+  if (typeof payload.role === "string" && payload.role.trim()) claims.role = payload.role.trim();
+  if (typeof payload.tst === "string" && payload.tst.trim()) claims.tst = payload.tst.trim();
+  if (typeof payload.uVer === "number" && Number.isFinite(payload.uVer)) claims.uVer = payload.uVer;
+  if (typeof payload.tVer === "number" && Number.isFinite(payload.tVer)) claims.tVer = payload.tVer;
+  return Object.keys(claims).length > 0 ? claims : undefined;
+}
+
 export async function verifyFirebaseIdToken(idToken: string): Promise<AuthenticatedUser> {
   const parts = idToken.split(".");
   if (parts.length !== 3) {
@@ -171,6 +192,7 @@ export async function verifyFirebaseIdToken(idToken: string): Promise<Authentica
     email: typeof payload.email === "string" ? payload.email : "",
     name: typeof payload.name === "string" ? payload.name : typeof payload.email === "string" ? payload.email : payload.sub,
     emailVerified: Boolean(payload.email_verified),
+    claims: extractCompactClaims(payload),
   };
 }
 
@@ -187,6 +209,28 @@ export async function authenticateTokenString(token: string): Promise<Authentica
   if (process.env.NODE_ENV === "test") {
     if (TEST_TOKEN_MAP.has(clean)) {
       return TEST_TOKEN_MAP.get(clean)!;
+    }
+
+    // Test-only token carrying explicit compact claims:
+    // token_claims::<uid>::u<uVer>::t<tVer>[::<tid>]
+    if (clean.startsWith("token_claims::")) {
+      const segments = clean.split("::");
+      const uid = segments[1] || "";
+      const uVerRaw = segments[2]?.startsWith("u") ? Number(segments[2].slice(1)) : undefined;
+      const tVerRaw = segments[3]?.startsWith("t") ? Number(segments[3].slice(1)) : undefined;
+      const tid = segments[4] || undefined;
+      const matchedKnown = Array.from(TEST_TOKEN_MAP.values()).find((u) => u.uid === uid);
+      return {
+        uid,
+        email: matchedKnown?.email || `${uid}@example.com`,
+        name: matchedKnown?.name || `User ${uid}`,
+        emailVerified: true,
+        claims: {
+          ...(tid ? { tid } : {}),
+          ...(typeof uVerRaw === "number" && Number.isFinite(uVerRaw) ? { uVer: uVerRaw } : {}),
+          ...(typeof tVerRaw === "number" && Number.isFinite(tVerRaw) ? { tVer: tVerRaw } : {}),
+        },
+      };
     }
 
     if (clean.startsWith("mock_usr_")) {
@@ -226,11 +270,32 @@ export function mwAuthentication(req: Request, res: Response, next: NextFunction
     return;
   }
 
+  const proceedWithUser = (verifiedUser: AuthenticatedUser) => {
+    req.authUser = verifiedUser;
+    req.authToken = token;
+    const isRealFirebaseJwt = process.env.NODE_ENV !== "test" || token.split(".").length === 3;
+    if (isRealFirebaseJwt) {
+      PersistentStoreService.runWithRequestAuth(
+        {
+          bearerToken: token,
+          uid: verifiedUser.uid,
+          email: verifiedUser.email,
+          emailVerified: verifiedUser.emailVerified,
+        },
+        () => next()
+      );
+      return;
+    }
+    next();
+  };
+
+  if (req.authUser && req.authToken === token) {
+    proceedWithUser(req.authUser);
+    return;
+  }
+
   authenticateTokenString(token)
-    .then((verifiedUser) => {
-      req.authUser = verifiedUser;
-      next();
-    })
+    .then(proceedWithUser)
     .catch(() => {
       logger.recordMetric("auth_failure");
       const err = new UnauthorizedError("Sesiune expirată sau token de autentificare invalid.");

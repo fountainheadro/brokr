@@ -22,15 +22,15 @@ export function resetAllRateLimiters(): void {
   }
 }
 
+/**
+ * Resolves the canonical client IP strictly from Express's `trust proxy`-validated `req.ip`
+ * (matching Cloud Run's single Google Frontend hop via `app.set('trust proxy', 1)`),
+ * never blindly trusting client-spoofable leftmost `x-forwarded-for` values.
+ */
 export function extractClientIp(req: Request): string {
-  const forwarded = req.headers["x-forwarded-for"];
-  if (typeof forwarded === "string" && forwarded.trim()) {
-    return forwarded.split(",")[0].trim();
-  }
-  if (Array.isArray(forwarded) && forwarded.length > 0) {
-    return forwarded[0].trim();
-  }
-  return req.ip || req.socket?.remoteAddress || "unknown";
+  const resolved = (req.ip || req.socket?.remoteAddress || "unknown").trim();
+  // Normalize IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1 -> 127.0.0.1)
+  return resolved.startsWith("::ffff:") ? resolved.slice(7) : resolved;
 }
 
 /**

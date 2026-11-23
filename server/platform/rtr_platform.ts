@@ -18,12 +18,40 @@ import { ModuleId } from "../../src/core/subscription/typ_subscription";
 import { logger } from "../../src/core/logger/logger";
 import { validateProductionEnvironment } from "../../src/core/env/svc_production-config";
 import { AutomationConfigRepository } from "../../src/core/automation/repo_automation-config";
-
+import { PersistentStoreService } from "../../src/core/database/svc_persistent-store";
+import { SharedLeadStoreService } from "../../src/core/crm/svc_shared-leads-store";
+import {
+  backfillAllLeadSummaries,
+  backfillTenantLeadSummaries,
+} from "../migration/job_backfill-summaries";
+import {
+  reconcileAllLeadSummaries,
+  reconcileTenantLeadSummaries,
+} from "../migration/job_reconcile-summaries";
 
 export const platformRouter = Router();
 
 // Protect all /api/platform routes with authentication + platform authorization
 platformRouter.use(mwAuthentication, mwPlatformAuthorization);
+
+// Lazily hydrate core platform collections from Cloud Firestore on Super Admin requests
+platformRouter.use(async (_req, _res, next) => {
+  try {
+    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+      await Promise.all([
+        TenantResolutionService.hydrateFromFirestore(),
+        PersistentStoreService.hydrateCollectionOnce("subscription_plans"),
+        PersistentStoreService.hydrateCollectionOnce("subscriptions"),
+        PersistentStoreService.hydrateCollectionOnce("tenant_usage"),
+        PersistentStoreService.hydrateCollectionOnce("billing_events"),
+        PersistentStoreService.hydrateCollectionOnce("platform_settings"),
+      ]);
+    }
+  } catch {
+    // Non-fatal hydration fallback
+  }
+  next();
+});
 
 /**
  * GET /api/platform/me
@@ -38,26 +66,51 @@ platformRouter.get("/me", (req: Request, res: Response) => {
   );
 });
 
-/**
- * Storage for agency administrative notes
- */
-const AGENCY_ADMIN_NOTES = new Map<string, Array<{ id: string; author: string; content: string; createdAt: string }>>();
+interface AgencyAdminNoteRecord {
+  id: string;
+  tenantId: string;
+  author: string;
+  content: string;
+  createdAt: string;
+}
 
-// Seed note for demo
-AGENCY_ADMIN_NOTES.set("ten_brokr_default", [
-  {
-    id: "note_1",
-    author: "fountainheadro@gmail.com",
-    content: "Agenția pilot principală Brokr. Verificare de securitate periodică validată.",
-    createdAt: "2026-02-15T10:30:00.000Z",
-  },
-]);
+const DEFAULT_PILOT_NOTE: AgencyAdminNoteRecord = {
+  id: "note_1",
+  tenantId: "ten_brokr_default",
+  author: "fountainheadro@gmail.com",
+  content: "Agenția pilot principală Brokr. Verificare de securitate periodică validată.",
+  createdAt: "2026-02-15T10:30:00.000Z",
+};
+
+async function listAgencyAdminNotes(tenantId: string): Promise<AgencyAdminNoteRecord[]> {
+  if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+    try {
+      const notes = await PersistentStoreService.remoteListAtPath<AgencyAdminNoteRecord>(
+        `tenants/${tenantId}/admin_notes`,
+        100,
+        2
+      );
+      notes.sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+      if (notes.length > 0) return notes;
+    } catch {
+      // Fallback to cached notes if subcollection doesn't exist yet
+    }
+  }
+  const cached = Object.values(
+    PersistentStoreService.getAll<AgencyAdminNoteRecord>(`agency_admin_notes__${tenantId}`)
+  );
+  if (cached.length > 0) {
+    cached.sort((a, b) => Date.parse(b.createdAt || "") - Date.parse(a.createdAt || ""));
+    return cached;
+  }
+  return tenantId === "ten_brokr_default" ? [DEFAULT_PILOT_NOTE] : [];
+}
 
 /**
  * GET /api/platform/dashboard/stats
  * Aggregates live platform metrics across all registered agencies and members.
  */
-platformRouter.get("/dashboard/stats", (req: Request, res: Response) => {
+platformRouter.get("/dashboard/stats", async (req: Request, res: Response) => {
   const agencies = TenantResolutionService.getAllTenants();
 
   let activeAgencies = 0;
@@ -73,7 +126,7 @@ platformRouter.get("/dashboard/stats", (req: Request, res: Response) => {
     else if (agency.status === "suspended") suspendedAgencies++;
     else if (agency.status === "cancelled") cancelledAgencies++;
 
-    const members = TenantMembershipService.listTenantMembers(agency.id);
+    const members = await TenantMembershipService.listTenantMembersAsync(agency.id);
     totalUsers += members.length;
     activeUsers += members.filter((m) => m.status === "active").length;
   }
@@ -100,7 +153,7 @@ platformRouter.get("/dashboard/stats", (req: Request, res: Response) => {
  * GET /api/platform/agencies
  * Lists all agencies with search, status filtering, and pagination.
  */
-platformRouter.get("/agencies", (req: Request, res: Response) => {
+platformRouter.get("/agencies", async (req: Request, res: Response) => {
   let agencies = TenantResolutionService.getAllTenants();
 
   const searchQuery = (req.query.q as string)?.toLowerCase().trim();
@@ -119,17 +172,21 @@ platformRouter.get("/agencies", (req: Request, res: Response) => {
     agencies = agencies.filter((a) => a.status === statusFilter);
   }
 
-  // Enrich agencies with member counts and administrative metadata
-  const enriched = agencies.map((a) => {
-    const members = TenantMembershipService.listTenantMembers(a.id);
-    const notes = AGENCY_ADMIN_NOTES.get(a.id) || [];
-    return {
-      ...a,
-      membersCount: members.length,
-      activeMembersCount: members.filter((m) => m.status === "active").length,
-      notesCount: notes.length,
-    };
-  });
+  // Enrich agencies with member counts and administrative metadata from Firestore
+  const enriched = await Promise.all(
+    agencies.map(async (a) => {
+      const [members, notes] = await Promise.all([
+        TenantMembershipService.listTenantMembersAsync(a.id),
+        listAgencyAdminNotes(a.id),
+      ]);
+      return {
+        ...a,
+        membersCount: members.length,
+        activeMembersCount: members.filter((m) => m.status === "active").length,
+        notesCount: notes.length,
+      };
+    })
+  );
 
   res.json(createSuccessResponse(enriched, { total: enriched.length }));
 });
@@ -138,7 +195,7 @@ platformRouter.get("/agencies", (req: Request, res: Response) => {
  * GET /api/platform/agencies/:tenantId
  * Retrieves detailed agency record with members, domain info, and notes.
  */
-platformRouter.get("/agencies/:tenantId", (req: Request, res: Response) => {
+platformRouter.get("/agencies/:tenantId", async (req: Request, res: Response) => {
   const tenantId = req.params.tenantId;
   const agency = TenantResolutionService.getTenantById(tenantId);
 
@@ -147,8 +204,10 @@ platformRouter.get("/agencies/:tenantId", (req: Request, res: Response) => {
     return;
   }
 
-  const members = TenantMembershipService.listTenantMembers(tenantId);
-  const notes = AGENCY_ADMIN_NOTES.get(tenantId) || [];
+  const [members, notes] = await Promise.all([
+    TenantMembershipService.listTenantMembersAsync(tenantId),
+    listAgencyAdminNotes(tenantId),
+  ]);
 
   res.json(
     createSuccessResponse({
@@ -161,7 +220,7 @@ platformRouter.get("/agencies/:tenantId", (req: Request, res: Response) => {
 
 /**
  * POST /api/platform/agencies/:tenantId/status
- * Updates agency lifecycle status (active, suspended, trial, cancelled).
+ * Updates agency lifecycle status (active, suspended, trial, cancelled) permanently in Firestore.
  * Audited operation.
  */
 platformRouter.post("/agencies/:tenantId/status", async (req: Request, res: Response) => {
@@ -181,8 +240,11 @@ platformRouter.post("/agencies/:tenantId/status", async (req: Request, res: Resp
   }
 
   const oldStatus = agency.status;
-  agency.status = status;
-  agency.updatedAt = new Date().toISOString();
+  const updatedAgency = await TenantResolutionService.saveTenantAsync({
+    ...agency,
+    status,
+    updatedAt: new Date().toISOString(),
+  });
 
   // Record audit log
   await PlatformAuditLogRepository.record({
@@ -192,17 +254,17 @@ platformRouter.post("/agencies/:tenantId/status", async (req: Request, res: Resp
     action: status === "suspended" ? "agency_suspended" : "agency_reactivated",
     targetType: "agency",
     targetId: tenantId,
-    targetName: agency.name,
+    targetName: updatedAgency.name,
     details: { oldStatus, newStatus: status, reason: reason || "Actualizare administrativă" },
     result: "success",
   });
 
-  res.json(createSuccessResponse(agency));
+  res.json(createSuccessResponse(updatedAgency));
 });
 
 /**
  * POST /api/platform/agencies/:tenantId/notes
- * Adds an administrative note to an agency.
+ * Adds an administrative note to an agency permanently in Firestore `/tenants/{tenantId}/admin_notes/{noteId}`.
  * Audited operation.
  */
 platformRouter.post("/agencies/:tenantId/notes", async (req: Request, res: Response) => {
@@ -220,16 +282,21 @@ platformRouter.post("/agencies/:tenantId/notes", async (req: Request, res: Respo
     return;
   }
 
-  const existingNotes = AGENCY_ADMIN_NOTES.get(tenantId) || [];
-  const newNote = {
+  const newNote: AgencyAdminNoteRecord = {
     id: `note_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    tenantId,
     author: req.authUser!.email,
     content: content.trim(),
     createdAt: new Date().toISOString(),
   };
 
-  existingNotes.unshift(newNote);
-  AGENCY_ADMIN_NOTES.set(tenantId, existingNotes);
+  if (process.env.NODE_ENV !== "test" || PersistentStoreService.isRemoteFirestoreConfigured()) {
+    await PersistentStoreService.remoteSetAtPath(
+      `tenants/${tenantId}/admin_notes/${newNote.id}`,
+      newNote
+    );
+  }
+  PersistentStoreService.setCacheOnly(`agency_admin_notes__${tenantId}`, newNote.id, newNote);
 
   await PlatformAuditLogRepository.record({
     actorUserId: req.authUser!.uid,
@@ -364,20 +431,20 @@ platformRouter.get("/audit-logs", async (req: Request, res: Response) => {
 
 /**
  * GET /api/platform/settings
- * Retrieves platform configuration settings.
+ * Retrieves platform configuration settings directly from Firestore.
  */
-platformRouter.get("/settings", (req: Request, res: Response) => {
-  const settings = PlatformSettingsService.getSettings();
+platformRouter.get("/settings", async (req: Request, res: Response) => {
+  const settings = await PlatformSettingsService.getSettingsAsync();
   res.json(createSuccessResponse(settings));
 });
 
 /**
  * PUT /api/platform/settings
- * Updates platform configuration settings. Audited operation.
+ * Updates platform configuration settings permanently in Firestore. Audited operation.
  */
 platformRouter.put("/settings", async (req: Request, res: Response) => {
   const updates = req.body;
-  const updated = PlatformSettingsService.updateSettings(updates, req.authUser!.uid);
+  const updated = await PlatformSettingsService.updateSettingsAsync(updates, req.authUser!.uid);
 
   await PlatformAuditLogRepository.record({
     actorUserId: req.authUser!.uid,
@@ -398,9 +465,9 @@ platformRouter.put("/settings", async (req: Request, res: Response) => {
  * GET /api/platform/automation/title-rule
  * Retrieves the platform-wide default external ad title automation rule (Super Admin).
  */
-platformRouter.get("/automation/title-rule", (req: Request, res: Response) => {
+platformRouter.get("/automation/title-rule", async (req: Request, res: Response) => {
   try {
-    const record = AutomationConfigRepository.getPlatformDefaultRecord();
+    const record = await AutomationConfigRepository.getPlatformDefaultRecordAsync();
     res.json(createSuccessResponse(record));
   } catch (err: any) {
     res
@@ -411,12 +478,12 @@ platformRouter.get("/automation/title-rule", (req: Request, res: Response) => {
 
 /**
  * PUT /api/platform/automation/title-rule
- * Updates the platform-wide default external ad title automation rule (Super Admin).
+ * Updates the platform-wide default external ad title automation rule permanently in Firestore.
  */
 platformRouter.put("/automation/title-rule", async (req: Request, res: Response) => {
   try {
     const payload = req.body?.titleRule || req.body;
-    const updated = AutomationConfigRepository.savePlatformDefaultTitleRule(
+    const updated = await AutomationConfigRepository.savePlatformDefaultTitleRuleAsync(
       payload,
       req.authUser!.email
     );
@@ -447,11 +514,13 @@ platformRouter.put("/automation/title-rule", async (req: Request, res: Response)
 
 /**
  * POST /api/platform/automation/title-rule/reset
- * Resets the platform-wide default title automation rule back to built-in system defaults.
+ * Resets the platform-wide default title automation rule back to built-in system defaults permanently in Firestore.
  */
 platformRouter.post("/automation/title-rule/reset", async (req: Request, res: Response) => {
   try {
-    const reset = AutomationConfigRepository.resetPlatformDefaultTitleRule(req.authUser!.email);
+    const reset = await AutomationConfigRepository.resetPlatformDefaultTitleRuleAsync(
+      req.authUser!.email
+    );
 
     await PlatformAuditLogRepository.record({
       actorUserId: req.authUser!.uid,
@@ -832,4 +901,106 @@ platformRouter.get("/observability/metrics", (_req: Request, res: Response) => {
     })
   );
 });
+
+/* ========================================================================== */
+/* PHASE 2: SHARED LEADS ATOMIC DUAL-WRITE & SUMMARY MIGRATION ENDPOINTS      */
+/* ========================================================================== */
+
+/**
+ * POST /api/platform/shared-leads
+ * Authoritatively persists a global shared lead and its slim `platform_shared_leads_summary`
+ * projection in a single atomic Firestore `:commit` batch (Super Admin only).
+ */
+platformRouter.post("/shared-leads", async (req: Request, res: Response) => {
+  try {
+    const result = await SharedLeadStoreService.upsertSharedLead(req.body || {});
+    res.status(201).json(createSuccessResponse(result));
+  } catch (err: any) {
+    const status = err?.statusCode || 400;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "VALIDATION_ERROR", err?.message || String(err)));
+  }
+});
+
+/**
+ * DELETE /api/platform/shared-leads/:id
+ * Atomically deletes a global shared lead and its slim summary projection (Super Admin only).
+ */
+platformRouter.delete("/shared-leads/:id", async (req: Request, res: Response) => {
+  try {
+    await SharedLeadStoreService.deleteSharedLead(req.params.id);
+    res.json(createSuccessResponse({ deleted: true, id: req.params.id }));
+  } catch (err: any) {
+    const status = err?.statusCode || 400;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "VALIDATION_ERROR", err?.message || String(err)));
+  }
+});
+
+/**
+ * DELETE /api/platform/shared-leads
+ * Atomically clears all global shared leads and their slim summary projections (Super Admin only).
+ */
+platformRouter.delete("/shared-leads", async (_req: Request, res: Response) => {
+  try {
+    const deletedCount = await SharedLeadStoreService.clearAllSharedLeads();
+    res.json(createSuccessResponse({ deletedCount }));
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "INTERNAL_ERROR", err?.message || String(err)));
+  }
+});
+
+/**
+ * POST /api/platform/migrations/backfill-summaries
+ * Idempotent Phase 2 backfill of `leads_summary` (all tenants or `?tenantId=...`) and `platform_shared_leads_summary`.
+ */
+platformRouter.post("/migrations/backfill-summaries", async (req: Request, res: Response) => {
+  try {
+    const dryRun = Boolean(req.body?.dryRun);
+    const tenantId =
+      typeof req.body?.tenantId === "string" && req.body.tenantId.trim()
+        ? req.body.tenantId.trim()
+        : undefined;
+
+    const report = tenantId
+      ? await backfillTenantLeadSummaries(tenantId, { dryRun })
+      : await backfillAllLeadSummaries({ dryRun });
+    res.json(createSuccessResponse(report));
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "INTERNAL_ERROR", err?.message || String(err)));
+  }
+});
+
+/**
+ * GET /api/platform/migrations/reconcile-summaries
+ * Checks canonical vs slim summary count & checksum parity across tenants and platform shared leads.
+ */
+platformRouter.get("/migrations/reconcile-summaries", async (req: Request, res: Response) => {
+  try {
+    const autoRepair = req.query.repair === "true";
+    const tenantId =
+      typeof req.query.tenantId === "string" && req.query.tenantId.trim()
+        ? req.query.tenantId.trim()
+        : undefined;
+
+    const report = tenantId
+      ? await reconcileTenantLeadSummaries(tenantId, { autoRepair })
+      : await reconcileAllLeadSummaries({ autoRepair });
+    res.json(createSuccessResponse(report));
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "INTERNAL_ERROR", err?.message || String(err)));
+  }
+});
+
 

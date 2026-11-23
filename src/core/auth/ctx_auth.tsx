@@ -6,7 +6,8 @@ import {
   signOut as firebaseSignOut,
   GoogleAuthProvider,
 } from "firebase/auth";
-import { auth } from "../../lib/firebase";
+import { auth, clearLocalFirestorePersistenceOnSignOut } from "../../lib/firebase";
+import { clientDataHub } from "../crm/svc_client-data-hub";
 
 export interface AuthContextValue {
   user: User | null;
@@ -28,6 +29,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const unsubscribe = onAuthStateChanged(
       auth,
       (currentUser) => {
+        clientDataHub.setAuthUser(currentUser?.uid || null);
         setUser(currentUser);
         setIsLoading(false);
         setError(null);
@@ -57,8 +59,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     try {
+      clientDataHub.purgeAllCaches();
+      if (typeof localStorage !== "undefined") {
+        localStorage.removeItem("brokr_preview_token");
+      }
       await firebaseSignOut(auth);
       setUser(null);
+      const terminatedPersistence = await clearLocalFirestorePersistenceOnSignOut();
+      if (terminatedPersistence && typeof window !== "undefined") {
+        // Reload once after terminating Firestore IndexedDB persistence so the next login gets a fresh runtime instance
+        window.location.replace("/");
+      }
     } catch (err: any) {
       console.error("[AuthProvider] Sign out error:", err);
       setError(err?.message || "Deconectarea a eșuat.");

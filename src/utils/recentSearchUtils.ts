@@ -120,3 +120,10 @@ export function clearRecentSearches(scope: RecentSearchScope): RecentSearchEntry
   }
   return [];
 }
+
+export function clearAllRecentSearches(): void {
+  const scopes: RecentSearchScope[] = ["global", "Lead-uri", "Cereri", "Proprietati"];
+  for (const scope of scopes) {
+    clearRecentSearches(scope);
+  }
+}

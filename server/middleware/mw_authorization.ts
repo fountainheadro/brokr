@@ -15,6 +15,18 @@ export function requireRole(allowedRoles: UserRole[]) {
       return;
     }
 
+    if (req.tenantContext.tenantStatus === "suspended" || req.tenantContext.tenantStatus === "cancelled") {
+      const err = new ForbiddenError("Contul agenției este suspendat sau anulat.");
+      res.status(err.statusCode).json(createErrorResponse("TENANT_SUSPENDED", err.message));
+      return;
+    }
+
+    if (req.tenantContext.membershipStatus !== "active") {
+      const err = new ForbiddenError("Accesul utilizatorului în această agenție nu este activ.");
+      res.status(err.statusCode).json(createErrorResponse("MEMBERSHIP_INACTIVE", err.message));
+      return;
+    }
+
     if (!allowedRoles.includes(req.tenantContext.role)) {
       const err = new ForbiddenError(
         `Rolul dumneavoastră (${req.tenantContext.role}) nu are permisiunea necesară pentru această operațiune.`

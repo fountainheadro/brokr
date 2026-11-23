@@ -5,6 +5,8 @@ import path from "path";
 import { GcpAuthService } from "../src/core/gcp/svc_gcp-auth";
 import { logger } from "../src/core/logger/logger";
 import { requireTenantContext } from "./middleware/mw_tenant-context";
+import { CrmTenantStoreService } from "../src/core/crm/svc_crm-tenant-store";
+import { PersistentStoreService } from "../src/core/database/svc_persistent-store";
 
 export const FCM_MESSAGING_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 
@@ -26,48 +28,16 @@ interface CachedToken {
   updatedAt: number;
 }
 
-interface NotificationCache {
+interface NotificationRuntimeMirror {
   viewings: { [partitionedKey: string]: CachedViewing };
   tokens: { [partitionedKey: string]: CachedToken };
 }
 
-const CACHE_FILE_PATH = path.join("/tmp", "brokr-background-cache.json");
-
-const localCache: NotificationCache = {
+// Pure in-memory scheduler mirror backed by Cloud Firestore (ZERO local file persistence).
+const runtimeMirror: NotificationRuntimeMirror = {
   viewings: {},
   tokens: {},
 };
-
-function loadPersistentCache() {
-  try {
-    if (fs.existsSync(CACHE_FILE_PATH)) {
-      const raw = fs.readFileSync(CACHE_FILE_PATH, "utf8");
-      const parsed = JSON.parse(raw);
-      if (parsed.viewings) localCache.viewings = parsed.viewings;
-      if (parsed.tokens) localCache.tokens = parsed.tokens;
-      logger.info(
-        `Persistent cache loaded. Viewings: ${Object.keys(localCache.viewings).length}, Tokens: ${Object.keys(localCache.tokens).length}`,
-        { module: "background-notifications" }
-      );
-    }
-  } catch (err: any) {
-    logger.warn("Failed loading background-cache file", {
-      module: "background-notifications",
-      meta: { reason: err?.message },
-    });
-  }
-}
-
-function savePersistentCache() {
-  try {
-    fs.writeFileSync(CACHE_FILE_PATH, JSON.stringify(localCache, null, 2), "utf8");
-  } catch (err: any) {
-    logger.warn("Failed writing background-cache file", {
-      module: "background-notifications",
-      meta: { reason: err?.message },
-    });
-  }
-}
 
 interface FirebaseConfig {
   projectId: string;
@@ -94,10 +64,6 @@ function loadFirebaseConfig(): FirebaseConfig | null {
   return null;
 }
 
-/**
- * Resolves a GCP OAuth2 access token for FCM v1 dispatch using the unified ADC strategy
- * (Service Account JSON -> Local ADC authorized_user -> Cloud Run Metadata ONLY when USE_GCP_METADATA_AUTH=true).
- */
 export async function getFcmServiceAccessToken(): Promise<string | null> {
   return GcpAuthService.getAccessToken(FCM_MESSAGING_SCOPE);
 }
@@ -179,9 +145,7 @@ async function sendFCMPushNotification(
 }
 
 export function registerNotificationRoutes(app: Express) {
-  loadPersistentCache();
-
-  app.post("/api/notifications/sync-viewings", ...requireTenantContext, (req, res) => {
+  app.post("/api/notifications/sync-viewings", ...requireTenantContext, async (req, res) => {
     try {
       const ctx = req.tenantContext!;
       const { userId, viewings } = req.body;
@@ -197,18 +161,23 @@ export function registerNotificationRoutes(app: Express) {
         { module: "background-notifications", tenantId: ctx.tenantId, userId }
       );
 
-      for (const key of Object.keys(localCache.viewings)) {
-        const cached = localCache.viewings[key];
+      for (const key of Object.keys(runtimeMirror.viewings)) {
+        const cached = runtimeMirror.viewings[key];
         const cachedTenant = cached.tenantId || "ten_brokr_default";
         if (cachedTenant === ctx.tenantId && (cached.agentId === userId || cached.id === userId)) {
-          delete localCache.viewings[key];
+          delete runtimeMirror.viewings[key];
         }
       }
+
+      const firestoreWrites: Array<Record<string, any>> = [];
+      const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
+      const basePrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${ctx.tenantId}/viewings`;
+      const nowIso = new Date().toISOString();
 
       viewings.forEach((v: any) => {
         if (v.id && v.date && v.hour) {
           const partKey = `${ctx.tenantId}::${v.id}`;
-          localCache.viewings[partKey] = {
+          runtimeMirror.viewings[partKey] = {
             id: v.id,
             tenantId: ctx.tenantId,
             date: v.date,
@@ -217,10 +186,40 @@ export function registerNotificationRoutes(app: Express) {
             contactName: v.contactName || "clientul",
             syncedAt: Date.now(),
           };
+
+          const safeId = String(v.id).replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 120);
+          if (safeId) {
+            firestoreWrites.push({
+              update: {
+                name: `${basePrefix}/${safeId}`,
+                fields: PersistentStoreService.encodeDocumentFields({
+                  id: safeId,
+                  tenantId: ctx.tenantId,
+                  propertyId: String(v.propertyId || ""),
+                  contactId: String(v.contactId || safeId),
+                  contactName: String(v.contactName || "clientul"),
+                  agentId: userId,
+                  date: String(v.date),
+                  hour: String(v.hour),
+                  updatedAt: nowIso,
+                }),
+              },
+            });
+          }
         }
       });
 
-      savePersistentCache();
+      if (
+        firestoreWrites.length > 0 &&
+        process.env.NODE_ENV !== "test" &&
+        PersistentStoreService.isRemoteFirestoreConfigured()
+      ) {
+        await PersistentStoreService.remoteCommitWrites(
+          firestoreWrites.slice(0, 400),
+          "sync_viewings_batch"
+        );
+      }
+
       return res.json({ success: true, count: viewings.length, tenantId: ctx.tenantId });
     } catch (err: any) {
       logger.error("Failed syncing viewings route", err, {
@@ -230,7 +229,7 @@ export function registerNotificationRoutes(app: Express) {
     }
   });
 
-  app.post("/api/notifications/register-token", ...requireTenantContext, (req, res) => {
+  app.post("/api/notifications/register-token", ...requireTenantContext, async (req, res) => {
     try {
       const ctx = req.tenantContext!;
       const { token, userId, email } = req.body;
@@ -249,7 +248,7 @@ export function registerNotificationRoutes(app: Express) {
       });
 
       const partKey = `${ctx.tenantId}::${token}`;
-      localCache.tokens[partKey] = {
+      runtimeMirror.tokens[partKey] = {
         token,
         tenantId: ctx.tenantId,
         userId,
@@ -257,7 +256,16 @@ export function registerNotificationRoutes(app: Express) {
         updatedAt: Date.now(),
       };
 
-      savePersistentCache();
+      // Permanently persist the FCM token in Cloud Firestore under /tenants/{tenantId}/fcm_tokens
+      if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+        await CrmTenantStoreService.upsertFcmToken({
+          tenantId: ctx.tenantId,
+          userId,
+          email: req.authUser!.email || email,
+          token,
+        });
+      }
+
       return res.json({ success: true, tenantId: ctx.tenantId });
     } catch (err: any) {
       logger.error("Failed registering FCM token route", err, {
@@ -269,8 +277,8 @@ export function registerNotificationRoutes(app: Express) {
 }
 
 export function getTenantPartitionedNotificationSnapshot(tenantId: string) {
-  const viewings = Object.values(localCache.viewings).filter((v) => v.tenantId === tenantId);
-  const tokens = Object.values(localCache.tokens).filter((t) => t.tenantId === tenantId);
+  const viewings = Object.values(runtimeMirror.viewings).filter((v) => v.tenantId === tenantId);
+  const tokens = Object.values(runtimeMirror.tokens).filter((t) => t.tenantId === tenantId);
   return { viewings, tokens };
 }
 
@@ -293,8 +301,8 @@ export function setupBackgroundNotifications() {
   const runCheckTick = async () => {
     try {
       const now = new Date();
-      const allViewings = Object.values(localCache.viewings);
-      const allTokens = Object.values(localCache.tokens);
+      const allViewings = Object.values(runtimeMirror.viewings);
+      const allTokens = Object.values(runtimeMirror.tokens);
 
       if (allViewings.length === 0 || allTokens.length === 0) {
         return;

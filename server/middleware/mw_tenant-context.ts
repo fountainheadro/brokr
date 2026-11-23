@@ -40,6 +40,8 @@ export function mwTenantContext(req: Request, res: Response, next: NextFunction)
     membershipStatus: req.membership.status,
     role: req.membership.role,
     permissions: req.membership.permissions,
+    userAuthVersion: req.membership.authVersion ?? 1,
+    tenantAuthVersion: req.resolvedTenant.authVersion ?? 1,
   };
 
   next();

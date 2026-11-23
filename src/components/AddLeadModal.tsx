@@ -208,7 +208,7 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({ isOpen, onClose }) =
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "tween", ease: "easeInOut", duration: 0.25 }}
-            className="fixed inset-y-0 right-0 w-full max-w-[420px] bg-white shadow-2xl z-[301] flex flex-col border-l border-gray-200"
+            className="fixed inset-y-0 right-0 w-[calc(100vw-48px)] md:w-full md:max-w-[420px] bg-white shadow-2xl z-[301] flex flex-col border-l border-gray-200"
           >
             {/* Header */}
             <div className="h-12 px-5 border-b border-gray-100 flex items-center justify-between shrink-0 bg-white">

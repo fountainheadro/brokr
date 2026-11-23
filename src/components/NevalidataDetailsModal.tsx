@@ -131,38 +131,43 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
   };
 
   const getUpdatedLeadPayload = (): Partial<Lead> => {
-    const currentExtracted: any = lead.extractedData || {
-      crmData: {
-        detaliiGenerale: {
-          stadiu: "Active - Hot",
-          tranzactie: transactionType === "Închiriere" ? "Inchiriere" : "Vanzare",
-          categoria: categoria,
-          localizare: {
-            oras: oras,
-            zona: [lead.zone || "Nespecificat"],
-            strada: "",
-            numar: "",
-            bloc: "",
-            scara: "",
-            apartament: ""
-          },
-          proprietar: ownerName,
-          memoPrivat: notes
-        },
-        caracteristici: {
-          detalii: {
-            camere: "",
-            bai: ""
-          },
-          suprafete: {
-            utila: suprafata,
-            construita: suprafata ? String((parseFloat(suprafata) || 0) * 1.2) : ""
+    const currentExtracted: any = lead.extractedData
+      ? JSON.parse(JSON.stringify(lead.extractedData))
+      : {
+          crmData: {
+            detaliiGenerale: {
+              stadiu: "Active - Hot",
+              tranzactie: transactionType === "Închiriere" ? "Inchiriere" : "Vanzare",
+              categoria: categoria,
+              localizare: {
+                oras: oras,
+                zona: [lead.zone || "Nespecificat"],
+                strada: "",
+                numar: "",
+                bloc: "",
+                scara: "",
+                apartament: ""
+              },
+              proprietar: ownerName,
+              memoPrivat: notes
+            },
+            caracteristici: {
+              detalii: {
+                camere: "",
+                bai: ""
+              },
+              suprafete: {
+                utila: suprafata,
+                construita: suprafata ? String((parseFloat(suprafata) || 0) * 1.2) : ""
+              }
+            }
           }
-        }
-      }
-    };
+        };
 
     if (currentExtracted && currentExtracted.crmData) {
+      if (!currentExtracted.crmData.detaliiGenerale) {
+        currentExtracted.crmData.detaliiGenerale = {};
+      }
       currentExtracted.crmData.detaliiGenerale.categoria = categoria;
       currentExtracted.crmData.detaliiGenerale.tranzactie = transactionType === "Închiriere" ? "Inchiriere" : "Vanzare";
       currentExtracted.crmData.detaliiGenerale.proprietar = ownerName;
@@ -196,6 +201,24 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
       }
       currentExtracted.crmData.caracteristici.suprafete.utila = suprafata;
       currentExtracted.crmData.caracteristici.suprafete.construita = suprafata ? String(Math.round((parseFloat(suprafata) || 0) * 1.2)) : "";
+
+      currentExtracted.crmData.pret = {
+        ...(currentExtracted.crmData.pret || {}),
+        detalii: {
+          ...(currentExtracted.crmData.pret?.detalii || {}),
+          pret: price,
+        },
+      };
+    }
+
+    if (currentExtracted?.presentationSections?.tranzactie) {
+      currentExtracted.presentationSections = {
+        ...currentExtracted.presentationSections,
+        tranzactie: {
+          ...currentExtracted.presentationSections.tranzactie,
+          "Preț": price,
+        },
+      };
     }
 
     return {

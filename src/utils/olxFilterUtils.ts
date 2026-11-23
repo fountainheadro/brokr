@@ -437,6 +437,7 @@ export function buildOlxSearchUrls(filters: OlxLeadFilters, page = 1): string[] 
  */
 export function extractNumericPrice(lead: any): number {
   const candidates = [
+    lead?.priceNumeric,
     lead?.extractedData?.olxMeta?.priceEur,
     lead?.price,
     lead?.extractedData?.crmData?.pret?.detalii?.pret,
@@ -466,8 +467,10 @@ export function extractNumericPrice(lead: any): number {
  */
 export function extractNumericSurface(lead: any): number {
   const candidates = [
+    lead?.usefulArea,
     lead?.extractedData?.olxMeta?.surface,
     lead?.extractedData?.crmData?.caracteristici?.suprafete?.utila,
+    lead?.extractedData?.crmData?.caracteristici?.suprafete?.suprafataUtila,
     lead?.suprafataUtila,
     lead?.surface,
     lead?.suprafata,
@@ -495,7 +498,7 @@ export function extractNumericSurface(lead: any): number {
  * Normalizes a lead's room count into '1', '2', '3', or '4+' (or '').
  */
 export function extractNormalizedRooms(lead: any): string {
-  const olxCatId = Number(lead?.extractedData?.olxMeta?.categoryId || 0);
+  const olxCatId = Number(lead?.olxCategoryId || lead?.extractedData?.olxMeta?.categoryId || 0);
   if (olxCatId === 1155 || olxCatId === 1163) return "1";
   if (olxCatId === 1157 || olxCatId === 1165) return "2";
   if (olxCatId === 1159 || olxCatId === 1167) return "3";
@@ -539,6 +542,7 @@ export function extractNormalizedRooms(lead: any): string {
  */
 export function extractNormalizedCompartimentare(lead: any): string {
   const candidates = [
+    lead?.compartimentare,
     lead?.extractedData?.olxMeta?.compartimentare,
     lead?.extractedData?.crmData?.caracteristici?.detalii?.compartimentare,
   ];
@@ -564,7 +568,13 @@ export function extractNormalizedCompartimentare(lead: any): string {
  */
 export function extractNormalizedConstructieBuckets(lead: any): string[] {
   const buckets = new Set<string>();
+  if (Array.isArray(lead?.constructieBuckets)) {
+    for (const b of lead.constructieBuckets) {
+      if (typeof b === "string" && b.trim()) buckets.add(b.trim());
+    }
+  }
   const rawValues = [
+    lead?.constructionYear,
     lead?.extractedData?.olxMeta?.constructie,
     lead?.extractedData?.crmData?.caracteristici?.alteDetalii?.anConstructie,
   ];
@@ -597,6 +607,7 @@ export function extractNormalizedConstructieBuckets(lead: any): string[] {
  */
 export function extractNormalizedFloor(lead: any): string {
   const candidates = [
+    lead?.floor,
     lead?.extractedData?.olxMeta?.floor,
     lead?.extractedData?.crmData?.caracteristici?.detalii?.etaj,
   ];
@@ -660,6 +671,8 @@ export function matchesOlxLeadFilter(lead: any, filters: OlxLeadFilters): boolea
         lead?.categoria,
         lead?.propertyId,
         lead?.id,
+        lead?.city,
+        Array.isArray(lead?.searchTokens) ? lead.searchTokens.join(" ") : "",
         lead?.extractedData?.originalDescription,
         lead?.extractedData?.crmData?.descriere?.titlu,
         lead?.extractedData?.crmData?.descriere?.continut,
@@ -707,7 +720,7 @@ export function matchesOlxLeadFilter(lead: any, filters: OlxLeadFilters): boolea
   // 3. Categoria imobilului (multi-select)
   if (filters.categories.length > 0) {
     const leadCat = extractNormalizedCategory(lead);
-    const olxCatId = Number(lead?.extractedData?.olxMeta?.categoryId || 0);
+    const olxCatId = Number(lead?.olxCategoryId || lead?.extractedData?.olxMeta?.categoryId || 0);
     const matchesCat = filters.categories.some((selected) => {
       if (leadCat === selected) return true;
       // OLX combines Birou & Comercial under categoryId 710
@@ -770,6 +783,7 @@ export function matchesOlxLeadFilter(lead: any, filters: OlxLeadFilters): boolea
   if (selectedZones.length > 0) {
     const structuredZones = [
       lead?.zone,
+      lead?.city,
       ...(Array.isArray(lead?.extractedData?.crmData?.detaliiGenerale?.localizare?.zona)
         ? lead.extractedData.crmData.detaliiGenerale.localizare.zona
         : []),
@@ -783,6 +797,7 @@ export function matchesOlxLeadFilter(lead: any, filters: OlxLeadFilters): boolea
     const fullHaystack = normalizeRoText(
       [
         structuredZones,
+        Array.isArray(lead?.searchTokens) ? lead.searchTokens.join(" ") : "",
         lead?.extractedData?.olxMeta?.originalTitle,
         lead?.title,
         lead?.notes,

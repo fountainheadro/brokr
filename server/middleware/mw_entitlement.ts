@@ -15,6 +15,16 @@ export function requireModule(moduleId: ModuleId) {
       return;
     }
 
+    if (tenantContext.tenantStatus === "suspended" || tenantContext.tenantStatus === "cancelled") {
+      res.status(403).json(createErrorResponse("TENANT_SUSPENDED", "Contul agenției este suspendat sau anulat."));
+      return;
+    }
+
+    if (tenantContext.membershipStatus !== "active") {
+      res.status(403).json(createErrorResponse("MEMBERSHIP_INACTIVE", "Accesul utilizatorului în această agenție nu este activ."));
+      return;
+    }
+
     const { modules } = QuotaService.getEffectiveQuotas(tenantContext.tenantId);
     if (!modules.includes(moduleId)) {
       const moduleDef = ModuleCatalogService.getModuleById(moduleId);
@@ -46,6 +56,16 @@ export function requireQuota(resource: QuotaResourceType, requestedAmount = 1) {
     const tenantContext = req.tenantContext;
     if (!tenantContext || !tenantContext.tenantId) {
       res.status(401).json(createErrorResponse("UNAUTHORIZED", "Context de agenție indisponibil pentru verificare cote."));
+      return;
+    }
+
+    if (tenantContext.tenantStatus === "suspended" || tenantContext.tenantStatus === "cancelled") {
+      res.status(403).json(createErrorResponse("TENANT_SUSPENDED", "Contul agenției este suspendat sau anulat."));
+      return;
+    }
+
+    if (tenantContext.membershipStatus !== "active") {
+      res.status(403).json(createErrorResponse("MEMBERSHIP_INACTIVE", "Accesul utilizatorului în această agenție nu este activ."));
       return;
     }
 

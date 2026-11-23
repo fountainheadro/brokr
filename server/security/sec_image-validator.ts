@@ -26,9 +26,19 @@ export function detectImageMagicBytes(buf: Buffer): { mime: string; ext: string 
   ) {
     return { mime: "image/webp", ext: "webp" };
   }
-  // AVIF: ....ftypavif
-  if (buf.toString("ascii", 4, 12).toLowerCase().startsWith("ftypavif")) {
-    return { mime: "image/avif", ext: "avif" };
+  // AVIF / HEIF ISO BMFF container: ....ftyp(avif|avis|mif1|msf1|heic|heix)
+  if (buf.toString("ascii", 4, 8) === "ftyp") {
+    const brand = buf.toString("ascii", 8, 12).toLowerCase();
+    if (brand === "avif" || brand === "avis") {
+      return { mime: "image/avif", ext: "avif" };
+    }
+    if (brand === "mif1" || brand === "msf1" || brand === "heic" || brand === "heix") {
+      return { mime: "image/heic", ext: "heic" };
+    }
+  }
+  // BMP: 42 4D
+  if (buf[0] === 0x42 && buf[1] === 0x4d) {
+    return { mime: "image/bmp", ext: "bmp" };
   }
   return null;
 }

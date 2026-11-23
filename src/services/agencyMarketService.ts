@@ -14,10 +14,12 @@ import {
 import {
   normalizeCrawlUrl,
   extractOlxSlugId,
+  platformAutoCrawlService,
 } from "./platformAutoCrawlService";
 import { entityIdService } from "./entityIdService";
 import { applyLeadTitleAndDescriptionRules } from "../utils/applyLeadContentRules";
 import { isDailyLeadId } from "../utils/leadIdUtils";
+import { isSummaryLeadRecord } from "../core/crm/svc_lead-projection";
 import type { Lead, LeadStatus } from "./leadsService";
 
 export interface AgencyMarketNotice {
@@ -113,6 +115,7 @@ function normalizeAgencyMarketConfig(
 
 function extractLeadPublishedMs(lead: Lead): number {
   const candidates: any[] = [
+    lead.publishedAt,
     (lead.extractedData as any)?.olxMeta?.publishedAt,
     (lead.extractedData as any)?.olxMeta?.createdTime,
     lead.createdAt,
@@ -278,20 +281,36 @@ export const agencyMarketService = {
     actor: AgencyMarketActor;
     mode?: "manual" | "auto";
   }): Promise<CopySharedLeadResult> {
+    // Phase 2: When operating on a slim summary record from platform_shared_leads_summary,
+    // lazily hydrate the full canonical document before copying so gallery images, notes,
+    // and full CRM extractedData are copied intact into the agency database.
+    let canonicalSharedLead: Lead = sharedLead;
+    if (isSummaryLeadRecord(sharedLead) && sharedLead.id) {
+      const hydrated = await platformAutoCrawlService.getSharedLeadById(sharedLead.id);
+      if (hydrated) {
+        canonicalSharedLead = hydrated;
+      }
+    }
+
     const agencyLeadId = await entityIdService.getNextId("lead");
     const sourcePropertyId =
-      isDailyLeadId(sharedLead.propertyId) || sharedLead.propertyId
-        ? sharedLead.propertyId
+      isDailyLeadId(canonicalSharedLead.propertyId) || canonicalSharedLead.propertyId
+        ? canonicalSharedLead.propertyId
         : undefined;
 
     const { formattedTitle, formattedDescription, updatedExtractedData } =
       await applyLeadTitleAndDescriptionRules({
-        lead: sharedLead,
+        lead: canonicalSharedLead,
         targetKind: "my_list",
         propertyId: agencyLeadId,
       });
 
-    const { isSharedLead: _ignored, id: sharedId, ...rest } = sharedLead;
+    const {
+      isSharedLead: _ignored,
+      isSummary: _ignoredSummary,
+      id: sharedId,
+      ...rest
+    } = canonicalSharedLead;
     const nowIso = new Date().toISOString();
     const agentName = actor.name || "Administrator Agenție";
 

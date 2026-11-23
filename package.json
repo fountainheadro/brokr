@@ -20,7 +20,13 @@
     "test:phase11": "NODE_ENV=test tsx tests/security/tst_phase11-cutover-and-e2e.ts",
     "test:phase12": "NODE_ENV=test tsx tests/security/tst_live-firestore-access.ts",
     "test:adc": "NODE_ENV=test tsx tests/security/tst_adc-and-firestore-prod.ts",
-    "test": "npm run test:security && npm run test:platform && npm run test:subscription && npm run test:ai && npm run test:phase7 && npm run test:phase8 && npm run test:phase9 && npm run test:phase10 && npm run test:phase11 && npm run test:phase12 && npm run test:adc"
+    "test:rules": "NODE_ENV=test tsx tests/rules/tst_firestore-rules-baseline.ts",
+    "test:rules:isolation": "NODE_ENV=test tsx tests/rules/tst_firestore-rules-isolation.ts",
+    "test:hub": "NODE_ENV=test tsx tests/client/tst_client-data-hub.ts",
+    "test:phase2": "NODE_ENV=test tsx tests/crm/tst_phase2-slim-projections.ts",
+    "test:phase3": "NODE_ENV=test tsx tests/security/tst_phase3-hardening.ts",
+    "baseline:phase0": "tsx tests/baseline/run_phase0-baseline.ts",
+    "test": "npm run test:security && npm run test:platform && npm run test:subscription && npm run test:ai && npm run test:phase7 && npm run test:phase8 && npm run test:phase9 && npm run test:phase10 && npm run test:phase11 && npm run test:phase12 && npm run test:adc && npm run test:rules && npm run test:rules:isolation && npm run test:hub && npm run test:phase2 && npm run test:phase3"
   },
   "dependencies": {
     "@google/genai": "^3.4.0",

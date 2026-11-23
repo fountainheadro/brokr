@@ -2,6 +2,9 @@ import { TenantError } from "../errors/app_error";
 import { ResolvedTenantDomain, TenantRecord, DEFAULT_DEV_TENANT } from "./typ_tenant-context";
 export { DEFAULT_DEV_TENANT };
 import { envConfig } from "../env/env_config";
+import { PersistentStoreService } from "../database/svc_persistent-store";
+import { GcpAuthService } from "../gcp/svc_gcp-auth";
+import { PlatformAdminService } from "../platform/svc_platform-admin";
 
 let runtimePlatformRootDomain: string | null | undefined = undefined;
 let runtimeAdminSubdomain: string | null = null;
@@ -377,9 +380,228 @@ export class TenantResolutionService {
   }
 
   public static registerTenant(tenant: TenantRecord, customDomain?: string): void {
-    KNOWN_TENANTS.set(tenant.id, tenant);
-    if (customDomain) {
-      CUSTOM_DOMAINS.set(this.normalizeHost(customDomain), tenant.id);
+    const prev = KNOWN_TENANTS.get(tenant.id);
+    const statusChangedToRestricted =
+      prev &&
+      prev.status !== tenant.status &&
+      (tenant.status === "suspended" || tenant.status === "cancelled" || prev.status === "suspended" || prev.status === "cancelled");
+    const nextAuthVersion =
+      typeof tenant.authVersion === "number" && (!prev || tenant.authVersion > (prev.authVersion ?? 1))
+        ? tenant.authVersion
+        : statusChangedToRestricted
+          ? (prev.authVersion ?? 1) + 1
+          : (tenant.authVersion ?? prev?.authVersion ?? 1);
+
+    const record: TenantRecord = customDomain
+      ? { ...tenant, authVersion: nextAuthVersion, customDomain: this.normalizeHost(customDomain) }
+      : { ...tenant, authVersion: nextAuthVersion };
+    KNOWN_TENANTS.set(record.id, record);
+    if (record.customDomain) {
+      CUSTOM_DOMAINS.set(this.normalizeHost(record.customDomain), record.id);
+    }
+  }
+
+  public static async bumpTenantAuthVersion(tenantId: string): Promise<number> {
+    const existing = KNOWN_TENANTS.get(tenantId);
+    if (!existing) return 1;
+    const nextVersion = (existing.authVersion ?? 1) + 1;
+    const updated: TenantRecord = {
+      ...existing,
+      authVersion: nextVersion,
+      updatedAt: new Date().toISOString(),
+    };
+    await this.saveTenantAsync(updated, updated.customDomain);
+    return nextVersion;
+  }
+
+  private static lastHydratedAt = 0;
+  private static lastHydrateFailureAt = 0;
+  private static singleTenantHydratedAt = new Map<string, number>();
+  private static ensuredTenants = new Set<string>();
+
+  private static canListAllTenantsInCurrentContext(): boolean {
+    if (GcpAuthService.isAnyServerAuthConfigured()) {
+      return true;
+    }
+    const reqAuth = PersistentStoreService.getRequestAuth();
+    if (!reqAuth || reqAuth.emailVerified === false) {
+      return false;
+    }
+    return PlatformAdminService.isPlatformAdmin(reqAuth.uid, reqAuth.email);
+  }
+
+  /**
+   * O(1) single-tenant hydration (`/tenants/{tenantId}`) for agency-scoped requests.
+   * Avoids scanning the global `/tenants` collection (which requires Platform Admin privileges).
+   */
+  public static async hydrateSingleTenantFromFirestore(
+    tenantId: string,
+    ttlMs = 60_000
+  ): Promise<TenantRecord | null> {
+    if (!tenantId) return null;
+    if (process.env.NODE_ENV === "test") {
+      return this.getTenantById(tenantId);
+    }
+    if (!PersistentStoreService.isRemoteFirestoreConfigured()) {
+      return this.getTenantById(tenantId);
+    }
+
+    const lastAt = this.singleTenantHydratedAt.get(tenantId) || 0;
+    if (Date.now() - lastAt < ttlMs) {
+      return this.getTenantById(tenantId);
+    }
+
+    return PersistentStoreService.withKeyMutex(`hydrate::tenant::${tenantId}`, async () => {
+      const refreshedAt = this.singleTenantHydratedAt.get(tenantId) || 0;
+      if (Date.now() - refreshedAt < ttlMs) {
+        return this.getTenantById(tenantId);
+      }
+      try {
+        const remoteTenant = await PersistentStoreService.remoteGetAtPath<TenantRecord>(
+          `tenants/${tenantId}`,
+          { silentOnStatuses: [403] }
+        );
+        if (remoteTenant && remoteTenant.id) {
+          KNOWN_TENANTS.set(remoteTenant.id, {
+            ...remoteTenant,
+            authVersion: remoteTenant.authVersion ?? 1,
+          });
+          if (remoteTenant.customDomain) {
+            CUSTOM_DOMAINS.set(this.normalizeHost(remoteTenant.customDomain), remoteTenant.id);
+          }
+          this.ensuredTenants.add(remoteTenant.id);
+        }
+      } catch {
+        // Non-member or unbootstrapped tenant; fall back to known tenant map with cooldown
+      } finally {
+        this.singleTenantHydratedAt.set(tenantId, Date.now());
+      }
+      return this.getTenantById(tenantId);
+    });
+  }
+
+  /**
+   * Hydrates persisted agency tenant records from Firestore `/tenants` into the in-memory
+   * lookup maps so Super Admin agency creations/updates survive restarts permanently.
+   * Strictly gated to Platform Admin or Server ADC contexts to prevent 403 log storms.
+   */
+  public static async hydrateFromFirestore(ttlMs = 30_000): Promise<TenantRecord[]> {
+    if (process.env.NODE_ENV === "test") {
+      return this.getAllTenants();
+    }
+    if (!PersistentStoreService.isRemoteFirestoreConfigured()) {
+      return this.getAllTenants();
+    }
+    if (!this.canListAllTenantsInCurrentContext()) {
+      return this.getAllTenants();
+    }
+    const now = Date.now();
+    if (now - this.lastHydratedAt < ttlMs || now - this.lastHydrateFailureAt < ttlMs) {
+      return this.getAllTenants();
+    }
+
+    return PersistentStoreService.withKeyMutex("hydrate::tenants", async () => {
+      const checkNow = Date.now();
+      if (checkNow - this.lastHydratedAt < ttlMs || checkNow - this.lastHydrateFailureAt < ttlMs) {
+        return this.getAllTenants();
+      }
+      try {
+        const remoteTenants = await PersistentStoreService.remoteListAtPath<TenantRecord>(
+          "tenants",
+          300,
+          20,
+          { silentOnStatuses: [403] }
+        );
+        for (const t of remoteTenants) {
+          if (t && t.id) {
+            KNOWN_TENANTS.set(t.id, {
+              ...t,
+              authVersion: t.authVersion ?? 1,
+            });
+            if (t.customDomain) {
+              CUSTOM_DOMAINS.set(this.normalizeHost(t.customDomain), t.id);
+            }
+            this.ensuredTenants.add(t.id);
+            this.singleTenantHydratedAt.set(t.id, Date.now());
+          }
+        }
+        this.lastHydratedAt = Date.now();
+      } catch {
+        // Apply cooldown so transient 403/network issues do not trigger repeated request storms
+        this.lastHydrateFailureAt = Date.now();
+      }
+      return this.getAllTenants();
+    });
+  }
+
+  /**
+   * Persists a tenant record permanently in Firestore `/tenants/{tenant.id}` and updates caches.
+   */
+  public static async saveTenantAsync(
+    tenant: TenantRecord,
+    customDomain?: string
+  ): Promise<TenantRecord> {
+    const prev = KNOWN_TENANTS.get(tenant.id);
+    const statusChangedToRestricted =
+      prev &&
+      prev.status !== tenant.status &&
+      (tenant.status === "suspended" || tenant.status === "cancelled" || prev.status === "suspended" || prev.status === "cancelled");
+    const nextAuthVersion =
+      typeof tenant.authVersion === "number" && (!prev || tenant.authVersion > (prev.authVersion ?? 1))
+        ? tenant.authVersion
+        : statusChangedToRestricted
+          ? (prev.authVersion ?? 1) + 1
+          : (tenant.authVersion ?? prev?.authVersion ?? 1);
+
+    const normalized: TenantRecord = {
+      ...tenant,
+      authVersion: nextAuthVersion,
+      ...(customDomain ? { customDomain: this.normalizeHost(customDomain) } : {}),
+      updatedAt: tenant.updatedAt || new Date().toISOString(),
+    };
+    this.registerTenant(normalized, normalized.customDomain);
+    if (process.env.NODE_ENV !== "test" || PersistentStoreService.isRemoteFirestoreConfigured()) {
+      await PersistentStoreService.remoteSetAtPath(`tenants/${normalized.id}`, normalized);
+      this.ensuredTenants.add(normalized.id);
+      this.singleTenantHydratedAt.set(normalized.id, Date.now());
+    }
+    return normalized;
+  }
+
+  /**
+   * Ensures `/tenants/{tenantId}` exists in Firestore so `isTenantActive(tenantId)` in
+   * `firestore.rules` always evaluates cleanly for agency members and agents.
+   */
+  public static async ensureTenantExistsInFirestore(tenantId: string): Promise<void> {
+    if (process.env.NODE_ENV === "test") return;
+    if (!tenantId || this.ensuredTenants.has(tenantId)) return;
+    if (!PersistentStoreService.isRemoteFirestoreConfigured()) return;
+
+    const localTenant = KNOWN_TENANTS.get(tenantId);
+    if (!localTenant) return;
+
+    try {
+      const existing = await PersistentStoreService.remoteGetAtPath<TenantRecord>(
+        `tenants/${tenantId}`,
+        { silentOnStatuses: [403] }
+      );
+      if (existing) {
+        KNOWN_TENANTS.set(tenantId, existing);
+        if (existing.customDomain) {
+          CUSTOM_DOMAINS.set(this.normalizeHost(existing.customDomain), tenantId);
+        }
+        this.ensuredTenants.add(tenantId);
+        this.singleTenantHydratedAt.set(tenantId, Date.now());
+        return;
+      }
+      if (!this.canListAllTenantsInCurrentContext()) {
+        return;
+      }
+      await PersistentStoreService.remoteSetAtPath(`tenants/${tenantId}`, localTenant);
+      this.ensuredTenants.add(tenantId);
+      this.singleTenantHydratedAt.set(tenantId, Date.now());
+    } catch {
+      // Non-admin users cannot create root tenant docs; Platform Admin or server ADC will bootstrap it
     }
   }
 

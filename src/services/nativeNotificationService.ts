@@ -95,6 +95,7 @@ export const nativeNotificationService = {
   // Save the registration token scoped strictly to verified (tenantId, userId)
   async saveTokenToFirestore(token: string) {
     if (!auth.currentUser) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
 
     try {
       await crmApiClient.upsertFcmToken({
@@ -104,18 +105,25 @@ export const nativeNotificationService = {
       });
       console.log('[NotificationService] FCM Token registered in tenant-scoped store for UID:', auth.currentUser.uid);
     } catch (error) {
-      console.error('[NotificationService] Failed to save token in tenant store:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      if (error instanceof TypeError || /failed to fetch|networkerror|load failed/i.test(msg)) {
+        console.warn('[NotificationService] Deferred FCM token sync (transient network error):', msg);
+      } else {
+        console.warn('[NotificationService] Unable to save FCM token in tenant store:', msg);
+      }
     }
   },
 
   // Unregister/remove the FCM token from tenant-scoped store when logging out
   async removeTokenFromFirestore(token: string) {
     if (!auth.currentUser) return;
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     try {
       await crmApiClient.deleteFcmToken(token);
       console.log('[NotificationService] FCM Token deleted from tenant store.');
     } catch (error) {
-      console.error('[NotificationService] Failed to remove token from tenant store:', error);
+      const msg = error instanceof Error ? error.message : String(error);
+      console.warn('[NotificationService] Unable to remove FCM token from tenant store:', msg);
     }
   },
 

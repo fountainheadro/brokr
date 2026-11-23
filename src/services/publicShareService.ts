@@ -11,6 +11,7 @@ import {
   resolvePublicFirstImageUrl,
   shouldUseModifiedAdContent,
 } from "../utils/publicContentUtils";
+import { isSummaryLeadRecord } from "../core/crm/svc_lead-projection";
 import type { Lead } from "./leadsService";
 
 export const PUBLIC_SHARES_COLLECTION = "public_shares";
@@ -95,10 +96,31 @@ function sanitizeExtractedDataForPublicShare(
     delete cloned.crmData.owner;
   }
 
-  // Ensure description is available on the public snapshot for OpenGraph & shared page rendering
+  // Ensure description and price are synchronized on the public snapshot for OpenGraph & shared page rendering
   // without leaking top-level `notes` or owner PII.
   if (lead) {
     const rawLead = lead as Record<string, any>;
+    const topPrice = typeof rawLead.price === "string" ? rawLead.price.trim() : "";
+    if (topPrice && topPrice !== "-" && topPrice.toUpperCase() !== "N/A") {
+      if (cloned.crmData && typeof cloned.crmData === "object") {
+        cloned.crmData.pret = {
+          ...(cloned.crmData.pret && typeof cloned.crmData.pret === "object" ? cloned.crmData.pret : {}),
+          detalii: {
+            ...(cloned.crmData.pret?.detalii && typeof cloned.crmData.pret.detalii === "object"
+              ? cloned.crmData.pret.detalii
+              : {}),
+            pret: topPrice,
+          },
+        };
+      }
+      if (cloned.presentationSections?.tranzactie && typeof cloned.presentationSections.tranzactie === "object") {
+        cloned.presentationSections.tranzactie = {
+          ...cloned.presentationSections.tranzactie,
+          "Preț": topPrice,
+        };
+      }
+    }
+
     const existingOrigDesc =
       typeof cloned.originalDescription === "string" ? cloned.originalDescription.trim() : "";
     if (!existingOrigDesc) {
@@ -168,6 +190,9 @@ export async function publishPublicShareSnapshot(
   options?: { tenantId?: string | null; force?: boolean }
 ): Promise<boolean> {
   if (!lead || !auth.currentUser) return false;
+  // Never overwrite an existing full public_shares snapshot with a slim summary projection
+  // that intentionally omits `images[]` and `extractedData`.
+  if (isSummaryLeadRecord(lead)) return false;
 
   const shareCode = resolveShareCode(lead);
   if (!shareCode || !/^[a-zA-Z0-9_-]{1,64}$/.test(shareCode)) {
@@ -254,6 +279,7 @@ export async function syncPublicShareSnapshotsBatch(
     let processed = 0;
     for (const lead of leads) {
       if (processed >= maxCount) break;
+      if (isSummaryLeadRecord(lead)) continue;
       const code = resolveShareCode(lead);
       if (!code || !/^[a-zA-Z0-9_-]{1,64}$/.test(code)) continue;
       const entityKind = detectShareEntityKind(lead);

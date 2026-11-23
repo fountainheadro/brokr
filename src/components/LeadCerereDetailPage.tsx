@@ -27,6 +27,8 @@ import {
 import { toast } from "react-hot-toast";
 import { contactsService, Contact, ContactType } from "../services/contactsService";
 import { Lead, leadsService, isCerereLead } from "../services/leadsService";
+import { publishPublicShareSnapshot } from "../services/publicShareService";
+import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { CATEGORIA_OPTIONS, ZONA_OPTIONS } from "../constants";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { getApiAuthHeaders } from "../lib/apiAuth";
@@ -216,6 +218,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
   onReactivateLead,
   onAddToMyList,
 }) => {
+  const { tenant } = useTenantContext();
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [addingToMyList, setAddingToMyList] = useState(false);
 
@@ -390,10 +393,26 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
     const cleanNotes = notesDraft;
 
     const currentCrm = lead.extractedData?.crmData;
-    const shouldBuildExtracted = Boolean(lead.extractedData || cleanCamere || cleanSuprafata);
+    const currentPresentationSections = (lead.extractedData as any)?.presentationSections;
+    const shouldBuildExtracted = Boolean(lead.extractedData || cleanCamere || cleanSuprafata || cleanPrice);
     const nextExtractedData = shouldBuildExtracted
       ? {
           ...(lead.extractedData || {}),
+          ...(currentPresentationSections
+            ? {
+                presentationSections: {
+                  ...currentPresentationSections,
+                  ...(currentPresentationSections.tranzactie
+                    ? {
+                        tranzactie: {
+                          ...currentPresentationSections.tranzactie,
+                          "Preț": cleanPrice,
+                        },
+                      }
+                    : {}),
+                },
+              }
+            : {}),
           crmData: {
             ...(currentCrm || {}),
             ...(currentCrm?.detaliiGenerale
@@ -424,17 +443,13 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 utila: cleanSuprafata,
               },
             },
-            ...(currentCrm?.pret
-              ? {
-                  pret: {
-                    ...currentCrm.pret,
-                    detalii: {
-                      ...(currentCrm.pret.detalii || {}),
-                      pret: cleanPrice,
-                    },
-                  },
-                }
-              : {}),
+            pret: {
+              ...(currentCrm?.pret || {}),
+              detalii: {
+                ...(currentCrm?.pret?.detalii || {}),
+                pret: cleanPrice,
+              },
+            },
           },
         }
       : undefined;
@@ -451,8 +466,19 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
 
     setSavingPropertyInfo(true);
     try {
-      await leadsService.updateLeadData(lead.id, payload);
-      onUpdateLead(payload);
+      const persisted = await leadsService.updateLeadData(lead.id, payload);
+      const mergedPatch: Partial<Lead> = {
+        ...payload,
+        ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
+        ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
+        ...(persisted?.isSharedLead === false ? { isSharedLead: false } : {}),
+        ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
+      };
+      onUpdateLead(mergedPatch);
+      void publishPublicShareSnapshot(
+        { ...lead, ...mergedPatch },
+        { tenantId: tenant?.id, force: true }
+      );
       setEditingPropertyInfo(false);
       toast.success("Informațiile imobilului au fost salvate!");
     } catch (err) {

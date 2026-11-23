@@ -14,6 +14,9 @@ import { serverExtractBasicData, serverExtractData } from "./server/geminiServic
 import crypto from "crypto";
 import { mwAuthentication } from "./server/middleware/mw_authentication";
 import { mwPlatformAuthorization } from "./server/middleware/mw_platform-authorization";
+import { requireTenantContext } from "./server/middleware/mw_tenant-context";
+import { requireQuota } from "./server/middleware/mw_entitlement";
+import { requireWorkerOidc } from "./server/middleware/mw_worker-oidc";
 import { safeAxiosGet, safeFetchExternal, validateSafeExternalUrl, DEFAULT_MAX_EXTERNAL_BYTES } from "./server/security/sec_url-validator";
 import { createRateLimiter } from "./server/middleware/mw_rate-limiter";
 import { mwObservability } from "./server/middleware/mw_observability";
@@ -31,6 +34,7 @@ import {
   verifyPublicImageToken,
   resolveInlinePublicDataUrl,
   applyPublicImageProtections,
+  getCachedProtectedPublicImage,
 } from "./server/security/sec_public-media";
 import { detectImageMagicBytes } from "./server/security/sec_image-validator";
 import { detectLogoBoxes, inpaintLogoBox } from "./server/security/sec_logo-inpainter";
@@ -67,6 +71,7 @@ import {
 import { TenantMembershipService } from "./src/core/tenancy/svc_tenant-membership";
 import { PreviewSessionService } from "./src/core/tenancy/svc_preview-session";
 import { BillingManager } from "./src/core/subscription/svc_billing-manager";
+import { QuotaService } from "./src/core/subscription/svc_quota";
 
 
 import { GoogleGenAI, Type } from "@google/genai";
@@ -577,8 +582,9 @@ async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
 
-  // Trust reverse proxy (Cloud Run, Cloudflare, Nginx) so req.protocol, req.secure, and client IPs are accurate
-  app.set('trust proxy', true);
+  // Trust exactly 1 reverse proxy hop by default (Cloud Run Google Frontend) so req.ip cannot be spoofed via leftmost X-Forwarded-For
+  const parsedTrustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 1);
+  app.set("trust proxy", Number.isFinite(parsedTrustProxyHops) && parsedTrustProxyHops >= 0 ? parsedTrustProxyHops : 1);
 
   const isRunningBundledServer = import.meta.url.includes('/dist/') || (typeof process !== 'undefined' && process.argv[1] && process.argv[1].includes('/dist/'));
   const isProduction = process.env.NODE_ENV === "production" || isRunningBundledServer;
@@ -652,18 +658,23 @@ async function startServer() {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
 
-  // Increase body size limit to 50mb for image uploads while preserving rawBody for webhook HMAC verification
-  app.use(
-    express.json({
-      limit: "50mb",
-      verify: (req: any, _res, buf) => {
-        if (req.originalUrl === "/api/billing/webhook") {
-          req.rawBody = buf;
-        }
-      },
-    })
-  );
-  app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+  // Cap global JSON/form payloads at 2mb; keep 50mb strictly scoped to media upload routes
+  const standardJsonParser = express.json({
+    limit: "2mb",
+    verify: (req: any, _res, buf) => {
+      if (req.originalUrl === "/api/billing/webhook") {
+        req.rawBody = buf;
+      }
+    },
+  });
+  const mediaUploadJsonParser = express.json({ limit: "50mb" });
+  app.use((req, res, next) => {
+    if (req.path === "/api/upload-photo" || req.path.startsWith("/api/storage")) {
+      return mediaUploadJsonParser(req, res, next);
+    }
+    return standardJsonParser(req, res, next);
+  });
+  app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
   // Serve uploaded images statically (with optional ?w= thumbnail resizing, disable script sniffing)
   app.use("/uploads", async (req, res, next) => {
@@ -700,7 +711,9 @@ async function startServer() {
 
 
   // Endpoint to store uploaded photos persistently via tenant-isolated CloudStorageService
-  app.post("/api/upload-photo", mwAuthentication, async (req, res) => {
+  app.post("/api/upload-photo", ...requireTenantContext, requireQuota("storage_mb", 1), async (req, res) => {
+    let consumedStorageMb = 0;
+    const verifiedTenantId = req.tenantContext!.tenantId;
     try {
       const { dataUrl, base64, propertyId, fileName } = req.body;
       const raw = dataUrl || base64;
@@ -708,66 +721,9 @@ async function startServer() {
         return res.status(400).json({ error: "Missing image data" });
       }
 
-      // Resolve tenantId strictly on the server (never trust arbitrary client-supplied tenantId)
+      // Never trust arbitrary client-supplied tenantId; reject any cross-tenant mismatch immediately
       const requestedTenantId =
         typeof req.body?.tenantId === "string" ? req.body.tenantId.trim() : "";
-      let verifiedTenantId: string | null = null;
-
-      const previewHeader = req.headers["x-preview-session"] as string | undefined;
-      if (previewHeader) {
-        const previewSession = PreviewSessionService.getSession(previewHeader);
-        if (previewSession) {
-          verifiedTenantId = previewSession.tenantId;
-        }
-      }
-
-      if (!verifiedTenantId) {
-        const rawHost = String(req.headers["x-forwarded-host"] || req.headers.host || "");
-        const devOverride = (req.headers["x-tenant-override"] ||
-          req.headers["x-tenant-domain"] ||
-          req.query.simulate_tenant ||
-          req.query.tenantDomain) as string | undefined;
-        try {
-          const resolved = TenantResolutionService.resolveDomain(rawHost, devOverride);
-          if (resolved.tenantId && req.authUser) {
-            TenantMembershipService.verifyMembership(
-              resolved.tenantId,
-              req.authUser.uid,
-              req.authUser.email,
-              req.authUser.emailVerified
-            );
-            verifiedTenantId = resolved.tenantId;
-          }
-        } catch {
-          // Check single-membership fallback ONLY if user belongs to exactly one active tenant
-          if (req.authUser) {
-            const matchingTenants: string[] = [];
-            for (const tenant of TenantResolutionService.getAllTenants()) {
-              try {
-                TenantMembershipService.verifyMembership(
-                  tenant.id,
-                  req.authUser.uid,
-                  req.authUser.email,
-                  req.authUser.emailVerified
-                );
-                matchingTenants.push(tenant.id);
-              } catch {
-                // Not a member
-              }
-            }
-            if (matchingTenants.length === 1) {
-              verifiedTenantId = matchingTenants[0];
-            }
-          }
-        }
-      }
-
-      if (!verifiedTenantId) {
-        return res
-          .status(403)
-          .json({ error: "Nu s-a putut verifica apartenența la o agenție activă pentru upload." });
-      }
-
       if (requestedTenantId && requestedTenantId !== verifiedTenantId) {
         return res
           .status(403)
@@ -808,6 +764,10 @@ async function startServer() {
           ? propertyId.trim()
           : "unassigned";
 
+      const requiredMb = Math.max(1, Math.ceil(finalBuffer.length / (1024 * 1024)));
+      QuotaService.consumeQuota(verifiedTenantId, "storage_mb", requiredMb);
+      consumedStorageMb = requiredMb;
+
       const meta = await CloudStorageService.uploadObject({
         tenantId: verifiedTenantId,
         entityType: "properties",
@@ -816,7 +776,7 @@ async function startServer() {
         buffer: finalBuffer,
         declaredMimeType: finalDetected.mime,
         visibility: "public_listing",
-        uploadedByUserId: req.authUser?.uid || "authenticated_user",
+        uploadedByUserId: req.authUser?.uid || req.tenantContext?.userId || "authenticated_user",
         isImageOnly: true,
       });
 
@@ -828,6 +788,9 @@ async function startServer() {
         backend: meta.backend,
       });
     } catch (err: any) {
+      if (consumedStorageMb > 0) {
+        QuotaService.releaseQuota(verifiedTenantId, "storage_mb", consumedStorageMb);
+      }
       console.error("[Server] /api/upload-photo error:", err);
       const status = err?.statusCode || 500;
       res.status(status).json({ error: err.message || "Failed to upload photo" });
@@ -891,6 +854,18 @@ async function startServer() {
     res.json({ status: "ok", timestamp: new Date().toISOString() });
   });
 
+  // Internal worker OIDC verification probe (Cloud Tasks / Cloud Scheduler SA authentication)
+  app.post("/api/internal/workers/ping", requireWorkerOidc(), (req, res) => {
+    res.json({
+      success: true,
+      data: {
+        worker: req.workerIdentity?.email || null,
+        audience: req.workerIdentity?.audience || null,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  });
+
   const resolveTitleAutomationRuleForReq = (req: any): TitleAutomationRule => {
     try {
       let tenantId = String(req?.tenantContext?.tenantId || req?.auth?.tenantId || "").trim();
@@ -924,7 +899,8 @@ async function startServer() {
   };
 
   // API endpoint to extract basic data using server-side Gemini
-  app.post("/api/extract-basic", mwAuthentication, aiRouteLimiter, async (req, res) => {
+  app.post("/api/extract-basic", ...requireTenantContext, aiRouteLimiter, requireQuota("ai_requests", 1), async (req, res) => {
+    let reservationId: string | null = null;
     try {
       const { content, title } = req.body;
       const cleanContent = (content || "").trim();
@@ -936,17 +912,24 @@ async function startServer() {
       const finalContent = cleanContent || finalTitle;
       const titleRule = resolveTitleAutomationRuleForReq(req);
 
+      const tenantId = req.tenantContext!.tenantId;
+      const estimatedTokens = Math.max(500, Math.min(4000, Math.ceil((finalContent.length + finalTitle.length) / 3)));
+      reservationId = QuotaService.reserveAiQuota(tenantId, estimatedTokens);
+
       console.log(`[Server] Process /api/extract-basic for Title: ${finalTitle}`);
       const result = await serverExtractBasicData(finalContent, finalTitle, titleRule);
+      QuotaService.commitAiQuota(reservationId, estimatedTokens);
       res.json(result);
     } catch (e: any) {
+      if (reservationId) QuotaService.refundAiQuota(reservationId);
       console.error("[Server] /api/extract-basic error:", e);
-      res.status(500).json({ error: e.message || "Failed to extract basic data" });
+      res.status(e?.statusCode || 500).json({ error: e.message || "Failed to extract basic data" });
     }
   });
 
   // API endpoint to extract full structured data using server-side Gemini
-  app.post("/api/extract-data", mwAuthentication, aiRouteLimiter, async (req, res) => {
+  app.post("/api/extract-data", ...requireTenantContext, aiRouteLimiter, requireQuota("ai_requests", 1), async (req, res) => {
+    let reservationId: string | null = null;
     try {
       const { content, title, imageUrls, propertyId, propertyUrl } = req.body;
       const cleanContent = (content || "").trim();
@@ -958,17 +941,23 @@ async function startServer() {
       const finalContent = cleanContent || finalTitle;
       const titleRule = resolveTitleAutomationRuleForReq(req);
 
+      const tenantId = req.tenantContext!.tenantId;
+      const estimatedTokens = Math.max(1200, Math.min(8000, Math.ceil((finalContent.length + finalTitle.length) / 2)));
+      reservationId = QuotaService.reserveAiQuota(tenantId, estimatedTokens);
+
       console.log(`[Server] Process /api/extract-data for Property ID: ${propertyId || "GOL"}`);
       const result = await serverExtractData(finalContent, finalTitle, imageUrls, propertyId, propertyUrl, titleRule);
+      QuotaService.commitAiQuota(reservationId, estimatedTokens);
       res.json(result);
     } catch (e: any) {
+      if (reservationId) QuotaService.refundAiQuota(reservationId);
       console.error("[Server] /api/extract-data error:", e);
-      res.status(500).json({ error: e.message || "Failed to extract content data" });
+      res.status(e?.statusCode || 500).json({ error: e.message || "Failed to extract content data" });
     }
   });
 
   // API endpoint for optional on-demand AI generation of title and description
-  app.post("/api/generate-ai-text", mwAuthentication, async (req, res) => {
+  app.post("/api/generate-ai-text", ...requireTenantContext, aiRouteLimiter, requireQuota("ai_requests", 1), async (req, res) => {
     const syncDescriptionHeadingTitle = (desc: string, finalTitle: string): string => {
       if (!desc || !finalTitle) return desc;
       return desc.replace(/^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+$/m, `$1${finalTitle}`);
@@ -1114,12 +1103,16 @@ ${isRent ? `${p}\n1 lună garanție\nComision 50% + TVA\nDisponibil imediat` : `
       return { title: resolvedTitle, description };
     };
 
+    let reservationId: string | null = null;
     try {
       const { category, transactionType, zone, price, specs, originalTitle, originalDescription, propertyId, forcedTitle } = req.body;
       const cleanForcedTitle = typeof forcedTitle === "string" ? forcedTitle.trim() : "";
+      const tenantId = req.tenantContext!.tenantId;
       if (!process.env.GEMINI_API_KEY) {
+        QuotaService.consumeQuota(tenantId, "ai_requests", 1);
         return res.json(generateLocalTemplateText(req.body));
       }
+      reservationId = QuotaService.reserveAiQuota(tenantId, 1200);
 
       const forcedTitleInstruction = cleanForcedTitle
         ? `\n- TITLU OBLIGATORIU (din regula agenției): "${cleanForcedTitle}" — folosește EXACT acest titlu atât în câmpul 'title', cât și în antetul descrierii după emojiul 🏡 sau 🏢.`
@@ -1224,8 +1217,16 @@ Returnează un JSON strict cu următoarele chei:
       const parsed = JSON.parse(text);
       const finalTitle = cleanForcedTitle || String(parsed.title || "").trim();
       const finalDescription = syncDescriptionHeadingTitle(String(parsed.description || "").trim(), finalTitle);
+      if (reservationId) {
+        const approxTokens = Math.max(400, Math.ceil((prompt.length + text.length) / 4));
+        QuotaService.commitAiQuota(reservationId, approxTokens);
+      }
       res.json({ title: finalTitle, description: finalDescription });
     } catch (e: any) {
+      if (reservationId) QuotaService.refundAiQuota(reservationId);
+      if (e?.statusCode === 429) {
+        return res.status(429).json({ error: e.message || "Quota AI depășită." });
+      }
       const errStr = e?.message || String(e || "");
       if (!errStr.includes("402") && !errStr.includes("RESOURCE_EXHAUSTED") && !errStr.includes("prepayment credits")) {
         console.warn("[Server] /api/generate-ai-text failed (using local template fallback):", errStr);
@@ -1440,6 +1441,19 @@ Returnează un JSON strict cu următoarele chei:
         seenShareKeys.add(shareKey);
         const pubDoc = await getFirestoreDocDirect(`public_shares/${encodeURIComponent(shareKey)}`);
         if (pubDoc) {
+          if (!preferredTenantId && isGlobalLeadCode) {
+            const tenantLocalLead = await CrmTenantStoreService.findPublicPropertyAcrossTenants(
+              cleanId,
+              null
+            );
+            if (tenantLocalLead) {
+              const localMs = Date.parse(String(tenantLocalLead.updatedAt || "")) || 0;
+              const pubMs = Date.parse(String(pubDoc.updatedAt || "")) || 0;
+              if (localMs >= pubMs) {
+                return tenantLocalLead;
+              }
+            }
+          }
           return pubDoc;
         }
       }
@@ -1450,10 +1464,24 @@ Returnează un JSON strict cu următoarele chei:
       const sharedDirect = await getFirestoreDocDirect(
         `platform_shared_leads/${encodeURIComponent(cleanId)}`
       );
-      if (sharedDirect) return sharedDirect;
-
-      const sharedByCode = await queryFirestoreCollectionByPropertyId("", "platform_shared_leads");
-      if (sharedByCode) return sharedByCode;
+      const sharedLead =
+        sharedDirect || (await queryFirestoreCollectionByPropertyId("", "platform_shared_leads"));
+      if (sharedLead) {
+        if (!preferredTenantId && isGlobalLeadCode) {
+          const tenantLocalLead = await CrmTenantStoreService.findPublicPropertyAcrossTenants(
+            cleanId,
+            null
+          );
+          if (tenantLocalLead) {
+            const localMs = Date.parse(String(tenantLocalLead.updatedAt || "")) || 0;
+            const sharedMs = Date.parse(String(sharedLead.updatedAt || "")) || 0;
+            if (localMs >= sharedMs) {
+              return tenantLocalLead;
+            }
+          }
+        }
+        return sharedLead;
+      }
     }
 
     // 4. If global lead code wasn't in platform_shared_leads, check tenant-scoped store too (agency-created leads)
@@ -1533,15 +1561,22 @@ Returnează un JSON strict cu următoarele chei:
       const viewerStamp = `${ipHash}-${nowTime}`;
       const propCode = String(property.propertyId || id).slice(0, 10).toUpperCase();
 
+      const publicTokenTtlMs = 4 * 60 * 60 * 1000;
+      const tokenUrlBySource = new Map<string, string>();
       const tokenizeImageUrl = (rawUrl: string): string => {
+        const trimmed = rawUrl.trim();
+        const existing = tokenUrlBySource.get(trimmed);
+        if (existing) return existing;
         const token = createPublicImageToken({
-          sourceUrl: rawUrl,
+          sourceUrl: trimmed,
           propertyId: propCode,
           viewerSid,
           viewerStamp,
-          ttlMs: 15 * 60 * 1000,
+          ttlMs: publicTokenTtlMs,
         });
-        return `/api/public-image?token=${encodeURIComponent(token)}`;
+        const tokenized = `/api/public-image?token=${encodeURIComponent(token)}`;
+        tokenUrlBySource.set(trimmed, tokenized);
+        return tokenized;
       };
 
       const sanitized = sanitizePublicProperty(property, { tokenizeImageUrl });
@@ -1551,7 +1586,7 @@ Returnează un JSON strict cu următoarele chei:
         ...sanitized,
         publicProtection: {
           viewerStamp,
-          expiresAt: Date.now() + 15 * 60 * 1000,
+          expiresAt: Date.now() + publicTokenTtlMs,
         },
       });
     } catch (e: any) {
@@ -1587,7 +1622,28 @@ Returnează un JSON strict cu următoarele chei:
       return res.status(403).json({ error: "Invalid image token" });
     }
 
-    let sourceUrl = verified.payload.u;
+    const targetWidth = parseThumbnailWidth(req.query.w);
+    const preferWebp = shouldServeWebp(req.headers.accept, req.query.format);
+
+    // Fast path: serve from protected image cache without hitting upstream CDN/storage
+    const cachedProtected = getCachedProtectedPublicImage(
+      verified.payload.u,
+      targetWidth,
+      preferWebp
+    );
+    if (cachedProtected) {
+      res.setHeader("Content-Type", cachedProtected.mimeType);
+      res.setHeader("Content-Length", String(cachedProtected.buffer.length));
+      res.setHeader("Vary", "Accept");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("X-Robots-Tag", "noindex, noimageindex");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+      return res.send(cachedProtected.buffer);
+    }
+
+    let sourceUrl = verified.payload.u.trim().replace(/&amp;/g, "&");
     if (sourceUrl.startsWith("inline:")) {
       const resolvedDataUrl = resolveInlinePublicDataUrl(sourceUrl);
       if (!resolvedDataUrl) {
@@ -1596,34 +1652,57 @@ Returnează un JSON strict cu următoarele chei:
       sourceUrl = resolvedDataUrl;
     }
 
-    // Unwrap proxy-image wrapper if present
-    if (sourceUrl.includes("/api/proxy-image")) {
+    // Unwrap nested proxy-image wrappers if present
+    for (let depth = 0; depth < 3 && sourceUrl.includes("/api/proxy-image"); depth++) {
       try {
         const parsed = new URL(sourceUrl, "https://placeholder.local");
         const inner = parsed.searchParams.get("url");
-        if (inner) sourceUrl = inner;
+        if (inner) {
+          sourceUrl = inner.trim().replace(/&amp;/g, "&");
+        } else {
+          break;
+        }
       } catch {
-        // ignore parse error
+        break;
       }
+    }
+
+    if (sourceUrl.startsWith("//")) {
+      sourceUrl = `https:${sourceUrl}`;
     }
 
     try {
       let rawBuffer: Buffer | null = null;
+
+      let localPathCandidate = sourceUrl;
+      if (/^https?:\/\//i.test(sourceUrl)) {
+        try {
+          const parsedAbs = new URL(sourceUrl);
+          if (
+            parsedAbs.pathname.startsWith("/uploads/") ||
+            parsedAbs.pathname.startsWith("/api/storage/media/")
+          ) {
+            localPathCandidate = parsedAbs.pathname;
+          }
+        } catch {
+          // ignore parse error
+        }
+      }
 
       if (sourceUrl.startsWith("data:image/")) {
         const parts = sourceUrl.split(",");
         if (parts.length === 2) {
           rawBuffer = Buffer.from(parts[1], "base64");
         }
-      } else if (sourceUrl.startsWith("/api/storage/media/")) {
-        const objectKey = sourceUrl.replace(/^\/api\/storage\/media\//, "").split("?")[0];
+      } else if (localPathCandidate.startsWith("/api/storage/media/")) {
+        const objectKey = localPathCandidate.replace(/^\/api\/storage\/media\//, "").split("?")[0];
         const { buffer } = await CloudStorageService.downloadObject({
           objectKey,
           allowPublicListing: true,
         });
         rawBuffer = buffer;
-      } else if (sourceUrl.startsWith("/uploads/")) {
-        const relName = path.basename(sourceUrl.split("?")[0]);
+      } else if (localPathCandidate.startsWith("/uploads/")) {
+        const relName = path.basename(localPathCandidate.split("?")[0]);
         const localPath = path.join(uploadsDir, relName);
         if (fs.existsSync(localPath)) {
           rawBuffer = fs.readFileSync(localPath);
@@ -1635,16 +1714,38 @@ Returnează un JSON strict cu următoarele chei:
         if (validationError) {
           return res.status(400).json({ error: validationError });
         }
-        const entry = await fetchAndCleanExternalImage(cleanUrl, { maxAttempts: 3, timeoutMs: 8000 });
-        rawBuffer = entry.data;
+        try {
+          const entry = await fetchAndCleanExternalImage(cleanUrl, { maxAttempts: 3, timeoutMs: 8000 });
+          rawBuffer = entry.data;
+        } catch (primaryErr) {
+          // Fallback: plain-header fetch for CDNs that reject spoofed Referer/Sec-Fetch headers
+          try {
+            const plainResp = await axios.get(cleanUrl, {
+              responseType: "arraybuffer",
+              timeout: 7000,
+              maxRedirects: 5,
+              maxContentLength: 20 * 1024 * 1024,
+              headers: {
+                "User-Agent": "Mozilla/5.0 (compatible; BrokrMedia/1.0)",
+                Accept: "image/jpeg,image/png,image/webp,image/*,*/*;q=0.8",
+              },
+            });
+            const plainBuf = Buffer.from(plainResp.data);
+            if (plainBuf.length > 0 && detectImageMagicBytes(plainBuf)) {
+              rawBuffer = plainBuf;
+            } else {
+              throw primaryErr;
+            }
+          } catch {
+            throw primaryErr;
+          }
+        }
       }
 
       if (!rawBuffer || rawBuffer.length === 0) {
         return res.status(404).json({ error: "Image not found" });
       }
 
-      const targetWidth = parseThumbnailWidth(req.query.w);
-      const preferWebp = shouldServeWebp(req.headers.accept, req.query.format);
       const protectedImg = await applyPublicImageProtections(rawBuffer, {
         cacheKey: verified.payload.u,
         propertyCode: verified.payload.p || "BROKR",
@@ -1654,6 +1755,7 @@ Returnează un JSON strict cu următoarele chei:
       });
 
       res.setHeader("Content-Type", protectedImg.mimeType);
+      res.setHeader("Content-Length", String(protectedImg.buffer.length));
       res.setHeader("Vary", "Accept");
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
       res.setHeader("Pragma", "no-cache");
@@ -1691,10 +1793,32 @@ Returnează un JSON strict cu următoarele chei:
     return { path: rootIndexPath, isDist: false };
   }
 
-  // In-memory cache for OpenGraph preview thumbnails (optimized JPEG, < 300KB)
+  // In-memory cache for OpenGraph preview thumbnails (baseline sRGB 1200x630 JPEG, strictly < 260KB for WhatsApp/iMessage/Telegram)
   const ogImageMemoryCache = new Map<string, { buffer: Buffer; mimeType: string; timestamp: number }>();
+  const pendingOgImageBuilds = new Map<string, Promise<Buffer | null>>();
+  const ogPropertyShortCache = new Map<string, { property: any; timestamp: number }>();
 
-  // Helper to serve default brokr OpenGraph banner
+  async function fetchPropertyByIdCached(
+    id: string,
+    preferredTenantId?: string | null
+  ): Promise<any> {
+    const cacheKey = `${preferredTenantId || "global"}:${id}`;
+    const hit = ogPropertyShortCache.get(cacheKey);
+    if (hit && Date.now() - hit.timestamp < 60_000) {
+      return hit.property;
+    }
+    const property = await fetchPropertyById(id, { preferredTenantId });
+    if (property) {
+      if (ogPropertyShortCache.size >= 300) {
+        const oldest = ogPropertyShortCache.keys().next().value;
+        if (oldest !== undefined) ogPropertyShortCache.delete(oldest);
+      }
+      ogPropertyShortCache.set(cacheKey, { property, timestamp: Date.now() });
+    }
+    return property;
+  }
+
+  // Helper to serve default brokr OpenGraph banner with short cache so transient upstream failures recover quickly
   function serveDefaultOgBanner(res: express.Response) {
     const defaultPaths = [
       path.resolve("./public/og-default.jpg"),
@@ -1704,203 +1828,312 @@ Returnează un JSON strict cu următoarele chei:
     ];
     for (const p of defaultPaths) {
       if (fs.existsSync(p)) {
+        const buf = fs.readFileSync(p);
         res.setHeader("Content-Type", "image/jpeg");
-        res.setHeader("Cache-Control", "public, max-age=86400");
-        return res.sendFile(p);
+        res.setHeader("Content-Length", String(buf.length));
+        res.setHeader("Access-Control-Allow-Origin", "*");
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cache-Control", "public, max-age=60, s-maxage=60");
+        return res.send(buf);
       }
     }
     return res.status(404).send("Default OG banner not found");
   }
 
-  // Dedicated OpenGraph image endpoint for WhatsApp, Facebook, LinkedIn, Telegram, iMessage, and X/Twitter
-  // Uses the exact first image of the property and outputs a crawler-ready 1200x630 JPEG (< 285KB)
-  app.get(["/api/og-image/:id", "/api/og-image/:id.jpg", "/api/og-image/:id.png"], async (req, res) => {
-    let { id } = req.params;
-    if (id) {
-      id = id.replace(/\.(jpg|jpeg|png|webp)$/i, "");
+  function normalizeOgCandidateUrl(rawInput: string): string {
+    let rawUrl = String(rawInput || "")
+      .trim()
+      .replace(/&amp;/gi, "&");
+    if (!rawUrl) return "";
+
+    // Unwrap proxy URL (including double-wrapped or absolute self-URLs)
+    for (let depth = 0; depth < 2; depth++) {
+      if (rawUrl.includes("/api/proxy-image")) {
+        try {
+          const u = new URL(rawUrl, "https://placeholder.local");
+          const extracted = u.searchParams.get("url");
+          if (extracted) {
+            rawUrl = extracted.trim().replace(/&amp;/gi, "&");
+            continue;
+          }
+        } catch {}
+      }
+      break;
     }
 
-    if (!id) {
-      return serveDefaultOgBanner(res);
+    if (rawUrl.startsWith("//")) {
+      rawUrl = "https:" + rawUrl;
+    }
+    return rawUrl;
+  }
+
+  async function fetchRawOgCandidateBuffer(
+    rawInput: string
+  ): Promise<{ buffer: Buffer; contentType: string } | null> {
+    const rawUrl = normalizeOgCandidateUrl(rawInput);
+    if (!rawUrl) return null;
+
+    // 1. Inline base64 dataUrl
+    if (rawUrl.startsWith("data:image/")) {
+      try {
+        const commaIdx = rawUrl.indexOf(",");
+        if (commaIdx !== -1) {
+          const meta = rawUrl.slice(0, commaIdx);
+          const payload = rawUrl.slice(commaIdx + 1);
+          const buf = Buffer.from(payload, "base64");
+          if (buf.length > 0) {
+            const mimeMatch = meta.match(/:(.*?);/);
+            return { buffer: buf, contentType: mimeMatch ? mimeMatch[1] : "image/jpeg" };
+          }
+        }
+      } catch {}
+      return null;
     }
 
-    const versionParam = typeof req.query.v === "string" ? req.query.v.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32) : "";
-    const preferredTenantId = resolvePublicShareTenantId(req);
-    const ogCacheKey = `${preferredTenantId || "global"}:${id}:${versionParam}`;
-    const cached = ogImageMemoryCache.get(ogCacheKey);
-    if (cached && (Date.now() - cached.timestamp < 1000 * 60 * 60 * 24)) {
-      res.setHeader("Content-Type", cached.mimeType);
-      res.setHeader("Content-Length", String(cached.buffer.length));
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", versionParam ? "public, max-age=86400, s-maxage=86400, immutable" : "public, max-age=3600, s-maxage=3600");
-      return res.send(cached.buffer);
+    // 2. Cloud Storage listing media URLs (relative or absolute self-hosted URL)
+    const storageMatch = rawUrl.match(/\/api\/storage\/media\/([^?#]+)/);
+    if (storageMatch && storageMatch[1]) {
+      try {
+        const objectKey = decodeURIComponent(storageMatch[1]);
+        const { buffer, metadata } = await CloudStorageService.downloadObject({
+          objectKey,
+          allowPublicListing: true,
+        });
+        if (buffer && buffer.length > 0) {
+          return { buffer, contentType: metadata.mimeType || "image/jpeg" };
+        }
+      } catch {
+        // Fall through to external fetch if it was a remote URL
+      }
+    }
+
+    // 3. Local uploads (relative or absolute URL pointing to /uploads/...)
+    const uploadsMatch = rawUrl.match(/\/uploads\/([^?#]+)/);
+    if (uploadsMatch && uploadsMatch[1]) {
+      try {
+        const relPath = decodeURIComponent(uploadsMatch[1]);
+        const localPath = path.resolve(uploadsDir, relPath);
+        if (localPath.startsWith(uploadsDir + path.sep) && fs.existsSync(localPath) && fs.statSync(localPath).isFile()) {
+          const buf = fs.readFileSync(localPath);
+          if (buf.length > 0) {
+            const ct = relPath.toLowerCase().endsWith(".png") ? "image/png" : "image/jpeg";
+            return { buffer: buf, contentType: ct };
+          }
+        }
+      } catch {}
+    }
+
+    // 4. External HTTP/HTTPS image
+    if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
+      const cleanUrl = normalizeCleanImageUrl(rawUrl);
+
+      // Instant hit if already downloaded & cleaned in imageCleanCache
+      const alreadyClean = imageCleanCache.get(cleanUrl);
+      if (alreadyClean?.data && alreadyClean.data.length > 0) {
+        return { buffer: alreadyClean.data, contentType: alreadyClean.mimeType || "image/jpeg" };
+      }
+
+      // Fast fetch without heavy full-res watermark inpainting so chat crawlers never time out
+      try {
+        const entry = await fetchAndCleanExternalImage(cleanUrl, {
+          skipClean: true,
+          maxAttempts: 2,
+          timeoutMs: 4500,
+        });
+        if (entry?.data && entry.data.length > 0) {
+          return { buffer: entry.data, contentType: entry.mimeType || "image/jpeg" };
+        }
+      } catch {
+        // Fallback: some CDNs block Referer / Sec-Fetch-* headers; retry once with minimal headers
+        try {
+          const plainRes = await safeFetchExternal(cleanUrl, {
+            responseType: "arraybuffer",
+            timeout: 4500,
+            maxContentLength: DEFAULT_MAX_EXTERNAL_BYTES,
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
+              "Accept": "image/jpeg,image/png,image/webp,image/*,*/*;q=0.8",
+            },
+          });
+          if (plainRes.status >= 200 && plainRes.status < 300 && plainRes.data) {
+            const buf = Buffer.isBuffer(plainRes.data) ? plainRes.data : Buffer.from(plainRes.data);
+            const magic = detectImageMagicBytes(buf);
+            if (magic && buf.length > 0) {
+              return { buffer: buf, contentType: magic.mime };
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return null;
+  }
+
+  async function encodeBaselineOgJpeg(rawBuffer: Buffer): Promise<Buffer> {
+    // WhatsApp, iMessage, Telegram, and Messenger reliably render Baseline sRGB JPEGs (< 260KB).
+    // Avoid `-interlace Plane` (progressive JPEG), which intermittently fails to render in chat previews.
+    const ogBaseArgs = [
+      "-",
+      "-auto-orient",
+      "-colorspace",
+      "sRGB",
+      "-background",
+      "#0f172a",
+      "-flatten",
+      "-resize",
+      "1200x630^",
+      "-gravity",
+      "center",
+      "-extent",
+      "1200x630",
+      "-strip",
+      "-interlace",
+      "None",
+      "-sampling-factor",
+      "4:2:0",
+    ];
+
+    try {
+      let converted = await execConvert([...ogBaseArgs, "-quality", "82", "jpg:-"], rawBuffer);
+      if (converted.length > 260_000) {
+        converted = await execConvert([...ogBaseArgs, "-quality", "68", "jpg:-"], rawBuffer);
+      }
+      if (converted.length > 260_000) {
+        converted = await execConvert([...ogBaseArgs, "-quality", "54", "jpg:-"], rawBuffer);
+      }
+      if (converted.length > 0) {
+        return converted;
+      }
+    } catch (imErr: any) {
+      console.warn(`[OG Image] ImageMagick fallback to Jimp:`, imErr?.message);
     }
 
     try {
-      const property = await fetchPropertyById(id, { preferredTenantId });
-      const candidateUrls = extractOrderedPublicImageUrls(property);
-
-      let rawBuffer: Buffer | null = null;
-      let contentType = "image/jpeg";
-      let chosenUrl = "";
-      let alreadyCleaned = false;
-
-      for (let rawUrl of candidateUrls) {
-        if (!rawUrl || typeof rawUrl !== "string") continue;
-
-        // Unwrap proxy URL if present
-        if (rawUrl.includes("/api/proxy-image")) {
-          try {
-            const u = new URL(rawUrl, "https://placeholder.local");
-            const extracted = u.searchParams.get("url");
-            if (extracted) rawUrl = extracted;
-          } catch {}
-        }
-
-        // Handle base64 dataUrl
-        if (rawUrl.startsWith("data:image/")) {
-          try {
-            const parts = rawUrl.split(",");
-            if (parts.length === 2) {
-              rawBuffer = Buffer.from(parts[1], "base64");
-              const mimeMatch = parts[0].match(/:(.*?);/);
-              contentType = mimeMatch ? mimeMatch[1] : "image/jpeg";
-              chosenUrl = rawUrl;
-              alreadyCleaned = false;
-              break;
-            }
-          } catch {}
-        }
-
-        // Handle migrated cloud storage listing media URLs
-        if (rawUrl.startsWith("/api/storage/media/")) {
-          try {
-            const objectKey = rawUrl.replace(/^\/api\/storage\/media\//, "").split("?")[0];
-            const { buffer, metadata } = await CloudStorageService.downloadObject({
-              objectKey,
-              allowPublicListing: true,
-            });
-            rawBuffer = buffer;
-            contentType = metadata.mimeType || "image/jpeg";
-            chosenUrl = rawUrl;
-            alreadyCleaned = false;
-            break;
-          } catch {
-            // Continue to next candidate URL
-          }
-        }
-
-        // Handle local uploads (prevent path traversal outside uploadsDir)
-        if (rawUrl.startsWith("/uploads/")) {
-          const cleanRel = rawUrl.split("?")[0];
-          const localPath = path.resolve("./public" + cleanRel);
-          if (localPath.startsWith(uploadsDir + path.sep) && fs.existsSync(localPath)) {
-            rawBuffer = fs.readFileSync(localPath);
-            contentType = cleanRel.endsWith(".png") ? "image/png" : "image/jpeg";
-            chosenUrl = rawUrl;
-            alreadyCleaned = false;
-            break;
-          }
-        }
-
-        // Handle external HTTP/HTTPS images using the hardened fetcher (Referer + retries + watermark cleaning)
-        if (rawUrl.startsWith("http://") || rawUrl.startsWith("https://")) {
-          try {
-            const cleanedEntry = await fetchAndCleanExternalImage(rawUrl, {
-              maxAttempts: 2,
-              timeoutMs: 6500,
-            });
-            if (cleanedEntry?.data && cleanedEntry.data.length > 0) {
-              rawBuffer = cleanedEntry.data;
-              contentType = cleanedEntry.mimeType || "image/jpeg";
-              chosenUrl = rawUrl;
-              alreadyCleaned = true;
-              break;
-            }
-          } catch {
-            // Continue to next candidate URL
-          }
-        }
+      const img = await Jimp.read(rawBuffer);
+      img.cover({ w: 1200, h: 630 });
+      let out = await img.getBuffer("image/jpeg" as any);
+      if (out.length > 260_000) {
+        img.scaleToFit({ w: 800, h: 420 });
+        out = await img.getBuffer("image/jpeg" as any);
       }
+      return out;
+    } catch {
+      return rawBuffer;
+    }
+  }
 
-      if (!rawBuffer || rawBuffer.length === 0) {
+  async function getOrBuildOgImageBuffer(params: {
+    id: string;
+    preferredTenantId: string | null;
+    versionKey: string;
+    property?: any;
+  }): Promise<Buffer | null> {
+    const { id, preferredTenantId, versionKey } = params;
+    const ogCacheKey = `${preferredTenantId || "global"}:${id}:${versionKey}`;
+
+    const cached = ogImageMemoryCache.get(ogCacheKey);
+    if (cached && Date.now() - cached.timestamp < 1000 * 60 * 60 * 24) {
+      return cached.buffer;
+    }
+
+    const inFlight = pendingOgImageBuilds.get(ogCacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const buildPromise = (async (): Promise<Buffer | null> => {
+      try {
+        const property =
+          params.property !== undefined
+            ? params.property
+            : await fetchPropertyByIdCached(id, preferredTenantId);
+        const candidateUrls = extractOrderedPublicImageUrls(property);
+        if (candidateUrls.length === 0) {
+          return null;
+        }
+
+        // Try up to the first 5 candidate images in strict display order (first image always first)
+        for (const rawUrl of candidateUrls.slice(0, 5)) {
+          const fetched = await fetchRawOgCandidateBuffer(rawUrl);
+          if (!fetched?.buffer || fetched.buffer.length === 0) continue;
+
+          const encoded = await encodeBaselineOgJpeg(fetched.buffer);
+          if (encoded && encoded.length > 0) {
+            if (ogImageMemoryCache.size >= 200) {
+              const oldestKey = ogImageMemoryCache.keys().next().value;
+              if (oldestKey !== undefined) ogImageMemoryCache.delete(oldestKey);
+            }
+            ogImageMemoryCache.set(ogCacheKey, {
+              buffer: encoded,
+              mimeType: "image/jpeg",
+              timestamp: Date.now(),
+            });
+            return encoded;
+          }
+        }
+        return null;
+      } catch (err: any) {
+        console.warn(`[OG Image] Error building preview image for ${id}:`, err?.message);
+        return null;
+      } finally {
+        pendingOgImageBuilds.delete(ogCacheKey);
+      }
+    })();
+
+    pendingOgImageBuilds.set(ogCacheKey, buildPromise);
+    return buildPromise;
+  }
+
+  // Dedicated OpenGraph image endpoint for WhatsApp, Facebook, LinkedIn, Telegram, iMessage, and X/Twitter
+  // Supports both clean path-versioned URLs (`/api/og-image/:id/:version.jpg`) and legacy `/api/og-image/:id.jpg`
+  app.get(
+    [
+      "/api/og-image/:id/:version.jpg",
+      "/api/og-image/:id/:version",
+      "/api/og-image/:id.jpg",
+      "/api/og-image/:id.png",
+      "/api/og-image/:id",
+    ],
+    async (req, res) => {
+      let id = String(req.params.id || "").replace(/\.(jpg|jpeg|png|webp)$/i, "").trim();
+      if (!id) {
         return serveDefaultOgBanner(res);
       }
 
-      let processedBuffer = rawBuffer;
-      try {
-        if (!alreadyCleaned) {
-          processedBuffer = await cleanImageWatermarks(rawBuffer, contentType, chosenUrl);
-        }
+      const rawVersion =
+        (typeof req.params.version === "string" ? req.params.version : "") ||
+        (typeof req.query.v === "string" ? req.query.v : "");
+      const versionKey = rawVersion
+        .replace(/\.(jpg|jpeg|png|webp)$/i, "")
+        .replace(/[^a-zA-Z0-9_-]/g, "")
+        .slice(0, 32);
 
-        // Primary pipeline: ImageMagick natively handles JPEG/PNG/WebP/AVIF + EXIF orientation
-        // and produces an exact 1200x630 center-cropped progressive JPEG under WhatsApp's 300KB cap.
-        try {
-          const ogBaseArgs = [
-            "-",
-            "-auto-orient",
-            "-background",
-            "#0f172a",
-            "-flatten",
-            "-resize",
-            "1200x630^",
-            "-gravity",
-            "center",
-            "-extent",
-            "1200x630",
-            "-strip",
-            "-interlace",
-            "Plane",
-          ];
-          let converted = await execConvert([...ogBaseArgs, "-quality", "82", "jpg:-"], processedBuffer);
-          if (converted.length > 285000) {
-            converted = await execConvert([...ogBaseArgs, "-quality", "68", "jpg:-"], processedBuffer);
-          }
-          if (converted.length > 285000) {
-            converted = await execConvert([...ogBaseArgs, "-quality", "54", "jpg:-"], processedBuffer);
-          }
-          if (converted.length > 0) {
-            processedBuffer = converted;
-          }
-        } catch (imErr: any) {
-          // Fallback to Jimp if ImageMagick fails
-          console.warn(`[OG Image] ImageMagick fallback to Jimp:`, imErr?.message);
-          const img = await Jimp.read(processedBuffer);
-          img.cover({ w: 1200, h: 630 });
-          processedBuffer = await img.getBuffer("image/jpeg" as any);
-          if (processedBuffer.length > 285000) {
-            img.scaleToFit({ w: 800, h: 420 });
-            processedBuffer = await img.getBuffer("image/jpeg" as any);
-          }
-        }
-      } catch (procErr: any) {
-        console.warn(`[OG Image] Optimization warning:`, procErr?.message);
-        try {
-          const fallbackImg = await Jimp.read(rawBuffer);
-          fallbackImg.scaleToFit({ w: 800, h: 420 });
-          processedBuffer = await fallbackImg.getBuffer("image/jpeg" as any);
-        } catch {
-          processedBuffer = rawBuffer;
-        }
+      const preferredTenantId = resolvePublicShareTenantId(req);
+      const buffer = await getOrBuildOgImageBuffer({
+        id,
+        preferredTenantId,
+        versionKey,
+      });
+
+      if (!buffer || buffer.length === 0) {
+        return serveDefaultOgBanner(res);
       }
 
-      if (ogImageMemoryCache.size >= 150) {
-        const oldestKey = ogImageMemoryCache.keys().next().value;
-        if (oldestKey !== undefined) ogImageMemoryCache.delete(oldestKey);
-      }
-      ogImageMemoryCache.set(ogCacheKey, { buffer: processedBuffer, mimeType: "image/jpeg", timestamp: Date.now() });
       res.setHeader("Content-Type", "image/jpeg");
-      res.setHeader("Content-Length", String(processedBuffer.length));
+      res.setHeader("Content-Length", String(buffer.length));
       res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", versionParam ? "public, max-age=86400, s-maxage=86400, immutable" : "public, max-age=3600, s-maxage=3600");
-      return res.send(processedBuffer);
-    } catch (err: any) {
-      console.warn(`[OG Image] Error generating preview image for property ${id}:`, err?.message);
-      return serveDefaultOgBanner(res);
+      res.setHeader(
+        "Cache-Control",
+        versionKey
+          ? "public, max-age=86400, s-maxage=86400, immutable"
+          : "public, max-age=3600, s-maxage=3600"
+      );
+      return res.send(buffer);
     }
-  });
+  );
 
   // OpenGraph SSR route for rich link previews on WhatsApp, Facebook, LinkedIn, Telegram, iMessage, and X/Twitter
   app.get(["/share/:id", "/p/:id"], async (req, res) => {
@@ -1916,7 +2149,7 @@ Returnează un JSON strict cu următoarele chei:
       }
 
       const preferredTenantId = resolvePublicShareTenantId(req);
-      const property = await fetchPropertyById(id, { preferredTenantId });
+      const property = await fetchPropertyByIdCached(id, preferredTenantId);
 
       const title = resolvePublicDisplayTitle(property, "Proprietate Imobiliară • brokr.");
       const description = formatOpenGraphDescription(
@@ -1933,7 +2166,28 @@ Returnează un JSON strict cu următoarele chei:
       const imageVersion = property
         ? crypto.createHash("sha256").update(imageVersionSeed).digest("hex").slice(0, 10)
         : "";
-      const ogImageUrl = `${baseUrl}/api/og-image/${encodedId}.jpg${imageVersion ? `?v=${imageVersion}` : ""}`;
+
+      // Pre-warm the OpenGraph thumbnail right now while we already have `property` in memory.
+      // Wait briefly (up to 1.8s) so chat crawlers get an instant <5ms cache hit on /api/og-image/...
+      // without ever stalling the HTML response if an external CDN is slow.
+      if (property && firstImageUrl) {
+        const warmPromise = getOrBuildOgImageBuffer({
+          id,
+          preferredTenantId,
+          versionKey: imageVersion,
+          property,
+        });
+        await Promise.race([
+          warmPromise,
+          new Promise<void>((resolve) => setTimeout(resolve, 1800)),
+        ]);
+      }
+
+      // Clean path-versioned `.jpg` URL with zero query parameters for maximum compatibility across chat apps
+      const ogImageUrl = imageVersion
+        ? `${baseUrl}/api/og-image/${encodedId}/${imageVersion}.jpg`
+        : `${baseUrl}/api/og-image/${encodedId}.jpg`;
+      const isHttpsOgImage = ogImageUrl.startsWith("https://");
 
       if (!fs.existsSync(indexInfo.path)) {
         return res.status(404).send("Not found");
@@ -1996,32 +2250,34 @@ Returnează un JSON strict cu următoarele chei:
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
 
-      const ogTags = `
-    <meta charset="UTF-8" />
-    <title>${esc(title)}</title>
-    <meta name="description" content="${esc(description)}" />
-    <link rel="canonical" href="${esc(shareUrl)}" />
-    <meta property="og:type" content="website" />
-    <meta property="og:locale" content="ro_RO" />
-    <meta property="og:site_name" content="brokr." />
-    <meta property="og:url" content="${esc(shareUrl)}" />
-    <meta property="og:title" content="${esc(title)}" />
-    <meta property="og:description" content="${esc(description)}" />
-    <meta property="og:image" content="${esc(ogImageUrl)}" />
-    <meta property="og:image:secure_url" content="${esc(ogImageUrl)}" />
-    <meta property="og:image:type" content="image/jpeg" />
-    <meta property="og:image:width" content="1200" />
-    <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="${esc(title)}" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:url" content="${esc(shareUrl)}" />
-    <meta name="twitter:title" content="${esc(title)}" />
-    <meta name="twitter:description" content="${esc(description)}" />
-    <meta name="twitter:image" content="${esc(ogImageUrl)}" />
-    <meta name="twitter:image:alt" content="${esc(title)}" />
-      `.trim();
+      const ogTags = [
+        `    <meta charset="UTF-8" />`,
+        `    <title>${esc(title)}</title>`,
+        `    <meta name="description" content="${esc(description)}" />`,
+        `    <link rel="canonical" href="${esc(shareUrl)}" />`,
+        `    <meta property="og:type" content="website" />`,
+        `    <meta property="og:locale" content="ro_RO" />`,
+        `    <meta property="og:site_name" content="brokr." />`,
+        `    <meta property="og:url" content="${esc(shareUrl)}" />`,
+        `    <meta property="og:title" content="${esc(title)}" />`,
+        `    <meta property="og:description" content="${esc(description)}" />`,
+        `    <meta property="og:image" content="${esc(ogImageUrl)}" />`,
+        ...(isHttpsOgImage
+          ? [`    <meta property="og:image:secure_url" content="${esc(ogImageUrl)}" />`]
+          : []),
+        `    <meta property="og:image:type" content="image/jpeg" />`,
+        `    <meta property="og:image:width" content="1200" />`,
+        `    <meta property="og:image:height" content="630" />`,
+        `    <meta property="og:image:alt" content="${esc(title)}" />`,
+        `    <meta name="twitter:card" content="summary_large_image" />`,
+        `    <meta name="twitter:url" content="${esc(shareUrl)}" />`,
+        `    <meta name="twitter:title" content="${esc(title)}" />`,
+        `    <meta name="twitter:description" content="${esc(description)}" />`,
+        `    <meta name="twitter:image" content="${esc(ogImageUrl)}" />`,
+        `    <meta name="twitter:image:alt" content="${esc(title)}" />`,
+      ].join("\n");
 
-      // WhatsApp / Facebook / Twitter / LinkedIn crawlers parse only the top of <head>.
+      // WhatsApp / Facebook / Twitter / LinkedIn / iMessage crawlers parse only the top of <head>.
       // Strip stale/default meta tags and inject UTF-8 + OpenGraph tags right after <head>.
       html = html.replace(/<meta\s+charset=["'][^"']+["']\s*\/?>/gi, '');
       html = html.replace(/<title>[\s\S]*?<\/title>/gi, '');
@@ -2487,7 +2743,7 @@ Returnează un JSON strict cu următoarele chei:
     };
   }
 
-  app.post("/api/parse-listing-html", mwAuthentication, (req, res) => {
+  app.post("/api/parse-listing-html", ...requireTenantContext, crawlRouteLimiter, (req, res) => {
     try {
       const { html, url } = req.body;
       const result = extractListingDetails(html || "", url || "");
@@ -2498,7 +2754,7 @@ Returnează un JSON strict cu următoarele chei:
   });
 
   // API endpoint for crawling
-  app.post("/api/crawl", mwAuthentication, crawlRouteLimiter, async (req, res, next) => {
+  app.post("/api/crawl", ...requireTenantContext, crawlRouteLimiter, requireQuota("ai_requests", 1), async (req, res, next) => {
     const rawUrl = req.body?.url;
     let url = (typeof rawUrl === "string" ? rawUrl : "").trim();
     if (!url) {
@@ -2514,6 +2770,12 @@ Returnează un JSON strict cu următoarele chei:
       return res.status(400).json({ error: ssrfErr?.message || "URL invalid sau blocat de politica SSRF." });
     }
 
+    try {
+      QuotaService.consumeQuota(req.tenantContext!.tenantId, "ai_requests", 1);
+    } catch (quotaErr: any) {
+      return res.status(quotaErr?.statusCode || 429).json({ error: quotaErr?.message || "Cota lunară a fost atinsă." });
+    }
+
     // Fast path for CRM share links (/share/:id or /p/:id) backed by our persistent store
     try {
       const parsedShareUrl = new URL(url);
@@ -2522,7 +2784,7 @@ Returnează un JSON strict cu următoarele chei:
         const urlTenantId = resolvePublicShareTenantIdFromHost(parsedShareUrl.hostname);
         const sharedProp = await fetchPropertyById(sharePathMatch[1], { preferredTenantId: urlTenantId });
         if (sharedProp) {
-          const authTenantId = (req as any).auth?.tenantId;
+          const authTenantId = req.tenantContext?.tenantId;
           const isSameTenant = !sharedProp.tenantId || !authTenantId || sharedProp.tenantId === authTenantId;
           const safeProp = isSameTenant ? sharedProp : sanitizePublicProperty(sharedProp);
           const wrapProxy = (u: string) => {
@@ -4837,7 +5099,7 @@ Returnează un JSON strict cu următoarele chei:
   });
 
   // Basic crawl for initial lead entry
-  app.post("/api/crawl-basic", mwAuthentication, crawlRouteLimiter, async (req, res, next) => {
+  app.post("/api/crawl-basic", ...requireTenantContext, crawlRouteLimiter, requireQuota("ai_requests", 1), async (req, res, next) => {
     const { url } = req.body;
     if (!url || typeof url !== "string") return res.status(400).json({ error: "URL is required" });
 
@@ -4845,6 +5107,12 @@ Returnează un JSON strict cu următoarele chei:
       await validateSafeExternalUrl(url);
     } catch (ssrfErr: any) {
       return res.status(400).json({ error: ssrfErr?.message || "URL invalid sau blocat de politica SSRF." });
+    }
+
+    try {
+      QuotaService.consumeQuota(req.tenantContext!.tenantId, "ai_requests", 1);
+    } catch (quotaErr: any) {
+      return res.status(quotaErr?.statusCode || 429).json({ error: quotaErr?.message || "Cota lunară a fost atinsă." });
     }
 
     const userAgents = [

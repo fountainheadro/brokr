@@ -1,88 +1,332 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Global safety net: deny all by default
+
+    // Global default deny
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // --- Helpers ---
+    // --- Core Identity & Validation Helpers ---
     function isSignedIn() {
       return request.auth != null && request.auth.token.email_verified == true;
     }
 
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id != '.' && id != '..' && id.matches('^[a-zA-Z0-9_.\\-]+$');
+    }
+
+    function isValidEmailDocId(id) {
+      return id is string && id.size() >= 3 && id.size() <= 254 && id.matches('^[^/]+@[^/]+$');
+    }
+
     function isPlatformAdmin() {
       return isSignedIn() && (
-        request.auth.token.email == 'fountainheadro@gmail.com' ||
-        request.auth.token.email == 'adrianmariusmp@gmail.com' ||
-        request.auth.token.email == 'adrian@cautlocuinta.ro' ||
+        (request.auth.token.email is string && request.auth.token.email.lower() in [
+          'fountainheadro@gmail.com',
+          'adrianmariusmp@gmail.com',
+          'adrian@cautlocuinta.ro'
+        ]) ||
         exists(/databases/$(database)/documents/platform_admins/$(request.auth.uid))
       );
     }
 
-    // Tenant Isolation Helpers
-    function isTenantMember(tenantId) {
-      return isSignedIn() &&
-        exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid));
-    }
-
-    function isTenantActive(tenantId) {
-      return exists(/databases/$(database)/documents/tenants/$(tenantId)) &&
-        get(/databases/$(database)/documents/tenants/$(tenantId)).data.status in ['active', 'trial'];
+    // --- Tenant Isolation Helpers (O(1) direct lookups — Phase 3: 2 get() calls max, 0 redundant exists()) ---
+    function getTenantDoc(tenantId) {
+      return get(/databases/$(database)/documents/tenants/$(tenantId)).data;
     }
 
     function getTenantMembership(tenantId) {
       return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)).data;
     }
 
-    function isTenantAdmin(tenantId) {
-      return isTenantMember(tenantId) &&
+    function hasValidTokenAuthVersion(tenantId, tenantData, memberData) {
+      return (!('tid' in request.auth.token) || request.auth.token.tid == tenantId) &&
+        (!('uVer' in request.auth.token) || (request.auth.token.uVer is int && request.auth.token.uVer >= memberData.get('authVersion', 1))) &&
+        (!('tVer' in request.auth.token) || (request.auth.token.tVer is int && request.auth.token.tVer >= tenantData.get('authVersion', 1)));
+    }
+
+    function isTenantActive(tenantId) {
+      return getTenantDoc(tenantId).status in ['active', 'trial'];
+    }
+
+    function isActiveTenantMember(tenantId) {
+      return isSignedIn() &&
+        getTenantDoc(tenantId).status in ['active', 'trial'] &&
         getTenantMembership(tenantId).status == 'active' &&
+        hasValidTokenAuthVersion(tenantId, getTenantDoc(tenantId), getTenantMembership(tenantId));
+    }
+
+    function isTenantAdmin(tenantId) {
+      return isActiveTenantMember(tenantId) &&
         getTenantMembership(tenantId).role in ['agency_owner', 'agency_admin'];
     }
 
+    function hasMatchingTenantId(tenantId) {
+      return request.resource.data.tenantId == tenantId;
+    }
+
+    function preservesTenantId(tenantId) {
+      return (!('tenantId' in resource.data) || resource.data.tenantId == tenantId) &&
+        request.resource.data.tenantId == tenantId;
+    }
+
+    function isValidTenantUserCreate(tenantId, userId) {
+      return request.resource.data.tenantId == tenantId &&
+        request.resource.data.userId == userId &&
+        request.resource.data.email is string &&
+        request.resource.data.email.size() >= 3 &&
+        request.resource.data.email.size() <= 254 &&
+        request.resource.data.role in ['agency_owner', 'agency_admin', 'manager', 'agent', 'assistant'] &&
+        request.resource.data.status in ['invited', 'active', 'suspended', 'revoked'];
+    }
+
+    // Allows an invited agency agent/manager/admin to auto-bind their real Firebase UID on first login
+    // strictly matching the role & active status configured by their Agency Admin in /invites/{email}.
+    function isSelfBindingFromActiveInvite(tenantId, userId) {
+      return isSignedIn() &&
+        request.auth.uid == userId &&
+        request.auth.token.email is string &&
+        isTenantActive(tenantId) &&
+        exists(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.auth.token.email.lower())) &&
+        get(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.auth.token.email.lower())).data.status == 'active' &&
+        request.resource.data.tenantId == tenantId &&
+        request.resource.data.userId == request.auth.uid &&
+        request.resource.data.email is string &&
+        request.resource.data.email.lower() == request.auth.token.email.lower() &&
+        request.resource.data.status == 'active' &&
+        request.resource.data.role == get(/databases/$(database)/documents/tenants/$(tenantId)/invites/$(request.auth.token.email.lower())).data.role;
+    }
+
     // --- Multi-Tenant Data Boundaries ---
-
-    // 1. Root Tenant Document: Read allowed for active members or platform admin.
-    // Tenant users cannot modify status, plan_id, or tenant id.
     match /tenants/{tenantId} {
-      allow read: if isPlatformAdmin() || (isTenantMember(tenantId) && isTenantActive(tenantId));
-      allow create: if isPlatformAdmin();
-      allow update: if isPlatformAdmin() || (
-        isTenantAdmin(tenantId) &&
-        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'status', 'plan_id', 'planId'])
-      );
-      allow delete: if isPlatformAdmin();
-
-      // 2. Tenant Members Subcollection:
-      // Users can NEVER modify their own role or status (prevents self-escalation).
-      match /users/{userId} {
-        allow read: if isPlatformAdmin() || (isTenantMember(tenantId) && isTenantActive(tenantId));
-        allow create: if isPlatformAdmin() || isTenantAdmin(tenantId);
-        allow update: if isPlatformAdmin() || (
+      allow get: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+      allow list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && isValidId(tenantId) && request.resource.data.id == tenantId;
+      allow update: if isValidId(tenantId) && (
+        isPlatformAdmin() || (
           isTenantAdmin(tenantId) &&
-          request.auth.uid != userId &&
-          (request.resource.data.tenant_id == tenantId || request.resource.data.tenantId == tenantId)
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['id', 'status', 'plan_id', 'planId', 'authVersion'])
+        )
+      );
+      allow delete: if isPlatformAdmin() && isValidId(tenantId);
+
+      // 1. Authoritative O(1) Tenant Members (/tenants/{tenantId}/users/{userId})
+      // Users can NEVER escalate their own role or alter their own status.
+      match /users/{userId} {
+        allow get: if isValidId(tenantId) && (
+          isPlatformAdmin() ||
+          (isSignedIn() && request.auth.uid == userId) ||
+          isActiveTenantMember(tenantId)
         );
-        allow delete: if isPlatformAdmin() || (isTenantAdmin(tenantId) && request.auth.uid != userId);
+        allow list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidTenantUserCreate(tenantId, userId) && (
+          isPlatformAdmin() ||
+          isSelfBindingFromActiveInvite(tenantId, userId) ||
+          isTenantAdmin(tenantId)
+        );
+        allow update: if isValidId(tenantId) && preservesTenantId(tenantId) && (
+          isPlatformAdmin() || (
+            isTenantAdmin(tenantId) &&
+            request.auth.uid != userId &&
+            request.resource.data.role in ['agency_owner', 'agency_admin', 'manager', 'agent', 'assistant'] &&
+            request.resource.data.status in ['invited', 'active', 'suspended', 'revoked']
+          )
+        );
+        allow delete: if isValidId(tenantId) && (
+          isPlatformAdmin() || (isTenantAdmin(tenantId) && request.auth.uid != userId)
+        );
       }
 
-      // 3. Tenant-Scoped Operational Collections (/staff, /leads, /contacts, /documents, /activities, etc.):
-      match /{collection}/{docId} {
-        allow read, write: if isPlatformAdmin() || (
-          isTenantMember(tenantId) &&
-          isTenantActive(tenantId) &&
-          getTenantMembership(tenantId).status == 'active'
+      // 2. O(1) Email Invites (/tenants/{tenantId}/invites/{inviteEmail})
+      match /invites/{inviteEmail} {
+        allow get: if isValidId(tenantId) && isValidEmailDocId(inviteEmail) && (
+          isPlatformAdmin() ||
+          (isSignedIn() && request.auth.token.email is string && request.auth.token.email.lower() == inviteEmail.lower()) ||
+          isTenantAdmin(tenantId)
+        );
+        allow list: if isValidId(tenantId) && (isPlatformAdmin() || isTenantAdmin(tenantId));
+        allow create, update: if isValidId(tenantId) && isValidEmailDocId(inviteEmail) &&
+          hasMatchingTenantId(tenantId) &&
+          request.resource.data.role in ['agency_owner', 'agency_admin', 'manager', 'agent', 'assistant'] &&
+          request.resource.data.status in ['invited', 'active', 'suspended', 'revoked'] &&
+          (isPlatformAdmin() || isTenantAdmin(tenantId));
+        allow delete: if isValidId(tenantId) && isValidEmailDocId(inviteEmail) && (
+          isPlatformAdmin() || isTenantAdmin(tenantId)
+        );
+      }
+
+      // 3. Sharded Per-Entity Atomic Counters (/tenants/{tenantId}/counters/{counterKey})
+      match /counters/{counterKey} {
+        allow get: if isValidId(tenantId) && isValidId(counterKey) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+        allow list: if isPlatformAdmin();
+        allow create, update: if isValidId(tenantId) && isValidId(counterKey) &&
+          hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isPlatformAdmin() && isValidId(tenantId) && isValidId(counterKey);
+      }
+
+      // 4. Agency Settings (e.g. market auto-import config)
+      match /settings/{settingId} {
+        allow get, list: if isValidId(tenantId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+        allow create, update: if isValidId(tenantId) && isValidId(settingId) && (
+          isPlatformAdmin() || isTenantAdmin(tenantId)
+        );
+        allow delete: if isValidId(tenantId) && isValidId(settingId) && (
+          isPlatformAdmin() || isTenantAdmin(tenantId)
+        );
+      }
+
+      // 5. Super Admin Notes on Agency
+      match /admin_notes/{noteId} {
+        allow read, create, update, delete: if isPlatformAdmin() && isValidId(tenantId) && isValidId(noteId);
+      }
+
+      // 6. Agency Leads, Properties & Requests
+      match /leads/{leadId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(leadId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(leadId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(leadId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+      }
+
+      // 6b. Phase 2 Slim Lead Summary Projections (Read-only for clients; written atomically by Core API)
+      match /leads_summary/{leadId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow write: if false;
+      }
+
+      // 7. Agency Contacts
+      match /contacts/{contactId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(contactId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(contactId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(contactId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+      }
+
+      // 8. Agency Staff & Legacy Personal
+      match /staff/{staffId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(staffId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isTenantAdmin(tenantId) || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(staffId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isTenantAdmin(tenantId) || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(staffId) && (
+          isPlatformAdmin() || isTenantAdmin(tenantId)
+        );
+      }
+
+      match /personal/{personalId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(personalId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(personalId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(personalId) && (
+          isPlatformAdmin() || isTenantAdmin(tenantId)
+        );
+      }
+
+      // 9. Agency Documents
+      match /documents/{documentId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(documentId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(documentId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(documentId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+      }
+
+      // 10. Agency Calendar Activities, Tours & Viewings
+      match /activities/{activityId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(activityId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(activityId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(activityId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+      }
+
+      match /tours/{tourId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(tourId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(tourId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(tourId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+      }
+
+      match /viewings/{viewingId} {
+        allow get, list: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow create: if isValidId(tenantId) && isValidId(viewingId) && hasMatchingTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(viewingId) && preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow delete: if isValidId(tenantId) && isValidId(viewingId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+      }
+
+      // 11. User-Scoped Agency Notifications (each agent reads/updates strictly their own)
+      match /notifications/{notificationId} {
+        allow get, list: if isValidId(tenantId) && (
+          isPlatformAdmin() ||
+          isTenantAdmin(tenantId) ||
+          (isActiveTenantMember(tenantId) && resource.data.userId == request.auth.uid)
+        );
+        allow create: if isValidId(tenantId) && isValidId(notificationId) &&
+          hasMatchingTenantId(tenantId) &&
+          request.resource.data.userId is string &&
+          (isPlatformAdmin() || isActiveTenantMember(tenantId));
+        allow update: if isValidId(tenantId) && isValidId(notificationId) &&
+          preservesTenantId(tenantId) &&
+          (isPlatformAdmin() || (isActiveTenantMember(tenantId) && resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid));
+        allow delete: if isValidId(tenantId) && isValidId(notificationId) && (
+          isPlatformAdmin() || (isActiveTenantMember(tenantId) && resource.data.userId == request.auth.uid)
+        );
+      }
+
+      // 12. User-Scoped Push Notification Tokens
+      match /fcm_tokens/{tokenId} {
+        allow get: if isValidId(tenantId) && tokenId.size() >= 1 && tokenId.size() <= 512 && (
+          isPlatformAdmin() ||
+          (isActiveTenantMember(tenantId) && (resource == null || resource.data.userId == request.auth.uid))
+        );
+        allow list: if isPlatformAdmin();
+        allow create: if isValidId(tenantId) && tokenId.size() >= 1 && tokenId.size() <= 512 &&
+          hasMatchingTenantId(tenantId) &&
+          isActiveTenantMember(tenantId) &&
+          request.resource.data.userId == request.auth.uid;
+        allow update: if isValidId(tenantId) && tokenId.size() >= 1 && tokenId.size() <= 512 &&
+          preservesTenantId(tenantId) &&
+          isActiveTenantMember(tenantId) &&
+          resource.data.userId == request.auth.uid &&
+          request.resource.data.userId == request.auth.uid;
+        allow delete: if isValidId(tenantId) && tokenId.size() >= 1 && tokenId.size() <= 512 && (
+          isPlatformAdmin() || (isActiveTenantMember(tenantId) && resource.data.userId == request.auth.uid)
         );
       }
     }
 
-    // --- Platform Global Auto-Crawl & Shared Leads ---
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
+    // --- Platform Global Auto-Crawl, Shared Leads & Public Shares ---
     function isValidSharedLead(data) {
       return data.keys().hasAll(['url', 'title', 'status', 'isSharedLead', 'createdAt', 'updatedAt']) &&
         data.url is string && data.url.size() >= 1 && data.url.size() <= 2048 &&
@@ -143,120 +387,138 @@ service cloud.firestore {
       allow delete: if isPlatformAdmin() && isValidId(leadId);
     }
 
-    match /platform_auto_crawl/{configId} {
-      allow read: if isPlatformAdmin();
-      allow create, update, delete: if isPlatformAdmin() && isValidId(configId);
-    }
-
-    // --- Server-Managed Persistent State Collections (Client SDK Read/Write Denied) ---
-    match /platform_admins/{adminUid} {
-      allow read: if isPlatformAdmin();
+    // Phase 2 Slim Shared Lead Summary Projections (Read-only for clients; written atomically by Core API)
+    match /platform_shared_leads_summary/{leadId} {
+      allow get: if isSignedIn() && isValidId(leadId);
+      allow list: if isSignedIn();
       allow write: if false;
     }
 
+    match /platform_auto_crawl/{configId} {
+      allow get, list: if isPlatformAdmin();
+      allow create, update, delete: if isPlatformAdmin() && isValidId(configId);
+    }
+
+    // --- Platform & Agency Configuration Collections ---
+    match /platform_admins/{adminUid} {
+      allow get, list: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /platform_settings/{settingId} {
+      allow get: if isSignedIn() && isValidId(settingId);
+      allow list: if isPlatformAdmin();
+      allow create, update: if isPlatformAdmin() && isValidId(settingId);
+      allow delete: if false;
+    }
+
+    match /platform_audit_logs/{logId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && isValidId(logId);
+      allow update, delete: if false;
+    }
+
+    match /automation_configs/{configId} {
+      allow get: if isValidId(configId) && (
+        isPlatformAdmin() ||
+        (configId == 'platform_default' && isSignedIn()) ||
+        isActiveTenantMember(configId)
+      );
+      allow list: if isPlatformAdmin();
+      allow create, update: if isValidId(configId) && (
+        isPlatformAdmin() ||
+        (configId != 'platform_default' && isTenantAdmin(configId))
+      );
+      allow delete: if isPlatformAdmin() && isValidId(configId);
+    }
+
     match /preview_sessions/{sessionId} {
-      allow read, write: if false;
+      allow get, list, create, update, delete: if isPlatformAdmin() && isValidId(sessionId);
     }
 
-    match /billing_events/{eventId} {
-      allow read, write: if false;
-    }
-
-    match /billing_tenant_state/{tenantId} {
-      allow read, write: if false;
+    match /subscription_plans/{planId} {
+      allow get, list: if isSignedIn();
+      allow create, update, delete: if isPlatformAdmin() && isValidId(planId);
     }
 
     match /subscriptions/{tenantId} {
-      allow read, write: if false;
+      allow get: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+      allow list: if isPlatformAdmin();
+      allow create, update, delete: if isPlatformAdmin() && isValidId(tenantId);
     }
 
-    match /tenant_usage/{usageId} {
-      allow read, write: if false;
+    match /tenant_usage/{tenantId} {
+      allow get: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+      allow list: if isPlatformAdmin();
+      allow create, update: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+      allow delete: if isPlatformAdmin() && isValidId(tenantId);
     }
 
-    match /ai_reservations/{reservationId} {
-      allow read, write: if false;
+    match /billing_events/{eventId} {
+      allow get, list: if isPlatformAdmin();
+      allow create: if isPlatformAdmin() && isValidId(eventId);
+      allow update, delete: if false;
     }
 
-    match /ai_jobs/{jobId} {
-      allow read, write: if false;
+    match /billing_tenant_state/{tenantId} {
+      allow get, list, create, update: if isPlatformAdmin() && isValidId(tenantId);
+      allow delete: if false;
+    }
+
+    match /ai_configs/{tenantId} {
+      allow get: if isValidId(tenantId) && (isPlatformAdmin() || isActiveTenantMember(tenantId));
+      allow list: if isPlatformAdmin();
+      allow create, update: if isValidId(tenantId) && (isPlatformAdmin() || isTenantAdmin(tenantId));
+      allow delete: if isPlatformAdmin() && isValidId(tenantId);
     }
 
     match /ai_conversations/{conversationId} {
-      allow read, write: if false;
-    }
-
-    // --- Legacy / Root Collection Routes (Authenticated CRM Only; Migration In Progress) ---
-    match /leads/{leadId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn();
-      allow delete: if isPlatformAdmin();
-    }
-
-    match /contacts/{contactId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn();
-      allow delete: if isPlatformAdmin();
-    }
-
-    match /personal/{personalId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn();
-      allow delete: if isPlatformAdmin();
-    }
-
-    match /staff/{staffId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn();
-      allow delete: if isPlatformAdmin();
-    }
-
-    match /counters/{counterId} {
-      allow read, write: if isSignedIn();
-    }
-
-    match /documents/{documentId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn();
-      allow delete: if isPlatformAdmin();
-    }
-
-    match /tours/{tourId} {
-      allow read, write: if isSignedIn();
-    }
-
-    match /activities/{activityId} {
-      allow read, write: if isSignedIn();
-    }
-
-    match /viewings/{viewingId} {
-      allow read, write: if isSignedIn();
-    }
-
-    match /notifications/{notificationId} {
-      allow read, write: if isSignedIn();
-    }
-
-    match /fcm_tokens/{tokenId} {
-      allow read: if isSignedIn() && (
-        resource == null ||
-        resource.data.user_id == request.auth.uid ||
-        resource.data.userId == request.auth.uid ||
-        isPlatformAdmin()
+      allow get, list: if isPlatformAdmin() || (
+        isSignedIn() && resource.data.tenantId is string && isActiveTenantMember(resource.data.tenantId)
       );
-      allow create: if isSignedIn() && (
-        request.resource.data.user_id == request.auth.uid ||
-        request.resource.data.userId == request.auth.uid
+      allow create, update: if isValidId(conversationId) && (
+        isPlatformAdmin() || (
+          isSignedIn() && request.resource.data.tenantId is string && isActiveTenantMember(request.resource.data.tenantId)
+        )
       );
-      allow update: if isSignedIn() && (
-        (resource.data.user_id == request.auth.uid && request.resource.data.user_id == request.auth.uid) ||
-        (resource.data.userId == request.auth.uid && request.resource.data.userId == request.auth.uid)
+      allow delete: if isPlatformAdmin() && isValidId(conversationId);
+    }
+
+    match /ai_jobs/{jobId} {
+      allow get, list: if isPlatformAdmin() || (
+        isSignedIn() && resource.data.tenantId is string && isActiveTenantMember(resource.data.tenantId)
       );
-      allow delete: if isSignedIn() && (
-        resource.data.user_id == request.auth.uid ||
-        resource.data.userId == request.auth.uid ||
-        isPlatformAdmin()
+      allow create, update: if isValidId(jobId) && (
+        isPlatformAdmin() || (
+          isSignedIn() && request.resource.data.tenantId is string && isActiveTenantMember(request.resource.data.tenantId)
+        )
       );
+      allow delete: if isPlatformAdmin() && isValidId(jobId);
+    }
+
+    match /ai_reservations/{reservationId} {
+      allow get, list: if isPlatformAdmin();
+      allow create, update, delete: if isPlatformAdmin() && isValidId(reservationId);
+    }
+
+    match /platform_cutover_config/{configId} {
+      allow get, list, create, update: if isPlatformAdmin() && isValidId(configId);
+      allow delete: if false;
+    }
+
+    match /storage_objects/{objectId} {
+      allow get, list: if isPlatformAdmin() || (
+        isSignedIn() && resource.data.tenantId is string && isActiveTenantMember(resource.data.tenantId)
+      );
+      allow create, update: if isPlatformAdmin() || (
+        isSignedIn() && request.resource.data.tenantId is string && isActiveTenantMember(request.resource.data.tenantId)
+      );
+      allow delete: if isPlatformAdmin();
+    }
+
+    match /file_migration_reports/{reportId} {
+      allow get, list, create, update: if isPlatformAdmin() && isValidId(reportId);
+      allow delete: if false;
     }
   }
 }

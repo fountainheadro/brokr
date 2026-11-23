@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Lead } from "../services/leadsService";
 import { PropertyDetailView } from "../components/PropertyDetailView";
@@ -40,6 +40,30 @@ export const SharedProperty: React.FC = () => {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [isInspectBlocked, setIsInspectBlocked] = useState<boolean>(false);
+  const lastRefreshAtRef = useRef<number>(0);
+
+  const refreshPublicProperty = useCallback(async () => {
+    if (!id) return;
+    const now = Date.now();
+    if (now - lastRefreshAtRef.current < 15000) return;
+    lastRefreshAtRef.current = now;
+    try {
+      const res = await fetch(`/api/public-property/${encodeURIComponent(id)}`, {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const serverLead = await res.json();
+        setLead({
+          ...serverLead,
+          ownerName: "",
+          ownerPhone: "",
+          url: "",
+        });
+      }
+    } catch {
+      // silent background refresh failure
+    }
+  }, [id]);
 
   useEffect(() => {
     let isMounted = true;
@@ -137,9 +161,17 @@ export const SharedProperty: React.FC = () => {
       );
       const shareUrl = window.location.href.split("#")[0];
       const encodedId = id ? encodeURIComponent(id) : "";
-      const ogImageUrl = encodedId
-        ? `${window.location.origin}/api/og-image/${encodedId}.jpg`
-        : `${window.location.origin}/og-default.jpg`;
+      const existingSsrOgImage =
+        document.head
+          .querySelector('meta[property="og:image"]')
+          ?.getAttribute("content")
+          ?.trim() || "";
+      const ogImageUrl =
+        existingSsrOgImage && existingSsrOgImage.includes("/api/og-image/")
+          ? existingSsrOgImage
+          : encodedId
+            ? `${window.location.origin}/api/og-image/${encodedId}.jpg`
+            : `${window.location.origin}/og-default.jpg`;
 
       document.title = `${pageTitle} • brokr.`;
       upsertCanonicalLink(shareUrl);
@@ -151,7 +183,9 @@ export const SharedProperty: React.FC = () => {
       upsertMetaTag("property", "og:title", pageTitle);
       upsertMetaTag("property", "og:description", pageDescription);
       upsertMetaTag("property", "og:image", ogImageUrl);
-      upsertMetaTag("property", "og:image:secure_url", ogImageUrl);
+      if (ogImageUrl.startsWith("https://")) {
+        upsertMetaTag("property", "og:image:secure_url", ogImageUrl);
+      }
       upsertMetaTag("property", "og:image:type", "image/jpeg");
       upsertMetaTag("property", "og:image:width", "1200");
       upsertMetaTag("property", "og:image:height", "630");
@@ -208,6 +242,7 @@ export const SharedProperty: React.FC = () => {
               lead={lead}
               isPublicShared={true}
               showTopNavbar={true}
+              onRefreshPublicProperty={refreshPublicProperty}
             />
           )}
         </>

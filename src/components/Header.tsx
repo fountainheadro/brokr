@@ -118,22 +118,34 @@ export const Header: React.FC<HeaderProps> = ({
   const [allDocuments, setAllDocuments] = useState<DocumentItem[]>([]);
   const [allActivities, setAllActivities] = useState<Activity[]>([]);
 
-  // Subscribe to live data for the search engine across all entity types
+  // Subscribe to core shared slices (deduplicated 1:1 with Home via Centralized Client Data Hub)
   useEffect(() => {
     const unsubLeads = leadsService.subscribeToLeads((leads) => setAllLeads(leads));
     const unsubContacts = contactsService.subscribeToContacts((contacts) => setAllContacts(contacts));
     const unsubPersonal = personalService.subscribeToPersonal((members) => setAllPersonal(members));
-    const unsubDocs = documentService.subscribeToDocuments((docs) => setAllDocuments(docs));
-    const unsubActivities = activityService.subscribeToAllActivities((activities) => setAllActivities(activities));
 
     return () => {
       unsubLeads();
       unsubContacts();
       unsubPersonal();
+    };
+  }, []);
+
+  // Lazily subscribe documents & activities only when Global Search is active
+  const isGlobalSearchActive = isSearchOpen || localQuery.trim().length > 0;
+  useEffect(() => {
+    if (!isGlobalSearchActive) return;
+
+    const unsubDocs = documentService.subscribeToDocuments((docs) => setAllDocuments(docs));
+    const unsubActivities = activityService.subscribeToAllActivities((activities) =>
+      setAllActivities(activities)
+    );
+
+    return () => {
       unsubDocs();
       unsubActivities();
     };
-  }, []);
+  }, [isGlobalSearchActive]);
 
   // Sync external searchQuery with localQuery
   useEffect(() => {
@@ -1032,12 +1044,13 @@ export const Header: React.FC<HeaderProps> = ({
   
           {/* User Profile Split Button */}
           <div className="h-full flex items-stretch border-l border-gray-200 shrink-0 select-none">
-            {/* Main Button: Avatar + Name + Role -> Opens Profile Modal */}
+            {/* Main Button: Avatar (+ Name & Role on desktop) -> Opens Profile Modal */}
             <button
               type="button"
               onClick={() => setIsProfileModalOpen(true)}
-              className="h-full px-4 flex items-center gap-3 hover:bg-gray-50 transition-colors text-left focus:outline-none cursor-pointer group"
+              className="h-full px-2.5 md:px-4 flex items-center md:gap-3 hover:bg-gray-50 transition-colors text-left focus:outline-none cursor-pointer group"
               title="Deschide Profilul Meu"
+              aria-label={userName}
             >
               {/* Profile Picture */}
               <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 border border-[#051D35]/15 group-hover:border-[#BE9662]/40 flex items-center justify-center overflow-hidden shrink-0 shadow-2xs transition-colors">
@@ -1054,8 +1067,8 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
               </div>
 
-              {/* Name & Role (matching style from Clients header: title + description under it) */}
-              <div className="flex flex-col justify-center min-w-0">
+              {/* Name & Role (hidden on mobile devices, visible from md and up) */}
+              <div className="hidden md:flex flex-col justify-center min-w-0">
                 <span className="text-[13px] font-semibold tracking-tight text-gray-900 group-hover:text-[#051D35] leading-tight truncate max-w-[130px]">
                   {userName}
                 </span>
@@ -1072,7 +1085,7 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={() => setIsProfileDrawerOpen(true)}
-              className="h-full px-3 flex items-center justify-center hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors focus:outline-none cursor-pointer"
+              className="h-full px-2.5 md:px-3 flex items-center justify-center hover:bg-gray-50 text-gray-500 hover:text-gray-900 transition-colors focus:outline-none cursor-pointer"
               title="Meniu profil & statistici"
             >
               <ChevronDown size={14} className="shrink-0 transition-transform duration-200" />

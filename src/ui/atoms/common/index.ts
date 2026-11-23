@@ -15,4 +15,6 @@ export * from "./atm_spinner";
 export * from "./atm_progress-bar";
 export * from "./atm_status-indicator";
 export * from "./atm_skeleton";
+export * from "./atm_skeleton-row";
+export * from "./atm_sync-state-label";
 export * from "./atm_form-error";

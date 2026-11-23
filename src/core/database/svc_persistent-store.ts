@@ -1,3 +1,4 @@
+import asyncHooks from "async_hooks";
 import fs from "fs";
 import os from "os";
 import path from "path";
@@ -8,18 +9,63 @@ import { logger } from "../logger/logger";
 
 export const FIRESTORE_SCOPE = "https://www.googleapis.com/auth/datastore";
 
+export interface RequestFirestoreAuth {
+  bearerToken: string;
+  uid: string;
+  email?: string;
+  emailVerified?: boolean;
+}
+
 interface PersistentStoreData {
   collections: Record<string, Record<string, any>>;
+}
+
+interface RequestAuthStore {
+  run<T>(auth: RequestFirestoreAuth, fn: () => T): T;
+  getStore(): RequestFirestoreAuth | undefined;
+}
+
+function createRequestAuthStorage(): RequestAuthStore {
+  const isBrowser = typeof window !== "undefined";
+  if (!isBrowser) {
+    try {
+      const Ctor = (asyncHooks as any)?.AsyncLocalStorage;
+      if (typeof Ctor === "function") {
+        return new Ctor() as RequestAuthStore;
+      }
+    } catch {
+      // Fall back safely if bundler externalized async_hooks
+    }
+  }
+  return {
+    run<T>(_auth: RequestFirestoreAuth, fn: () => T): T {
+      return fn();
+    },
+    getStore(): RequestFirestoreAuth | undefined {
+      return undefined;
+    },
+  };
 }
 
 export class PersistentStoreService {
   private static cache: PersistentStoreData | null = null;
   private static cachedStorePath: string | null = null;
+  private static collectionHydratedAt = new Map<string, number>();
+  private static collectionHydrateFailedUntil = new Map<string, number>();
+  private static requestAuthStorage: RequestAuthStore = createRequestAuthStorage();
   private static mutexChains = new Map<string, Promise<unknown>>();
   private static fbConfigCache: { projectId: string; databaseId: string } | null = null;
   private static testDefaultPath: string | null = null;
   private static testFirestoreOrigin: string | null = null;
   private static lastRemoteError: { message: string; statusCode: number; at: string } | null = null;
+
+  public static runWithRequestAuth<T>(auth: RequestFirestoreAuth, fn: () => T): T {
+    return this.requestAuthStorage.run(auth, fn);
+  }
+
+  public static getRequestAuth(): RequestFirestoreAuth | null {
+    return this.requestAuthStorage.getStore() || null;
+  }
 
   public static setTestFirestoreOrigin(origin: string | null): void {
     this.testFirestoreOrigin = origin ? origin.replace(/\/+$/, "") : null;
@@ -45,18 +91,19 @@ export class PersistentStoreService {
     return this.testFirestoreOrigin || "https://firestore.googleapis.com";
   }
 
+  private static isTestMode(): boolean {
+    return process.env.NODE_ENV === "test";
+  }
+
   public static getStoreFilePath(): string {
     const configured = process.env.PERSISTENT_STORE_PATH?.trim();
     if (configured) {
       return path.resolve(configured);
     }
-    if (process.env.NODE_ENV === "test") {
-      if (!this.testDefaultPath) {
-        this.testDefaultPath = path.join(os.tmpdir(), `brokr-test-store-${process.pid}.json`);
-      }
-      return this.testDefaultPath;
+    if (!this.testDefaultPath) {
+      this.testDefaultPath = path.join(os.tmpdir(), `brokr-test-store-${process.pid}.json`);
     }
-    return path.resolve(process.cwd(), ".data", "brokr-persistent-store.json");
+    return this.testDefaultPath;
   }
 
   public static getFirebaseTarget(): { projectId: string; databaseId: string } {
@@ -95,8 +142,28 @@ export class PersistentStoreService {
     return { method: info.method, principalEmail: info.principalEmail };
   }
 
+  /**
+   * Returns true when live Firestore REST access is available via either:
+   * 1. Server-side GCP ADC / Service Account credentials, OR
+   * 2. Verified request-scoped Firebase Auth ID token (propagated via AsyncLocalStorage).
+   */
   public static isRemoteFirestoreConfigured(): boolean {
-    return GcpAuthService.isAnyServerAuthConfigured();
+    if (GcpAuthService.isAnyServerAuthConfigured()) {
+      return true;
+    }
+    const reqAuth = this.getRequestAuth();
+    return Boolean(reqAuth?.bearerToken);
+  }
+
+  /**
+   * Returns true when Firestore REST calls will authenticate with a request-scoped Firebase user
+   * ID token (Starter Tier / Preview container with no server-side ADC or Service Account).
+   */
+  public static isUsingUserScopedToken(): boolean {
+    if (GcpAuthService.isAnyServerAuthConfigured()) {
+      return false;
+    }
+    return Boolean(this.getRequestAuth()?.bearerToken);
   }
 
   public static async getGoogleAccessToken(options?: {
@@ -107,41 +174,86 @@ export class PersistentStoreService {
     });
   }
 
-  private static async requireGoogleAccessToken(operation: string): Promise<string> {
-    const token = await this.getGoogleAccessToken({ throwOnError: true });
-    if (!token) {
-      throw new AppError({
-        message: `Firestore (${operation}): nu s-a putut obține tokenul OAuth2 prin ADC.`,
-        code: "UNAUTHORIZED",
-        statusCode: 401,
-      });
+  private static async resolveFirestoreAuth(
+    operation: string
+  ): Promise<{ token: string; isUserToken: boolean }> {
+    if (GcpAuthService.isAnyServerAuthConfigured()) {
+      const token = await this.getGoogleAccessToken({ throwOnError: true });
+      if (token) {
+        return { token, isUserToken: false };
+      }
     }
-    return token;
+
+    const reqAuth = this.getRequestAuth();
+    if (reqAuth?.bearerToken) {
+      return { token: reqAuth.bearerToken, isUserToken: true };
+    }
+
+    // Preserve test-suite mock ADC behavior when testFirestoreOrigin is explicitly set
+    const fallbackToken = await this.getGoogleAccessToken({ throwOnError: true });
+    if (fallbackToken) {
+      return { token: fallbackToken, isUserToken: false };
+    }
+
+    throw new AppError({
+      message: `Firestore (${operation}): autentificare necesară pentru persistența în baza de date.`,
+      code: "UNAUTHORIZED",
+      statusCode: 401,
+    });
   }
 
-  private static buildFirestoreHeaders(token: string): Record<string, string> {
+  private static buildFirestoreHeaders(
+    token: string,
+    isUserToken: boolean
+  ): Record<string, string> {
+    if (isUserToken) {
+      // Firebase Auth user ID tokens work directly against Firestore REST without GCP quota headers
+      return {
+        Authorization: `Bearer ${token}`,
+      };
+    }
     return {
       Authorization: `Bearer ${token}`,
       ...GcpAuthService.getQuotaProjectHeaders(),
     };
   }
 
-  private static recordRemoteFailure(err: unknown, operation: string, targetPath: string): AppError {
+  private static recordRemoteFailure(
+    err: unknown,
+    operation: string,
+    targetPath: string,
+    options?: { silentOnStatuses?: number[] }
+  ): AppError {
     const appErr = GcpAuthService.sanitizeGcpHttpError(err, "Firestore", operation);
-    this.lastRemoteError = {
-      message: appErr.message,
-      statusCode: appErr.statusCode,
-      at: new Date().toISOString(),
-    };
-    logger.error(`Eroare Firestore la ${operation} (${targetPath})`, appErr, {
-      module: "persistent-store",
-      action: operation,
-      statusCode: appErr.statusCode,
-    });
+    const suppress = Boolean(options?.silentOnStatuses?.includes(appErr.statusCode));
+    if (!suppress) {
+      this.lastRemoteError = {
+        message: appErr.message,
+        statusCode: appErr.statusCode,
+        at: new Date().toISOString(),
+      };
+      logger.error(
+        `Eroare Firestore la ${operation} (${targetPath}) [HTTP ${appErr.statusCode}]: ${appErr.message}`,
+        appErr,
+        {
+          module: "persistent-store",
+          action: operation,
+          statusCode: appErr.statusCode,
+        }
+      );
+    }
     return appErr;
   }
 
   private static loadStore(): PersistentStoreData {
+    // Strictly in-memory read-through cache in dev & production (ZERO local file persistence).
+    if (!this.isTestMode()) {
+      if (!this.cache) {
+        this.cache = { collections: {} };
+      }
+      return this.cache;
+    }
+
     const targetPath = this.getStoreFilePath();
     if (this.cache && this.cachedStorePath === targetPath) {
       return this.cache;
@@ -166,6 +278,10 @@ export class PersistentStoreService {
   }
 
   private static flushStore(data: PersistentStoreData): void {
+    // Local disk persistence is permanently disabled outside automated unit tests.
+    if (!this.isTestMode()) {
+      return;
+    }
     const targetPath = this.getStoreFilePath();
     const dir = path.dirname(targetPath);
     if (!fs.existsSync(dir)) {
@@ -179,11 +295,15 @@ export class PersistentStoreService {
   public static clearMemoryCache(): void {
     this.cache = null;
     this.cachedStorePath = null;
+    this.collectionHydratedAt.clear();
+    this.collectionHydrateFailedUntil.clear();
   }
 
   public static async withKeyMutex<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const reqAuth = this.getRequestAuth();
+    const runWithContext = () => (reqAuth ? this.runWithRequestAuth(reqAuth, fn) : fn());
     const previous = this.mutexChains.get(key) || Promise.resolve();
-    const next = previous.then(fn, fn);
+    const next = previous.then(runWithContext, runWithContext);
     this.mutexChains.set(key, next.catch(() => undefined));
     try {
       return await next;
@@ -211,11 +331,28 @@ export class PersistentStoreService {
     return structuredClone(col[id]) as T;
   }
 
+  public static setCacheOnly<T = any>(collectionName: string, id: string, value: T): T {
+    const cloned = structuredClone(value);
+    const store = this.loadStore();
+    if (!store.collections[collectionName]) {
+      store.collections[collectionName] = {};
+    }
+    store.collections[collectionName][id] = cloned;
+    return cloned;
+  }
+
+  public static deleteCacheOnly(collectionName: string, id: string): void {
+    const store = this.loadStore();
+    const col = store.collections[collectionName];
+    if (col && id in col) {
+      delete col[id];
+    }
+  }
+
   /**
-   * Seeds default records when a collection is empty.
-   * In production without server-side Firestore ADC configured, populates ONLY the
-   * in-memory cache (never writes to local disk) so read-only endpoints do not crash
-   * while real mutations via set()/setAsync() remain strictly protected.
+   * Seeds default records when a collection is empty in memory.
+   * Only persists to Firestore when live remote auth is available; never writes to local disk
+   * outside NODE_ENV === "test".
    */
   public static seedIfEmpty<T = any>(
     collectionName: string,
@@ -226,8 +363,7 @@ export class PersistentStoreService {
       return existing;
     }
 
-    const isProd = process.env.NODE_ENV === "production";
-    const canPersist = !isProd || this.isRemoteFirestoreConfigured();
+    const canPersist = this.isTestMode() || this.isRemoteFirestoreConfigured();
     const store = this.loadStore();
     if (!store.collections[collectionName]) {
       store.collections[collectionName] = {};
@@ -235,7 +371,7 @@ export class PersistentStoreService {
 
     for (const entry of entries) {
       const cloned = structuredClone(entry.value);
-      if (canPersist) {
+      if (canPersist && this.isTestMode()) {
         this.set(collectionName, entry.id, cloned);
       } else {
         store.collections[collectionName][entry.id] = cloned;
@@ -247,8 +383,7 @@ export class PersistentStoreService {
   }
 
   /**
-   * Seeds a single default document when missing.
-   * Uses in-memory read-only cache fallback in production if Firestore server ADC is absent.
+   * Seeds a single default document when missing in memory.
    */
   public static seedDocumentIfMissing<T = any>(
     collectionName: string,
@@ -261,10 +396,7 @@ export class PersistentStoreService {
     }
 
     const cloned = structuredClone(value);
-    const isProd = process.env.NODE_ENV === "production";
-    const canPersist = !isProd || this.isRemoteFirestoreConfigured();
-
-    if (canPersist) {
+    if (this.isTestMode()) {
       return this.set(collectionName, id, cloned);
     }
 
@@ -277,13 +409,13 @@ export class PersistentStoreService {
   }
 
   public static set<T = any>(collectionName: string, id: string, value: T): T {
-    const isProd = process.env.NODE_ENV === "production";
+    const isTest = this.isTestMode();
     const remoteConfigured = this.isRemoteFirestoreConfigured();
 
-    if (isProd && !remoteConfigured) {
+    if (!isTest && !remoteConfigured) {
       throw new AppError({
         message:
-          "Persistența locală este dezactivată în producție: lipsesc credențialele Firestore ADC.",
+          "Persistența locală este dezactivată: salvarea necesită conexiune autentificată la Cloud Firestore.",
         code: "INTERNAL_ERROR",
         statusCode: 503,
       });
@@ -292,43 +424,50 @@ export class PersistentStoreService {
     const cloned = structuredClone(value);
 
     if (remoteConfigured && !/^__.*__$/.test(id)) {
-      void this.remoteSet(collectionName, id, cloned as Record<string, any>).catch((err) => {
+      // Capture request-scoped auth explicitly so the background write retains credentials
+      const reqAuth = this.getRequestAuth();
+      const writePromise = reqAuth
+        ? this.runWithRequestAuth(reqAuth, () =>
+            this.remoteSet(collectionName, id, cloned as Record<string, any>)
+          )
+        : this.remoteSet(collectionName, id, cloned as Record<string, any>);
+
+      void writePromise.catch((err) => {
         this.recordRemoteFailure(err, "remote_set", `${collectionName}/${id}`);
       });
     }
 
-    if (!isProd) {
-      const store = this.loadStore();
-      if (!store.collections[collectionName]) {
-        store.collections[collectionName] = {};
-      }
-      store.collections[collectionName][id] = cloned;
+    const store = this.loadStore();
+    if (!store.collections[collectionName]) {
+      store.collections[collectionName] = {};
+    }
+    store.collections[collectionName][id] = cloned;
+    if (isTest) {
       this.flushStore(store);
-    } else {
-      const store = this.loadStore();
-      if (!store.collections[collectionName]) {
-        store.collections[collectionName] = {};
-      }
-      store.collections[collectionName][id] = cloned;
     }
     return cloned;
   }
 
   public static delete(collectionName: string, id: string): boolean {
-    const isProd = process.env.NODE_ENV === "production";
+    const isTest = this.isTestMode();
     const remoteConfigured = this.isRemoteFirestoreConfigured();
 
-    if (isProd && !remoteConfigured) {
+    if (!isTest && !remoteConfigured) {
       throw new AppError({
         message:
-          "Persistența locală este dezactivată în producție: lipsesc credențialele Firestore ADC.",
+          "Persistența locală este dezactivată: ștergerea necesită conexiune autentificată la Cloud Firestore.",
         code: "INTERNAL_ERROR",
         statusCode: 503,
       });
     }
 
     if (remoteConfigured && !/^__.*__$/.test(id)) {
-      void this.remoteDelete(collectionName, id).catch((err) => {
+      const reqAuth = this.getRequestAuth();
+      const delPromise = reqAuth
+        ? this.runWithRequestAuth(reqAuth, () => this.remoteDelete(collectionName, id))
+        : this.remoteDelete(collectionName, id);
+
+      void delPromise.catch((err) => {
         this.recordRemoteFailure(err, "remote_delete", `${collectionName}/${id}`);
       });
     }
@@ -336,10 +475,10 @@ export class PersistentStoreService {
     const store = this.loadStore();
     const col = store.collections[collectionName];
     if (!col || !(id in col)) {
-      return isProd && remoteConfigured ? true : false;
+      return !isTest && remoteConfigured ? true : false;
     }
     delete col[id];
-    if (!isProd) {
+    if (isTest) {
       this.flushStore(store);
     }
     return true;
@@ -350,19 +489,12 @@ export class PersistentStoreService {
     id: string,
     value: T
   ): Promise<T> {
-    const isProd = process.env.NODE_ENV === "production";
+    const isTest = this.isTestMode();
     const cloned = structuredClone(value);
 
-    if (isProd || this.isRemoteFirestoreConfigured() || this.testFirestoreOrigin) {
+    if (!isTest || this.isRemoteFirestoreConfigured() || this.testFirestoreOrigin) {
       await this.remoteSet(collectionName, id, cloned);
-      const store = this.loadStore();
-      if (!store.collections[collectionName]) {
-        store.collections[collectionName] = {};
-      }
-      store.collections[collectionName][id] = cloned;
-      if (!isProd) {
-        this.flushStore(store);
-      }
+      this.setCacheOnly(collectionName, id, cloned);
       return cloned;
     }
 
@@ -370,28 +502,87 @@ export class PersistentStoreService {
   }
 
   public static async deleteAsync(collectionName: string, id: string): Promise<boolean> {
-    const isProd = process.env.NODE_ENV === "production";
+    const isTest = this.isTestMode();
 
-    if (isProd || this.isRemoteFirestoreConfigured() || this.testFirestoreOrigin) {
+    if (!isTest || this.isRemoteFirestoreConfigured() || this.testFirestoreOrigin) {
       await this.remoteDelete(collectionName, id);
-      const store = this.loadStore();
-      const col = store.collections[collectionName];
-      if (col && id in col) {
-        delete col[id];
-        if (!isProd) {
-          this.flushStore(store);
-        }
-      }
+      this.deleteCacheOnly(collectionName, id);
       return true;
     }
 
     return this.delete(collectionName, id);
   }
 
+  /**
+   * Lazily hydrates a top-level Firestore collection into the in-memory read-through cache
+   * using the active request's verified Firebase Auth token or server ADC.
+   */
+  public static async hydrateCollectionOnce<T = Record<string, any>>(
+    collectionName: string,
+    ttlMs = 30_000
+  ): Promise<Record<string, T>> {
+    if (this.isTestMode() && !this.testFirestoreOrigin) {
+      return this.getAll<T>(collectionName);
+    }
+    if (!this.isRemoteFirestoreConfigured() && !this.testFirestoreOrigin) {
+      return this.getAll<T>(collectionName);
+    }
+
+    const lastAt = this.collectionHydratedAt.get(collectionName) || 0;
+    if (Date.now() - lastAt < ttlMs) {
+      return this.getAll<T>(collectionName);
+    }
+
+    const failedUntil = this.collectionHydrateFailedUntil.get(collectionName) || 0;
+    if (Date.now() < failedUntil) {
+      return this.getAll<T>(collectionName);
+    }
+
+    return this.withKeyMutex(`hydrate::${collectionName}`, async () => {
+      const refreshedAt = this.collectionHydratedAt.get(collectionName) || 0;
+      if (Date.now() - refreshedAt < ttlMs) {
+        return this.getAll<T>(collectionName);
+      }
+      const mutexFailedUntil = this.collectionHydrateFailedUntil.get(collectionName) || 0;
+      if (Date.now() < mutexFailedUntil) {
+        return this.getAll<T>(collectionName);
+      }
+
+      try {
+        const entries = await this.remoteListEntriesAtPath<T>(collectionName, 300, 20, {
+          silentOnStatuses: [403],
+        });
+        const store = this.loadStore();
+        if (!store.collections[collectionName]) {
+          store.collections[collectionName] = {};
+        }
+        for (const { docId, data } of entries) {
+          if (docId) {
+            store.collections[collectionName][docId] = data;
+          }
+        }
+        this.collectionHydratedAt.set(collectionName, Date.now());
+        this.collectionHydrateFailedUntil.delete(collectionName);
+      } catch (err) {
+        // Back off for 60s on failure to avoid spamming Firestore on every request
+        this.collectionHydrateFailedUntil.set(collectionName, Date.now() + 60_000);
+        logger.warn(`Firestore lazy hydration skipped for ${collectionName}`, {
+          module: "persistent-store",
+          action: "hydrate_collection_once",
+          collection: collectionName,
+          reason: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return this.getAll<T>(collectionName);
+    });
+  }
+
   public static clearCollection(collectionName: string): void {
     const store = this.loadStore();
     store.collections[collectionName] = {};
-    if (process.env.NODE_ENV !== "production") {
+    this.collectionHydratedAt.delete(collectionName);
+    this.collectionHydrateFailedUntil.delete(collectionName);
+    if (this.isTestMode()) {
       this.flushStore(store);
     }
   }
@@ -399,9 +590,11 @@ export class PersistentStoreService {
   public static clearAll(): void {
     const empty: PersistentStoreData = { collections: {} };
     this.cache = empty;
-    this.cachedStorePath = this.getStoreFilePath();
+    this.cachedStorePath = this.isTestMode() ? this.getStoreFilePath() : null;
+    this.collectionHydratedAt.clear();
+    this.collectionHydrateFailedUntil.clear();
     this.lastRemoteError = null;
-    if (process.env.NODE_ENV !== "production") {
+    if (this.isTestMode()) {
       this.flushStore(empty);
     }
   }
@@ -463,7 +656,13 @@ export class PersistentStoreService {
 
   public static decodeDocument<T = Record<string, any>>(docObj: any): T {
     const nameParts = String(docObj?.name || "").split("/");
-    const docId = nameParts[nameParts.length - 1] || "";
+    const rawDocId = nameParts[nameParts.length - 1] || "";
+    let docId = rawDocId;
+    try {
+      docId = decodeURIComponent(rawDocId);
+    } catch {
+      docId = rawDocId;
+    }
     const parsed: Record<string, any> = docId ? { id: docId } : {};
     const fields = docObj?.fields || {};
     for (const k of Object.keys(fields)) {
@@ -481,42 +680,45 @@ export class PersistentStoreService {
   }
 
   public static async remoteGetAtPath<T = Record<string, any>>(
-    relativeDocPath: string
+    relativeDocPath: string,
+    options?: { silentOnStatuses?: number[] }
   ): Promise<T | null> {
-    const token = await this.requireGoogleAccessToken("remote_get");
+    const { token, isUserToken } = await this.resolveFirestoreAuth("remote_get");
     const { projectId, databaseId } = this.getFirebaseTarget();
     const encodedPath = this.encodeDocumentPath(relativeDocPath);
     const url = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodedPath}`;
     try {
       const res = await axios.get(url, {
-        headers: this.buildFirestoreHeaders(token),
+        headers: this.buildFirestoreHeaders(token, isUserToken),
         timeout: 8000,
       });
       return this.decodeDocument<T>(res.data);
     } catch (err: any) {
       if (err?.response?.status === 404) return null;
-      throw this.recordRemoteFailure(err, "remote_get", relativeDocPath);
+      throw this.recordRemoteFailure(err, "remote_get", relativeDocPath, options);
     }
   }
 
   public static async remoteListEntriesAtPath<T = Record<string, any>>(
     relativeCollectionPath: string,
-    pageSize = 300
+    pageSize = 300,
+    maxPages = 20,
+    options?: { silentOnStatuses?: number[] }
   ): Promise<Array<{ docId: string; data: T }>> {
-    const token = await this.requireGoogleAccessToken("remote_list");
+    const { token, isUserToken } = await this.resolveFirestoreAuth("remote_list");
     const { projectId, databaseId } = this.getFirebaseTarget();
     const encodedPath = this.encodeDocumentPath(relativeCollectionPath);
     const items: Array<{ docId: string; data: T }> = [];
     let pageToken: string | undefined;
 
-    for (let page = 0; page < 20; page++) {
+    for (let page = 0; page < maxPages; page++) {
       const params = new URLSearchParams({ pageSize: String(pageSize) });
       if (pageToken) params.set("pageToken", pageToken);
 
       const url = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodedPath}?${params.toString()}`;
       try {
         const res = await axios.get(url, {
-          headers: this.buildFirestoreHeaders(token),
+          headers: this.buildFirestoreHeaders(token, isUserToken),
           timeout: 12000,
         });
         const docs = Array.isArray(res.data?.documents) ? res.data.documents : [];
@@ -535,7 +737,7 @@ export class PersistentStoreService {
         if (!pageToken) break;
       } catch (err: any) {
         if (err?.response?.status === 404) return [];
-        throw this.recordRemoteFailure(err, "remote_list", relativeCollectionPath);
+        throw this.recordRemoteFailure(err, "remote_list", relativeCollectionPath, options);
       }
     }
 
@@ -544,17 +746,125 @@ export class PersistentStoreService {
 
   public static async remoteListAtPath<T = Record<string, any>>(
     relativeCollectionPath: string,
-    pageSize = 300
+    pageSize = 300,
+    maxPages = 20,
+    options?: { silentOnStatuses?: number[] }
   ): Promise<T[]> {
-    const entries = await this.remoteListEntriesAtPath<T>(relativeCollectionPath, pageSize);
+    const entries = await this.remoteListEntriesAtPath<T>(
+      relativeCollectionPath,
+      pageSize,
+      maxPages,
+      options
+    );
     return entries.map((e) => e.data);
+  }
+
+  /**
+   * Executes a server-side indexed Firestore StructuredQuery (`:runQuery`) under `parentRelativePath`
+   * (e.g. `"tenants/ten_brokr_default"` or `""` for root collections), preventing O(N) full scans.
+   */
+  public static async remoteRunQueryAtPath<T = Record<string, any>>(
+    parentRelativePath: string,
+    structuredQuery: Record<string, any>,
+    options?: { silentOnStatuses?: number[] }
+  ): Promise<Array<{ docId: string; data: T }>> {
+    const { token, isUserToken } = await this.resolveFirestoreAuth("remote_run_query");
+    const { projectId, databaseId } = this.getFirebaseTarget();
+    const encodedParent = parentRelativePath
+      ? `/${this.encodeDocumentPath(parentRelativePath)}`
+      : "";
+    const url = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents${encodedParent}:runQuery`;
+    try {
+      const res = await axios.post(
+        url,
+        { structuredQuery },
+        {
+          headers: this.buildFirestoreHeaders(token, isUserToken),
+          timeout: 12000,
+        }
+      );
+      const rows = Array.isArray(res.data) ? res.data : [];
+      const results: Array<{ docId: string; data: T }> = [];
+      for (const row of rows) {
+        if (!row?.document) continue;
+        const nameParts = String(row.document?.name || "").split("/");
+        const rawSeg = nameParts[nameParts.length - 1] || "";
+        let docId = rawSeg;
+        try {
+          docId = decodeURIComponent(rawSeg);
+        } catch {
+          docId = rawSeg;
+        }
+        results.push({ docId, data: this.decodeDocument<T>(row.document) });
+      }
+      this.lastRemoteError = null;
+      return results;
+    } catch (err: any) {
+      throw this.recordRemoteFailure(err, "remote_run_query", parentRelativePath || ":root", options);
+    }
+  }
+
+  /**
+   * Atomically increments an integer counter field on a Firestore document using `:commit`
+   * `updateTransforms`, returning the server-computed post-increment value in a single RPC.
+   */
+  public static async remoteAtomicIncrement(
+    relativeDocPath: string,
+    fieldName: string,
+    delta = 1,
+    extraFields: Record<string, any> = {}
+  ): Promise<number> {
+    const { token, isUserToken } = await this.resolveFirestoreAuth("remote_atomic_increment");
+    const { projectId, databaseId } = this.getFirebaseTarget();
+    const docName = `projects/${projectId}/databases/${databaseId}/documents/${relativeDocPath}`;
+    const commitUrl = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit`;
+
+    const fieldPaths = Object.keys(extraFields).filter((k) => extraFields[k] !== undefined);
+    const writeObj: Record<string, any> = {
+      update: {
+        name: docName,
+        fields: this.encodeDocumentFields(extraFields),
+      },
+      updateMask: {
+        fieldPaths,
+      },
+      updateTransforms: [
+        {
+          fieldPath: fieldName,
+          increment: { integerValue: String(delta) },
+        },
+      ],
+    };
+
+    try {
+      const res = await axios.post(
+        commitUrl,
+        { writes: [writeObj] },
+        {
+          headers: this.buildFirestoreHeaders(token, isUserToken),
+          timeout: 8000,
+        }
+      );
+      this.lastRemoteError = null;
+      const transformVal = res.data?.writeResults?.[0]?.transformResults?.[0];
+      const parsed = this.fromFirestoreValue(transformVal);
+      if (typeof parsed === "number" && Number.isFinite(parsed)) {
+        return parsed;
+      }
+      // Fallback read if a test mock didn't include transformResults
+      const doc = await this.remoteGetAtPath<Record<string, any>>(relativeDocPath);
+      const docVal = Number(doc?.[fieldName] || 0);
+      return Number.isFinite(docVal) && docVal > 0 ? docVal : delta;
+    } catch (err: any) {
+      throw this.recordRemoteFailure(err, "remote_atomic_increment", relativeDocPath);
+    }
   }
 
   public static async remoteSetAtPath(
     relativeDocPath: string,
     data: Record<string, any>
   ): Promise<void> {
-    const token = await this.requireGoogleAccessToken("remote_set");
+    const { token, isUserToken } = await this.resolveFirestoreAuth("remote_set");
     const { projectId, databaseId } = this.getFirebaseTarget();
     const encodedPath = this.encodeDocumentPath(relativeDocPath);
     const url = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodedPath}`;
@@ -563,7 +873,7 @@ export class PersistentStoreService {
         url,
         { fields: this.encodeDocumentFields(data) },
         {
-          headers: this.buildFirestoreHeaders(token),
+          headers: this.buildFirestoreHeaders(token, isUserToken),
           timeout: 8000,
         }
       );
@@ -574,13 +884,13 @@ export class PersistentStoreService {
   }
 
   public static async remoteDeleteAtPath(relativeDocPath: string): Promise<void> {
-    const token = await this.requireGoogleAccessToken("remote_delete");
+    const { token, isUserToken } = await this.resolveFirestoreAuth("remote_delete");
     const { projectId, databaseId } = this.getFirebaseTarget();
     const encodedPath = this.encodeDocumentPath(relativeDocPath);
     const url = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents/${encodedPath}`;
     try {
       await axios.delete(url, {
-        headers: this.buildFirestoreHeaders(token),
+        headers: this.buildFirestoreHeaders(token, isUserToken),
         timeout: 8000,
       });
       this.lastRemoteError = null;
@@ -592,10 +902,11 @@ export class PersistentStoreService {
 
   public static async remoteCommitWrites(
     writes: Array<Record<string, any>>,
-    operation = "remote_commit"
+    operation = "remote_commit",
+    options?: { silentOnStatuses?: number[] }
   ): Promise<void> {
     if (writes.length === 0) return;
-    const token = await this.requireGoogleAccessToken(operation);
+    const { token, isUserToken } = await this.resolveFirestoreAuth(operation);
     const { projectId, databaseId } = this.getFirebaseTarget();
     const commitUrl = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit`;
     try {
@@ -603,19 +914,19 @@ export class PersistentStoreService {
         commitUrl,
         { writes },
         {
-          headers: this.buildFirestoreHeaders(token),
+          headers: this.buildFirestoreHeaders(token, isUserToken),
           timeout: 12000,
         }
       );
       this.lastRemoteError = null;
     } catch (err: any) {
-      throw this.recordRemoteFailure(err, operation, ":commit");
+      throw this.recordRemoteFailure(err, operation, ":commit", options);
     }
   }
 
   public static async remoteGet<T = any>(collectionName: string, id: string): Promise<T | null> {
     if (
-      process.env.NODE_ENV !== "production" &&
+      this.isTestMode() &&
       !this.isRemoteFirestoreConfigured() &&
       !this.testFirestoreOrigin
     ) {
@@ -641,13 +952,13 @@ export class PersistentStoreService {
     id: string,
     data: T
   ): Promise<boolean> {
-    const isProd = process.env.NODE_ENV === "production";
+    const isTest = this.isTestMode();
     const remoteActive = this.isRemoteFirestoreConfigured() || Boolean(this.testFirestoreOrigin);
 
-    if (isProd && !remoteActive) {
+    if (!isTest && !remoteActive) {
       throw new AppError({
         message:
-          "Persistența atomică locală este dezactivată în producție: lipsesc credențialele Firestore ADC.",
+          "Persistența locală este dezactivată: crearea atomică necesită conexiune autentificată la Cloud Firestore.",
         code: "INTERNAL_ERROR",
         statusCode: 503,
       });
@@ -655,7 +966,7 @@ export class PersistentStoreService {
 
     return this.withKeyMutex(`${collectionName}::${id}`, async () => {
       if (remoteActive) {
-        const token = await this.requireGoogleAccessToken("create_if_absent_async");
+        const { token, isUserToken } = await this.resolveFirestoreAuth("create_if_absent_async");
         const { projectId, databaseId } = this.getFirebaseTarget();
         const docName = `projects/${projectId}/databases/${databaseId}/documents/${collectionName}/${id}`;
         const commitUrl = `${this.getFirestoreOrigin()}/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}/documents:commit`;
@@ -674,16 +985,11 @@ export class PersistentStoreService {
               ],
             },
             {
-              headers: this.buildFirestoreHeaders(token),
+              headers: this.buildFirestoreHeaders(token, isUserToken),
               timeout: 8000,
             }
           );
-          const store = this.loadStore();
-          if (!store.collections[collectionName]) store.collections[collectionName] = {};
-          store.collections[collectionName][id] = structuredClone(data);
-          if (!isProd) {
-            this.flushStore(store);
-          }
+          this.setCacheOnly(collectionName, id, data);
           return true;
         } catch (err: any) {
           if (err?.response?.status === 409 || err?.response?.status === 412) {
@@ -707,59 +1013,46 @@ export class PersistentStoreService {
   }
 
   /**
-   * Hydrates PersistentStoreService collections from Firestore at server startup
-   * and (in dev/preview only) seeds any local-only records from .data/brokr-persistent-store.json
-   * that do not yet exist in Firestore.
+   * Hydrates PersistentStoreService collections from Firestore into the in-memory read-through cache.
+   * Never reads or writes local `.data/` files.
    */
   public static async hydrateFromFirestore(collections: string[]): Promise<{
     hydratedCollections: number;
     hydratedDocs: number;
     seededRemoteDocs: number;
   }> {
-    if (process.env.NODE_ENV === "test" && !this.testFirestoreOrigin) {
+    if (this.isTestMode() && !this.testFirestoreOrigin) {
       return { hydratedCollections: 0, hydratedDocs: 0, seededRemoteDocs: 0 };
     }
     if (!this.isRemoteFirestoreConfigured() && !this.testFirestoreOrigin) {
       return { hydratedCollections: 0, hydratedDocs: 0, seededRemoteDocs: 0 };
     }
 
-    const isProd = process.env.NODE_ENV === "production";
-    const store = isProd ? { collections: {} as Record<string, Record<string, any>> } : this.loadStore();
-    if (isProd) {
-      this.cache = store;
-      this.cachedStorePath = this.getStoreFilePath();
-    }
-
+    const store = this.loadStore();
     let hydratedCollections = 0;
     let hydratedDocs = 0;
-    let seededRemoteDocs = 0;
 
     for (const colName of collections) {
       try {
-        const remoteEntries = await this.remoteListEntriesAtPath<Record<string, any>>(colName, 300);
+        const remoteEntries = await this.remoteListEntriesAtPath<Record<string, any>>(
+          colName,
+          300,
+          20,
+          { silentOnStatuses: [403] }
+        );
         if (!store.collections[colName]) {
           store.collections[colName] = {};
         }
-        const remoteIdSet = new Set<string>();
         for (const { docId, data } of remoteEntries) {
           if (!docId) continue;
-          remoteIdSet.add(docId);
           store.collections[colName][docId] = data;
           hydratedDocs++;
         }
+        this.collectionHydratedAt.set(colName, Date.now());
+        this.collectionHydrateFailedUntil.delete(colName);
         hydratedCollections++;
-
-        // In dev/preview, push any local records missing from Firestore so existing work is preserved
-        if (!isProd) {
-          for (const [localId, localVal] of Object.entries(store.collections[colName])) {
-            if (/^__.*__$/.test(localId)) continue;
-            if (!remoteIdSet.has(localId) && localVal && typeof localVal === "object") {
-              await this.remoteSet(colName, localId, localVal as Record<string, any>);
-              seededRemoteDocs++;
-            }
-          }
-        }
       } catch (err) {
+        this.collectionHydrateFailedUntil.set(colName, Date.now() + 60_000);
         logger.warn(`Firestore hydration skipped for ${colName}`, {
           module: "persistent-store",
           action: "hydrate_collection",
@@ -769,45 +1062,6 @@ export class PersistentStoreService {
       }
     }
 
-    // One-time dev/preview backfill for tenant-scoped CRM collections (tenants__<tenantId>__<col>)
-    if (!isProd) {
-      const tenantColKeys = Object.keys(store.collections).filter((k) => k.startsWith("tenants__"));
-      for (const storeKey of tenantColKeys) {
-        const rest = storeKey.slice("tenants__".length);
-        const sepIdx = rest.lastIndexOf("__");
-        if (sepIdx <= 0) continue;
-        const tenantId = rest.slice(0, sepIdx);
-        const colName = rest.slice(sepIdx + 2);
-        const localEntries = Object.entries(store.collections[storeKey] || {});
-        if (localEntries.length === 0) continue;
-
-        try {
-          const existingRemote = await this.remoteListEntriesAtPath<Record<string, any>>(
-            `tenants/${tenantId}/${colName}`,
-            300
-          );
-          const remoteIds = new Set(existingRemote.map((e) => e.docId).filter(Boolean));
-          for (const [docId, docVal] of localEntries) {
-            if (!remoteIds.has(docId) && docVal && typeof docVal === "object") {
-              await this.remoteSetAtPath(`tenants/${tenantId}/${colName}/${docId}`, docVal as Record<string, any>);
-              seededRemoteDocs++;
-            }
-          }
-        } catch (err) {
-          logger.warn(`Firestore tenant backfill skipped for ${storeKey}`, {
-            module: "persistent-store",
-            action: "hydrate_tenant_backfill",
-            storeKey,
-            reason: err instanceof Error ? err.message : String(err),
-          });
-        }
-      }
-
-      if (hydratedDocs > 0) {
-        this.flushStore(store);
-      }
-    }
-
-    return { hydratedCollections, hydratedDocs, seededRemoteDocs };
+    return { hydratedCollections, hydratedDocs, seededRemoteDocs: 0 };
   }
 }

@@ -354,12 +354,40 @@ export class CloudStorageService {
     });
   }
 
-  private static getSigningSecret(): string {
-    return (
-      process.env.STORAGE_SIGNING_SECRET?.trim() ||
-      process.env.SESSION_SECRET?.trim() ||
-      this.ephemeralSigningSecret
+  public static isUsingPersistentSigningSecret(): boolean {
+    return Boolean(
+      process.env.STORAGE_SIGNING_SECRET?.trim() || process.env.SESSION_SECRET?.trim()
     );
+  }
+
+  /**
+   * Simulates a cold Cloud Run container restart in automated tests by rotating the
+   * in-memory ephemeral fallback secret (persistent `STORAGE_SIGNING_SECRET` survives restarts).
+   */
+  public static resetEphemeralSecretForTests(): void {
+    this.ephemeralSigningSecret = crypto.randomBytes(32).toString("hex");
+  }
+
+  private static getSigningSecret(): string {
+    const persistentSecret =
+      process.env.STORAGE_SIGNING_SECRET?.trim() || process.env.SESSION_SECRET?.trim();
+    if (persistentSecret) {
+      return persistentSecret;
+    }
+
+    if (
+      process.env.NODE_ENV === "production" &&
+      process.env.ALLOW_EPHEMERAL_STORAGE_SECRET !== "true"
+    ) {
+      throw new AppError({
+        message:
+          "STORAGE_SIGNING_SECRET nu este configurat în mediul de producție; generarea linkurilor semnate este blocată pentru a preveni invalidarea între instanțe.",
+        code: "CONFIGURATION_ERROR",
+        statusCode: 503,
+      });
+    }
+
+    return this.ephemeralSigningSecret;
   }
 
   /**

@@ -15,44 +15,10 @@ export class AutomationConfigRepository {
       COL_AUTOMATION_CONFIGS,
       PLATFORM_DEFAULT_AUTOMATION_KEY
     );
-    if (!existing) {
-      const legacy = PersistentStoreService.get<AgencyAutomationConfigRecord>(
-        COL_AUTOMATION_CONFIGS,
-        "__platform_default__"
-      );
-      if (legacy && legacy.titleRule) {
-        existing = {
-          ...legacy,
-          tenantId: PLATFORM_DEFAULT_AUTOMATION_KEY,
-        };
-        PersistentStoreService.set(COL_AUTOMATION_CONFIGS, PLATFORM_DEFAULT_AUTOMATION_KEY, existing);
-        PersistentStoreService.delete(COL_AUTOMATION_CONFIGS, "__platform_default__");
-      }
-    }
     if (existing && existing.titleRule) {
-      const normalized = normalizeTitleAutomationRule(existing.titleRule);
-      if (
-        existing.updatedBy === "system" &&
-        existing.version === 1 &&
-        normalized.minChars === 25 &&
-        normalized.maxChars === 130
-      ) {
-        const upgraded: AgencyAutomationConfigRecord = {
-          ...existing,
-          titleRule: {
-            ...normalized,
-            minChars: DEFAULT_TITLE_AUTOMATION_RULE.minChars,
-            maxChars: DEFAULT_TITLE_AUTOMATION_RULE.maxChars,
-          },
-          isCustomOverride: false,
-          updatedAt: new Date().toISOString(),
-        };
-        PersistentStoreService.set(COL_AUTOMATION_CONFIGS, PLATFORM_DEFAULT_AUTOMATION_KEY, upgraded);
-        return upgraded;
-      }
       return {
         ...existing,
-        titleRule: normalized,
+        titleRule: normalizeTitleAutomationRule(existing.titleRule),
         isCustomOverride: false,
       };
     }
@@ -71,6 +37,33 @@ export class AutomationConfigRepository {
       PLATFORM_DEFAULT_AUTOMATION_KEY,
       seeded
     );
+  }
+
+  public static async getPlatformDefaultRecordAsync(): Promise<AgencyAutomationConfigRecord> {
+    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        const remote = await PersistentStoreService.remoteGet<AgencyAutomationConfigRecord>(
+          COL_AUTOMATION_CONFIGS,
+          PLATFORM_DEFAULT_AUTOMATION_KEY
+        );
+        if (remote && remote.titleRule) {
+          const normalized: AgencyAutomationConfigRecord = {
+            ...remote,
+            titleRule: normalizeTitleAutomationRule(remote.titleRule),
+            isCustomOverride: false,
+          };
+          PersistentStoreService.setCacheOnly(
+            COL_AUTOMATION_CONFIGS,
+            PLATFORM_DEFAULT_AUTOMATION_KEY,
+            normalized
+          );
+          return normalized;
+        }
+      } catch {
+        // Fallback to default seed
+      }
+    }
+    return this.getPlatformDefaultRecord();
   }
 
   public static savePlatformDefaultTitleRule(
@@ -92,8 +85,37 @@ export class AutomationConfigRepository {
     return updated;
   }
 
+  public static async savePlatformDefaultTitleRuleAsync(
+    rawRule: unknown,
+    updatedBy: string
+  ): Promise<AgencyAutomationConfigRecord> {
+    const existing = await this.getPlatformDefaultRecordAsync();
+    const normalized = normalizeTitleAutomationRule(rawRule);
+    const updated: AgencyAutomationConfigRecord = {
+      id: "auto_platform_default",
+      tenantId: PLATFORM_DEFAULT_AUTOMATION_KEY,
+      titleRule: normalized,
+      isCustomOverride: false,
+      version: (existing.version || 1) + 1,
+      updatedBy: updatedBy || "super_admin",
+      updatedAt: new Date().toISOString(),
+    };
+    await PersistentStoreService.setAsync(
+      COL_AUTOMATION_CONFIGS,
+      PLATFORM_DEFAULT_AUTOMATION_KEY,
+      updated
+    );
+    return updated;
+  }
+
   public static resetPlatformDefaultTitleRule(updatedBy: string): AgencyAutomationConfigRecord {
     return this.savePlatformDefaultTitleRule(DEFAULT_TITLE_AUTOMATION_RULE, updatedBy);
+  }
+
+  public static async resetPlatformDefaultTitleRuleAsync(
+    updatedBy: string
+  ): Promise<AgencyAutomationConfigRecord> {
+    return this.savePlatformDefaultTitleRuleAsync(DEFAULT_TITLE_AUTOMATION_RULE, updatedBy);
   }
 
   public static getByTenantId(tenantId: string): AgencyAutomationConfigRecord {
@@ -101,7 +123,6 @@ export class AutomationConfigRepository {
       COL_AUTOMATION_CONFIGS,
       tenantId
     );
-    // Only return tenant-specific record if this agency explicitly customized & saved its own override
     if (existing && existing.titleRule && existing.isCustomOverride === true) {
       return {
         ...existing,
@@ -110,7 +131,6 @@ export class AutomationConfigRepository {
       };
     }
 
-    // Otherwise inherit live from the Super Admin platform default
     const platformDefault = this.getPlatformDefaultRecord();
     return {
       id: `auto_${tenantId}`,
@@ -121,6 +141,40 @@ export class AutomationConfigRepository {
       updatedBy: platformDefault.updatedBy,
       updatedAt: platformDefault.updatedAt,
     };
+  }
+
+  public static async getByTenantIdAsync(tenantId: string): Promise<AgencyAutomationConfigRecord> {
+    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        const remote = await PersistentStoreService.remoteGet<AgencyAutomationConfigRecord>(
+          COL_AUTOMATION_CONFIGS,
+          tenantId
+        );
+        if (remote && remote.titleRule) {
+          PersistentStoreService.setCacheOnly(COL_AUTOMATION_CONFIGS, tenantId, remote);
+          if (remote.isCustomOverride === true) {
+            return {
+              ...remote,
+              titleRule: normalizeTitleAutomationRule(remote.titleRule),
+              isCustomOverride: true,
+            };
+          }
+        }
+      } catch {
+        // Ignore if not yet created
+      }
+      const platformDefault = await this.getPlatformDefaultRecordAsync();
+      return {
+        id: `auto_${tenantId}`,
+        tenantId,
+        titleRule: normalizeTitleAutomationRule(platformDefault.titleRule),
+        isCustomOverride: false,
+        version: platformDefault.version || 1,
+        updatedBy: platformDefault.updatedBy,
+        updatedAt: platformDefault.updatedAt,
+      };
+    }
+    return this.getByTenantId(tenantId);
   }
 
   public static saveTitleRule(
@@ -146,6 +200,26 @@ export class AutomationConfigRepository {
     return updated;
   }
 
+  public static async saveTitleRuleAsync(
+    tenantId: string,
+    rawRule: unknown,
+    updatedBy: string
+  ): Promise<AgencyAutomationConfigRecord> {
+    const existing = await this.getByTenantIdAsync(tenantId);
+    const normalized = normalizeTitleAutomationRule(rawRule);
+    const updated: AgencyAutomationConfigRecord = {
+      id: existing?.id || `auto_${tenantId}`,
+      tenantId,
+      titleRule: normalized,
+      isCustomOverride: true,
+      version: (existing?.version || 1) + 1,
+      updatedBy: updatedBy || "agency_admin",
+      updatedAt: new Date().toISOString(),
+    };
+    await PersistentStoreService.setAsync(COL_AUTOMATION_CONFIGS, tenantId, updated);
+    return updated;
+  }
+
   public static resetTitleRule(
     tenantId: string,
     updatedBy: string
@@ -165,6 +239,25 @@ export class AutomationConfigRepository {
       updatedAt: new Date().toISOString(),
     };
     PersistentStoreService.set(COL_AUTOMATION_CONFIGS, tenantId, cleared);
+    return cleared;
+  }
+
+  public static async resetTitleRuleAsync(
+    tenantId: string,
+    updatedBy: string
+  ): Promise<AgencyAutomationConfigRecord> {
+    const existing = await this.getByTenantIdAsync(tenantId);
+    const platformDefault = await this.getPlatformDefaultRecordAsync();
+    const cleared: AgencyAutomationConfigRecord = {
+      id: existing?.id || `auto_${tenantId}`,
+      tenantId,
+      titleRule: normalizeTitleAutomationRule(platformDefault.titleRule),
+      isCustomOverride: false,
+      version: (existing?.version || 1) + 1,
+      updatedBy: updatedBy || "agency_admin",
+      updatedAt: new Date().toISOString(),
+    };
+    await PersistentStoreService.setAsync(COL_AUTOMATION_CONFIGS, tenantId, cleared);
     return cleared;
   }
 }

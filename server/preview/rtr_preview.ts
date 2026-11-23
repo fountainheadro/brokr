@@ -21,29 +21,32 @@ previewRouter.use(mwAuthentication, mwPlatformAuthorization);
  * GET /api/platform/preview/targets
  * Returns all agencies available for preview along with quick access metadata.
  */
-previewRouter.get("/targets", (_req: Request, res: Response) => {
+previewRouter.get("/targets", async (_req: Request, res: Response) => {
   try {
+    await TenantResolutionService.hydrateFromFirestore();
     const agencies = TenantResolutionService.getAllTenants();
-    const enriched = agencies.map((a) => {
-      const members = TenantMembershipService.listTenantMembers(a.id);
-      let planDisplayName = "Enterprise";
-      try {
-        const ent = QuotaService.getTenantEntitlements(a.id);
-        planDisplayName = ent.planDisplayName;
-      } catch {}
+    const enriched = await Promise.all(
+      agencies.map(async (a) => {
+        const members = await TenantMembershipService.listTenantMembersAsync(a.id);
+        let planDisplayName = "Enterprise";
+        try {
+          const ent = QuotaService.getTenantEntitlements(a.id);
+          planDisplayName = ent.planDisplayName;
+        } catch {}
 
-      return {
-        id: a.id,
-        name: a.name,
-        subdomain: a.subdomain,
-        status: a.status,
-        planId: a.planId,
-        planDisplayName,
-        membersCount: members.length,
-        enabledModulesCount: a.enabledModules?.length || 0,
-        branding: a.branding,
-      };
-    });
+        return {
+          id: a.id,
+          name: a.name,
+          subdomain: a.subdomain,
+          status: a.status,
+          planId: a.planId,
+          planDisplayName,
+          membersCount: members.length,
+          enabledModulesCount: a.enabledModules?.length || 0,
+          branding: a.branding,
+        };
+      })
+    );
 
     res.json(createSuccessResponse(enriched));
   } catch (err: any) {
@@ -53,9 +56,9 @@ previewRouter.get("/targets", (_req: Request, res: Response) => {
 
 /**
  * POST /api/platform/preview/start
- * Starts a server-validated preview session for a target agency.
+ * Starts a server-validated preview session persisted in Cloud Firestore.
  */
-previewRouter.post("/start", (req: Request, res: Response) => {
+previewRouter.post("/start", async (req: Request, res: Response) => {
   try {
     const { tenantId, simulatedRole = "agency_admin" } = req.body;
 
@@ -64,8 +67,11 @@ previewRouter.post("/start", (req: Request, res: Response) => {
       return;
     }
 
+    await TenantResolutionService.hydrateFromFirestore();
+    await TenantResolutionService.ensureTenantExistsInFirestore(tenantId);
+
     const superAdminUser = req.authUser!;
-    const session = PreviewSessionService.startSession({
+    const session = await PreviewSessionService.startSessionAsync({
       tenantId,
       superAdminUid: superAdminUser.uid,
       superAdminEmail: superAdminUser.email,
@@ -103,10 +109,9 @@ previewRouter.post("/start", (req: Request, res: Response) => {
 
 /**
  * POST /api/platform/preview/switch-role
- * Switches the simulated role (e.g. Administrator <-> Agent) in one click.
- * Only the Super Admin who owns the preview session can mutate it.
+ * Switches the simulated role (e.g. Administrator <-> Agent) permanently in Firestore.
  */
-previewRouter.post("/switch-role", (req: Request, res: Response) => {
+previewRouter.post("/switch-role", async (req: Request, res: Response) => {
   try {
     const { previewToken, newRole } = req.body;
     const effectiveToken = previewToken || (req.headers["x-preview-token"] as string);
@@ -118,7 +123,7 @@ previewRouter.post("/switch-role", (req: Request, res: Response) => {
       return;
     }
 
-    const existing = PreviewSessionService.getSession(effectiveToken);
+    const existing = await PreviewSessionService.getSessionAsync(effectiveToken);
     if (!existing) {
       res.status(401).json(createErrorResponse("UNAUTHORIZED", "Sesiunea de testare este invalidă sau a expirat."));
       return;
@@ -129,7 +134,7 @@ previewRouter.post("/switch-role", (req: Request, res: Response) => {
       return;
     }
 
-    const session = PreviewSessionService.switchRole(effectiveToken, newRole as UserRole);
+    const session = await PreviewSessionService.switchRoleAsync(effectiveToken, newRole as UserRole);
 
     res.json(
       createSuccessResponse({
@@ -155,7 +160,7 @@ previewRouter.post("/switch-role", (req: Request, res: Response) => {
  * GET /api/platform/preview/status
  * Validates whether a given preview session is currently active for the authenticated Super Admin.
  */
-previewRouter.get("/status", (req: Request, res: Response) => {
+previewRouter.get("/status", async (req: Request, res: Response) => {
   const token = (req.headers["x-preview-token"] as string) || null;
 
   if (!token) {
@@ -163,7 +168,7 @@ previewRouter.get("/status", (req: Request, res: Response) => {
     return;
   }
 
-  const session = PreviewSessionService.getSession(token);
+  const session = await PreviewSessionService.getSessionAsync(token);
   if (!session || session.superAdminUid !== req.authUser!.uid) {
     res.json(createSuccessResponse({ isActive: false }));
     return;
@@ -198,17 +203,17 @@ previewRouter.get("/status", (req: Request, res: Response) => {
  * POST /api/platform/preview/exit
  * Terminates and deletes the preview session owned by the authenticated Super Admin.
  */
-previewRouter.post("/exit", (req: Request, res: Response) => {
+previewRouter.post("/exit", async (req: Request, res: Response) => {
   const { previewToken } = req.body;
   const token = previewToken || (req.headers["x-preview-token"] as string);
 
   if (token) {
-    const existing = PreviewSessionService.getSession(token);
+    const existing = await PreviewSessionService.getSessionAsync(token);
     if (existing && existing.superAdminUid !== req.authUser!.uid) {
       res.status(403).json(createErrorResponse("FORBIDDEN", "Nu puteți închide sesiunea de testare a altui administrator."));
       return;
     }
-    PreviewSessionService.destroySession(token);
+    await PreviewSessionService.destroySessionAsync(token);
   }
 
   res.json(createSuccessResponse({ exited: true }));

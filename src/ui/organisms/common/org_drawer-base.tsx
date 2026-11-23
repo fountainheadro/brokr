@@ -39,21 +39,21 @@ export const OrgDrawerBase: React.FC<OrgDrawerBaseProps> = ({
   if (!isOpen) return null;
 
   const widthStyles = {
-    sm: "max-w-sm",
-    md: "max-w-md",
-    lg: "max-w-xl",
+    sm: "md:max-w-sm",
+    md: "md:max-w-md",
+    lg: "md:max-w-xl",
   };
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-[1400] flex justify-end bg-black/40 backdrop-blur-2xs animate-in fade-in duration-200"
+      className="fixed inset-0 z-[1400] flex justify-end bg-black/30 backdrop-blur-xs animate-in fade-in duration-200"
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className={`w-full bg-white h-full shadow-2xl border-l border-gray-200 flex flex-col animate-in slide-in-from-right duration-250 ${widthStyles[width]} ${className}`}
+        className={`w-[calc(100vw-48px)] md:w-full bg-white h-full shadow-2xl border-l border-gray-200 flex flex-col animate-in slide-in-from-right duration-250 ${widthStyles[width]} ${className}`}
       >
         {/* Drawer Header */}
         {(title || subtitle) && (

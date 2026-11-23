@@ -137,6 +137,20 @@ export class PreviewSessionService {
     return record;
   }
 
+  public static async startSessionAsync(params: {
+    tenantId: string;
+    superAdminUid: string;
+    superAdminEmail: string;
+    simulatedRole?: UserRole;
+    environment?: "development" | "staging" | "production";
+  }): Promise<PreviewSessionRecord> {
+    const record = this.startSession(params);
+    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+      await PersistentStoreService.setAsync(COL_PREVIEW_SESSIONS, record.token, record);
+    }
+    return record;
+  }
+
   public static getSession(token: string): PreviewSessionRecord | null {
     if (!token) return null;
     const session = PersistentStoreService.get<PreviewSessionRecord>(COL_PREVIEW_SESSIONS, token);
@@ -148,7 +162,7 @@ export class PreviewSessionService {
     }
 
     session.lastActiveAt = new Date().toISOString();
-    PersistentStoreService.set(COL_PREVIEW_SESSIONS, token, session);
+    PersistentStoreService.setCacheOnly(COL_PREVIEW_SESSIONS, token, session);
     return session;
   }
 
@@ -158,18 +172,18 @@ export class PreviewSessionService {
     if (!session && PersistentStoreService.isRemoteFirestoreConfigured()) {
       session = await PersistentStoreService.remoteGet<PreviewSessionRecord>(COL_PREVIEW_SESSIONS, token);
       if (session) {
-        PersistentStoreService.set(COL_PREVIEW_SESSIONS, token, session);
+        PersistentStoreService.setCacheOnly(COL_PREVIEW_SESSIONS, token, session);
       }
     }
     if (!session) return null;
 
     if (new Date(session.expiresAt) <= new Date()) {
-      PersistentStoreService.delete(COL_PREVIEW_SESSIONS, token);
+      await PersistentStoreService.deleteAsync(COL_PREVIEW_SESSIONS, token).catch(() => {});
       return null;
     }
 
     session.lastActiveAt = new Date().toISOString();
-    PersistentStoreService.set(COL_PREVIEW_SESSIONS, token, session);
+    PersistentStoreService.setCacheOnly(COL_PREVIEW_SESSIONS, token, session);
     return session;
   }
 
@@ -189,7 +203,7 @@ export class PreviewSessionService {
     session.lastActiveAt = new Date().toISOString();
     PersistentStoreService.set(COL_PREVIEW_SESSIONS, token, session);
 
-    PlatformAuditLogRepository.addLog({
+    void PlatformAuditLogRepository.addLog({
       action: "AGENCY_PREVIEW_ROLE_SWITCH" as any,
       actorUserId: session.superAdminUid,
       actorEmail: session.superAdminEmail,
@@ -207,10 +221,26 @@ export class PreviewSessionService {
     return session;
   }
 
+  public static async switchRoleAsync(token: string, newRole: UserRole): Promise<PreviewSessionRecord> {
+    const existing = await this.getSessionAsync(token);
+    if (!existing) {
+      throw new AppError({
+        message: "Sesiunea de testare este invalidă sau a expirat.",
+        code: "UNAUTHORIZED",
+        statusCode: 401,
+      });
+    }
+    const updated = this.switchRole(token, newRole);
+    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+      await PersistentStoreService.setAsync(COL_PREVIEW_SESSIONS, token, updated);
+    }
+    return updated;
+  }
+
   public static destroySession(token: string): boolean {
     const session = PersistentStoreService.get<PreviewSessionRecord>(COL_PREVIEW_SESSIONS, token);
     if (session) {
-      PlatformAuditLogRepository.addLog({
+      void PlatformAuditLogRepository.addLog({
         action: "AGENCY_PREVIEW_EXIT" as any,
         actorUserId: session.superAdminUid,
         actorEmail: session.superAdminEmail,
@@ -225,6 +255,25 @@ export class PreviewSessionService {
     }
 
     return PersistentStoreService.delete(COL_PREVIEW_SESSIONS, token);
+  }
+
+  public static async destroySessionAsync(token: string): Promise<boolean> {
+    const existing = await this.getSessionAsync(token);
+    if (existing) {
+      await PlatformAuditLogRepository.addLog({
+        action: "AGENCY_PREVIEW_EXIT" as any,
+        actorUserId: existing.superAdminUid,
+        actorEmail: existing.superAdminEmail,
+        targetType: "agency" as any,
+        targetId: existing.tenantId,
+        details: {
+          message: `Ieșire din sesiunea de testare pentru agenția ${existing.tenantName}`,
+          tenantId: existing.tenantId,
+        },
+        ipAddress: "127.0.0.1",
+      });
+    }
+    return PersistentStoreService.deleteAsync(COL_PREVIEW_SESSIONS, token);
   }
 
   public static purgeExpiredSessions(): number {

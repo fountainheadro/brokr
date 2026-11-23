@@ -1,4 +1,6 @@
 import crypto from "crypto";
+import fs from "fs";
+import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { defaultFormats, defaultPlugins } from "jimp";
@@ -14,10 +16,32 @@ const Jimp = createJimp({
   plugins: defaultPlugins,
 });
 
-const RUNTIME_SECRET =
-  process.env.PUBLIC_MEDIA_SECRET?.trim() ||
-  process.env.SESSION_SECRET?.trim() ||
-  crypto.randomBytes(32).toString("hex");
+function resolveRuntimeSecret(): string {
+  const fromEnv =
+    process.env.PUBLIC_MEDIA_SECRET?.trim() ||
+    process.env.SESSION_SECRET?.trim() ||
+    process.env.STORAGE_SIGNING_SECRET?.trim();
+  if (fromEnv) return fromEnv;
+
+  // Derive a deterministic deployment-scoped secret so signed public image tokens
+  // remain valid across server restarts and multi-instance Cloud Run scaling.
+  try {
+    const cfgPath = path.resolve(process.cwd(), "firebase-applet-config.json");
+    if (fs.existsSync(cfgPath)) {
+      const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+      const seed = `${cfg.projectId || ""}|${cfg.apiKey || ""}|${cfg.firestoreDatabaseId || ""}|brokr-public-media-v1`;
+      if (seed.length > 30) {
+        return crypto.createHash("sha256").update(seed).digest("hex");
+      }
+    }
+  } catch {
+    // Fall through to random secret
+  }
+
+  return crypto.randomBytes(32).toString("hex");
+}
+
+const RUNTIME_SECRET = resolveRuntimeSecret();
 
 export interface PublicImageTokenPayload {
   u: string; // source image URL or /api/storage/media/... or data URL hash key
@@ -28,15 +52,62 @@ export interface PublicImageTokenPayload {
   jti: string; // unique token ID
 }
 
-const TOKEN_MAX_FETCHES = 24;
+const TOKEN_MAX_FETCHES = 120;
 const tokenFetchCounts = new Map<string, { count: number; exp: number }>();
 
 const protectedImageCache = new Map<
   string,
   { buffer: Buffer; mimeType: string; ts: number }
 >();
-const PROTECTED_CACHE_MAX = 150;
-const PROTECTED_CACHE_TTL_MS = 5 * 60 * 1000;
+const pendingProtectedBuilds = new Map<
+  string,
+  Promise<{ buffer: Buffer; mimeType: string }>
+>();
+const PROTECTED_CACHE_MAX = 300;
+const PROTECTED_CACHE_TTL_MS = 15 * 60 * 1000;
+
+// Bounded concurrency for ImageMagick/Jimp transforms so opening a 20+ photo lightbox
+// never starves CPU or causes subprocess timeouts.
+const MAX_CONCURRENT_TRANSFORMS = 4;
+let activeTransforms = 0;
+const transformWaitQueue: Array<() => void> = [];
+
+async function withTransformSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (activeTransforms >= MAX_CONCURRENT_TRANSFORMS) {
+    await new Promise<void>((resolve) => transformWaitQueue.push(resolve));
+  }
+  activeTransforms++;
+  try {
+    return await fn();
+  } finally {
+    activeTransforms--;
+    const next = transformWaitQueue.shift();
+    if (next) next();
+  }
+}
+
+export function buildProtectedImageCacheKey(
+  cacheKey: string,
+  maxWidth?: number | null,
+  preferWebp = false
+): string {
+  const capWidth = Math.min(1600, Math.max(100, maxWidth || 1200));
+  const fmt = preferWebp ? "webp" : "jpeg";
+  return `clean::${cacheKey}::w=${capWidth}::fmt=${fmt}`;
+}
+
+export function getCachedProtectedPublicImage(
+  cacheKey: string,
+  maxWidth?: number | null,
+  preferWebp = false
+): { buffer: Buffer; mimeType: string } | null {
+  const fullCacheKey = buildProtectedImageCacheKey(cacheKey, maxWidth, preferWebp);
+  const cached = protectedImageCache.get(fullCacheKey);
+  if (cached && Date.now() - cached.ts < PROTECTED_CACHE_TTL_MS) {
+    return { buffer: cached.buffer, mimeType: cached.mimeType };
+  }
+  return null;
+}
 
 function pruneTokenCounts() {
   const now = Date.now();
@@ -280,54 +351,72 @@ export async function applyPublicImageProtections(
     preferWebp?: boolean;
   }
 ): Promise<{ buffer: Buffer; mimeType: string }> {
-  const capWidth = Math.min(1200, Math.max(100, options.maxWidth || 1200));
+  const capWidth = Math.min(1600, Math.max(100, options.maxWidth || 1200));
   const preferWebp = options.preferWebp ?? false;
-  const fmt = preferWebp ? "webp" : "jpeg";
-  const fullCacheKey = `clean::${options.cacheKey}::w=${capWidth}::fmt=${fmt}`;
+  const fullCacheKey = buildProtectedImageCacheKey(options.cacheKey, capWidth, preferWebp);
   const cached = protectedImageCache.get(fullCacheKey);
   if (cached && Date.now() - cached.ts < PROTECTED_CACHE_TTL_MS) {
     return { buffer: cached.buffer, mimeType: cached.mimeType };
   }
 
-  let outBuffer: Buffer;
-  let outMime: string;
+  const inflight = pendingProtectedBuilds.get(fullCacheKey);
+  if (inflight) {
+    return inflight;
+  }
 
-  const detectedMime = detectImageMagicBytes(rawBuffer)?.mime || "image/jpeg";
-  try {
-    const resized = await createThumbnail({
-      buffer: rawBuffer,
-      mimeType: detectedMime,
-      targetWidth: capWidth,
-      preferWebp,
-      forceJpeg: !preferWebp,
-      quality: preferWebp ? 86 : 88,
-      cacheKey: fullCacheKey,
-    });
-    outBuffer = resized.data;
-    outMime = resized.mimeType;
-  } catch {
-    try {
-      const img = await readImageWithFallback(rawBuffer);
-      if (img.width > capWidth || img.height > capWidth) {
-        img.scaleToFit({ w: capWidth, h: capWidth });
-      }
-      outBuffer = await img.getBuffer("image/jpeg" as any, { quality: 88 });
-      outMime = "image/jpeg";
-    } catch {
-      outBuffer = rawBuffer;
-      outMime = detectedMime;
+  const work = withTransformSlot(async (): Promise<{ buffer: Buffer; mimeType: string }> => {
+    const cachedInside = protectedImageCache.get(fullCacheKey);
+    if (cachedInside && Date.now() - cachedInside.ts < PROTECTED_CACHE_TTL_MS) {
+      return { buffer: cachedInside.buffer, mimeType: cachedInside.mimeType };
     }
-  }
 
-  if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
-    const oldestKey = protectedImageCache.keys().next().value;
-    if (oldestKey) protectedImageCache.delete(oldestKey);
-  }
-  protectedImageCache.set(fullCacheKey, {
-    buffer: outBuffer,
-    mimeType: outMime,
-    ts: Date.now(),
+    let outBuffer: Buffer;
+    let outMime: string;
+
+    const detectedMime = detectImageMagicBytes(rawBuffer)?.mime || "image/jpeg";
+    try {
+      const resized = await createThumbnail({
+        buffer: rawBuffer,
+        mimeType: detectedMime,
+        targetWidth: capWidth,
+        preferWebp,
+        forceJpeg: !preferWebp,
+        quality: preferWebp ? 86 : 88,
+        cacheKey: fullCacheKey,
+      });
+      outBuffer = resized.data;
+      outMime = resized.mimeType;
+    } catch {
+      try {
+        const img = await readImageWithFallback(rawBuffer);
+        if (img.width > capWidth || img.height > capWidth) {
+          img.scaleToFit({ w: capWidth, h: capWidth });
+        }
+        outBuffer = await img.getBuffer("image/jpeg" as any, { quality: 88 });
+        outMime = "image/jpeg";
+      } catch {
+        outBuffer = rawBuffer;
+        outMime = detectedMime;
+      }
+    }
+
+    if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
+      const oldestKey = protectedImageCache.keys().next().value;
+      if (oldestKey) protectedImageCache.delete(oldestKey);
+    }
+    protectedImageCache.set(fullCacheKey, {
+      buffer: outBuffer,
+      mimeType: outMime,
+      ts: Date.now(),
+    });
+
+    return { buffer: outBuffer, mimeType: outMime };
   });
 
-  return { buffer: outBuffer, mimeType: outMime };
+  pendingProtectedBuilds.set(fullCacheKey, work);
+  try {
+    return await work;
+  } finally {
+    pendingProtectedBuilds.delete(fullCacheKey);
+  }
 }

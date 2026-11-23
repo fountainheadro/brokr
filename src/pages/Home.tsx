@@ -9,6 +9,7 @@ import { AddLeadModal } from "../components/AddLeadModal";
 import { LeadList } from "../components/LeadList";
 import { LeadCard } from "../components/LeadCard";
 import { leadsService, Lead, LeadStatus, LeadRole, getLeadRole, CERERI_STATUSES, PROPRIETATI_STATUSES, isCerereLead } from "../services/leadsService";
+import { isSummaryLeadRecord } from "../core/crm/svc_lead-projection";
 import { entityIdService } from "../services/entityIdService";
 import { contactsService, Contact } from "../services/contactsService";
 import { personalService, PersonalMember } from "../services/personalService";
@@ -85,6 +86,7 @@ import { auth } from "../lib/firebase";
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider } from "firebase/auth";
 import { useAuth } from "../core/auth/ctx_auth";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
+import { clientDataHub } from "../core/crm/svc_client-data-hub";
 import { CATEGORIA_OPTIONS, TRANZACTIE_OPTIONS } from "../constants";
 
 import { ViewingDetailsModal } from "../components/ViewingDetailsModal";
@@ -552,29 +554,33 @@ export const Home: React.FC = () => {
   const [selectedLeadAgent, setSelectedLeadAgent] = useState<string>("all");
 
   useEffect(() => {
-    if (!user || !tenant?.id) {
+    if (!user || !tenantContext?.tenantId) {
       setAgencyMembers([]);
       return;
     }
-    let cancelled = false;
-    const loadMembers = async () => {
-      try {
-        const headers = await getApiAuthHeaders();
-        const res = await fetch("/api/tenant/members", { headers });
-        if (!res.ok) return;
-        const json = await res.json();
-        if (!cancelled && json?.success && Array.isArray(json.data)) {
-          setAgencyMembers(json.data);
-        }
-      } catch (err) {
-        console.warn("[Home] Could not fetch agency members:", err);
-      }
-    };
-    void loadMembers();
+
+    const unsubscribe = clientDataHub.subscribeCollection<AgencyMemberSummary & { status?: string }>(
+      "users",
+      (members) => {
+        const activeMembers: AgencyMemberSummary[] = members
+          .filter((m) => !m.status || m.status === "active")
+          .map((m) => ({
+            id: m.id,
+            userId: m.userId || m.id,
+            name: m.name,
+            email: m.email,
+            role: m.role,
+            status: m.status || "active",
+          }));
+        setAgencyMembers(activeMembers);
+      },
+      { limit: 300 }
+    );
+
     return () => {
-      cancelled = true;
+      unsubscribe();
     };
-  }, [user, tenant?.id]);
+  }, [user, tenantContext?.tenantId]);
 
   const currentAgentIdentity = useMemo(
     () =>
@@ -1537,6 +1543,36 @@ export const Home: React.FC = () => {
     prevPathnameRef.current = location.pathname;
   }, [location.pathname, leads, user]);
 
+  // Phase 2: Lazy canonical full-document hydration when opening a slim summary lead in detail view
+  useEffect(() => {
+    if (!selectedLead?.id || !isSummaryLeadRecord(selectedLead)) return;
+    let cancelled = false;
+    const targetId = selectedLead.id;
+    void leadsService.getLead(targetId).then((canonical) => {
+      if (cancelled || !canonical) return;
+      setSelectedLead((prev) => (prev && prev.id === targetId ? { ...prev, ...canonical, isSummary: false } : prev));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedLead?.id, selectedLead?.isSummary]);
+
+  // Phase 2: Lazy canonical hydration when opening Quick View modal on a slim summary lead
+  useEffect(() => {
+    if (!isQuickViewOpen || !selectedQuickViewLead?.id || !isSummaryLeadRecord(selectedQuickViewLead)) return;
+    let cancelled = false;
+    const targetId = selectedQuickViewLead.id;
+    void leadsService.getLead(targetId).then((canonical) => {
+      if (cancelled || !canonical) return;
+      setSelectedQuickViewLead((prev) =>
+        prev && prev.id === targetId ? { ...prev, ...canonical, isSummary: false } : prev
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isQuickViewOpen, selectedQuickViewLead?.id, selectedQuickViewLead?.isSummary]);
+
   useEffect(() => {
     if (selectedLead && leads.length > 0) {
       const currentLead = leads.find(l => l.id === selectedLead.id);
@@ -1545,6 +1581,53 @@ export const Home: React.FC = () => {
         // Increased from 5s to 10s to be very safe against slow Firestore propagation
         if (lastOptimisticUpdate.current?.id === selectedLead.id && (Date.now() - lastOptimisticUpdate.current.time < 10000)) {
           // Still check if it's the SAME lead ID, if not, we should probably allow sync
+          return;
+        }
+
+        // Phase 2 guard: never clobber a hydrated canonical selectedLead with a slim summary projection.
+        // Merge updated summary metadata cleanly and re-hydrate canonical doc if docVersion advanced.
+        if (isSummaryLeadRecord(currentLead) && !isSummaryLeadRecord(selectedLead)) {
+          const summaryChanged =
+            currentLead.status !== selectedLead.status ||
+            currentLead.price !== selectedLead.price ||
+            currentLead.title !== selectedLead.title ||
+            currentLead.zone !== selectedLead.zone ||
+            currentLead.ownerName !== selectedLead.ownerName ||
+            currentLead.ownerPhone !== selectedLead.ownerPhone ||
+            currentLead.propertyId !== selectedLead.propertyId ||
+            (Number(currentLead.docVersion || 0) > Number(selectedLead.docVersion || 0));
+
+          if (summaryChanged) {
+            const versionAdvanced =
+              Number(currentLead.docVersion || 0) > Number(selectedLead.docVersion || 0);
+            setSelectedLead((prev) =>
+              prev && prev.id === currentLead.id
+                ? {
+                    ...prev,
+                    status: currentLead.status,
+                    price: currentLead.price,
+                    title: currentLead.title,
+                    zone: currentLead.zone,
+                    ownerName: currentLead.ownerName,
+                    ownerPhone: currentLead.ownerPhone,
+                    propertyId: currentLead.propertyId || prev.propertyId,
+                    docVersion: currentLead.docVersion ?? prev.docVersion,
+                    updatedAt: currentLead.updatedAt ?? prev.updatedAt,
+                    lastMovedAt: currentLead.lastMovedAt ?? prev.lastMovedAt,
+                  }
+                : prev
+            );
+            if (versionAdvanced && currentLead.id) {
+              const targetId = currentLead.id;
+              void leadsService.getLead(targetId).then((canonical) => {
+                if (canonical) {
+                  setSelectedLead((prev) =>
+                    prev && prev.id === targetId ? { ...prev, ...canonical, isSummary: false } : prev
+                  );
+                }
+              });
+            }
+          }
           return;
         }
 
@@ -1756,13 +1839,31 @@ export const Home: React.FC = () => {
   const handleSaveDetails = async () => {
     if (!selectedLead?.id) return;
     try {
-      let updatedExtractedData = undefined;
+      let updatedExtractedData: any = undefined;
       if (selectedLead.extractedData) {
-        updatedExtractedData = { ...selectedLead.extractedData };
+        updatedExtractedData = JSON.parse(JSON.stringify(selectedLead.extractedData));
         if (updatedExtractedData.crmData?.descriere) {
           updatedExtractedData.crmData.descriere = {
             ...updatedExtractedData.crmData.descriere,
             continut: updateDescriptionId(updatedExtractedData.crmData.descriere.continut || "", editedPropertyId)
+          };
+        }
+        if (updatedExtractedData.crmData) {
+          updatedExtractedData.crmData.pret = {
+            ...(updatedExtractedData.crmData.pret || {}),
+            detalii: {
+              ...(updatedExtractedData.crmData.pret?.detalii || {}),
+              pret: editedPrice,
+            },
+          };
+        }
+        if (updatedExtractedData.presentationSections?.tranzactie) {
+          updatedExtractedData.presentationSections = {
+            ...updatedExtractedData.presentationSections,
+            tranzactie: {
+              ...updatedExtractedData.presentationSections.tranzactie,
+              "Preț": editedPrice,
+            },
           };
         }
         if (updatedExtractedData.markdownMarketing) {
@@ -1785,7 +1886,15 @@ export const Home: React.FC = () => {
         updatePayload.extractedData = updatedExtractedData;
       }
 
-      await leadsService.updateLeadData(selectedLead.id, updatePayload);
+      const persisted = await leadsService.updateLeadData(selectedLead.id, updatePayload);
+      const mergedLead = {
+        ...selectedLead,
+        ...updatePayload,
+        ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
+        ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
+      };
+
+      void publishPublicShareSnapshot(mergedLead, { tenantId: tenant?.id, force: true });
 
       setSelectedLead(prev => {
         if (!prev) return null;
@@ -1793,7 +1902,7 @@ export const Home: React.FC = () => {
           ...prev, 
           ownerName: editedName, 
           ownerPhone: editedPhone,
-          propertyId: editedPropertyId,
+          propertyId: persisted?.propertyId || editedPropertyId,
           title: editedTitle,
           zone: editedZone,
           price: editedPrice,
@@ -1809,7 +1918,7 @@ export const Home: React.FC = () => {
             ...l,
             ownerName: editedName, 
             ownerPhone: editedPhone,
-            propertyId: editedPropertyId,
+            propertyId: persisted?.propertyId || editedPropertyId,
             title: editedTitle,
             zone: editedZone,
             price: editedPrice,
@@ -1890,7 +1999,15 @@ export const Home: React.FC = () => {
         ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
         ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
         ...(persisted?.isSharedLead === false ? { isSharedLead: false } : {}),
+        ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
       };
+      const existingLead = leads.find((l) => l.id === leadId) || selectedLead;
+      if (existingLead) {
+        void publishPublicShareSnapshot(
+          { ...existingLead, ...mergedPatch },
+          { tenantId: tenant?.id, force: true }
+        );
+      }
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPatch } : l));
     } catch (e) {
       console.error("Failed to save nevalidat lead:", e);

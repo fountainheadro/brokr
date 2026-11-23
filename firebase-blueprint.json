@@ -1,214 +1,12 @@
 {
   "entities": {
     "Lead": {
-      "title": "Real Estate Lead",
-      "description": "A potential property lead for crawling and processing",
+      "title": "Real Estate Lead / Property / Request",
+      "description": "Tenant-isolated agency lead, active property listing, or client request (cerere)",
       "type": "object",
       "properties": {
-        "url": { "type": "string", "description": "The listing URL" },
-        "title": { "type": "string", "description": "Property title" },
-        "zone": { "type": "string", "description": "Property location zone" },
-        "price": { "type": "string", "description": "Property price" },
-        "ownerName": { "type": "string", "description": "Name of the owner/contact" },
-        "ownerPhone": { "type": "string", "description": "Phone number of the owner/contact" },
-        "transactionType": { "type": "string", "enum": ["Vânzare", "Închiriere"] },
-        "categoria": { "type": "string", "enum": ["Apartamente", "Case / Vile", "Terenuri", "Spatii birouri", "Spatii comerciale", "Spatii industriale", "Spatii depozitare", "Hale", "Alte tipuri"] },
-        "status": { "type": "string", "enum": ["Lead-uri", "Prospectare", "Publicare", "Cerere", "Vizionare", "Semnare", "Arhiva", "Sterse"] },
-        "extractedData": { "type": "object", "description": "Full Gemini extraction result" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" },
-        "lastMovedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["url", "status", "createdAt", "updatedAt"]
-    },
-    "Contact": {
-      "title": "Property Contact",
-      "description": "An owner, renter, or buyer associated with a property",
-      "type": "object",
-      "properties": {
-        "firstName": { "type": "string" },
-        "lastName": { "type": "string" },
-        "type": { "type": "string", "enum": ["Owner", "Renter", "Buyer", "Agent"] },
-        "phone": { "type": "string" },
-        "propertyId": { "type": "string", "description": "Manual text ID of the associated property" },
-        "commissionValue": { "type": "string", "description": "Optional commission details" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["firstName", "lastName", "type", "phone", "propertyId", "createdAt", "updatedAt"]
-    },
-    "Viewing": {
-      "title": "Property Viewing",
-      "description": "A scheduled meeting between an agent, owner, and potential client",
-      "type": "object",
-      "properties": {
-        "propertyId": { "type": "string" },
-        "contactId": { "type": "string" },
-        "contactName": { "type": "string" },
-        "agentId": { "type": "string" },
-        "agentName": { "type": "string" },
-        "date": { "type": "string", "format": "date" },
-        "hour": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["propertyId", "contactId", "contactName", "date", "hour", "createdAt", "updatedAt"]
-    },
-    "Staff": {
-      "title": "Agency Staff Member",
-      "description": "An agent, broker, manager, or staff member in the agency",
-      "type": "object",
-      "properties": {
-        "staffId": { "type": "string", "description": "Sequential ID formatted as S1, S2, S1026" },
-        "personalId": { "type": "string", "description": "Legacy alias for staffId" },
-        "tenantId": { "type": "string" },
-        "name": { "type": "string" },
-        "role": { "type": "string" },
-        "phone": { "type": "string" },
-        "email": { "type": "string" },
-        "status": { "type": "string", "enum": ["Activ", "Inactiv", "active", "inactive"] },
-        "zone": { "type": "string" },
-        "notes": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["name", "role", "phone", "status", "createdAt", "updatedAt"]
-    },
-    "Personal": {
-      "title": "Legacy Agency Staff Member",
-      "description": "Legacy staff member record (migrated to Staff)",
-      "type": "object",
-      "properties": {
-        "personalId": { "type": "string", "description": "Sequential ID formatted as S1, S2, S1026" },
-        "name": { "type": "string" },
-        "role": { "type": "string" },
-        "phone": { "type": "string" },
-        "email": { "type": "string" },
-        "status": { "type": "string", "enum": ["Activ", "Inactiv"] },
-        "zone": { "type": "string" },
-        "notes": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["name", "role", "phone", "status", "createdAt", "updatedAt"]
-    },
-    "Document": {
-      "title": "Property Document",
-      "description": "Contracts, title deeds, floor plans, energy certificates, and identity files",
-      "type": "object",
-      "properties": {
-        "documentId": { "type": "string", "description": "Sequential ID formatted as D01, D02, D1029" },
-        "title": { "type": "string" },
-        "type": { "type": "string" },
-        "propertyId": { "type": "string" },
-        "clientId": { "type": "string" },
-        "staffId": { "type": "string" },
-        "fileUrl": { "type": "string" },
-        "notes": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["title", "type", "createdAt", "updatedAt"]
-    },
-    "Tour": {
-      "title": "Property Tour Viewing",
-      "description": "A scheduled property tour viewing with a client and staff member",
-      "type": "object",
-      "properties": {
-        "tourId": { "type": "string", "description": "Sequential ID formatted as T1, T2, T1021" },
-        "propertyId": { "type": "string" },
-        "clientId": { "type": "string" },
-        "clientName": { "type": "string" },
-        "clientPhone": { "type": "string" },
-        "staffId": { "type": "string" },
-        "staffName": { "type": "string" },
-        "date": { "type": "string", "format": "date" },
-        "hour": { "type": "string" },
-        "status": { "type": "string", "enum": ["Programată", "Realizată", "Anulată"] },
-        "notes": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["propertyId", "clientName", "date", "hour", "createdAt", "updatedAt"]
-    },
-    "Activity": {
-      "title": "Agency Activity",
-      "description": "A scheduled activity such as property viewing, meeting, call, inspection, or task",
-      "type": "object",
-      "properties": {
-        "activityId": { "type": "string", "description": "Sequential ID formatted as A1, A2, A1022" },
-        "propertyId": { "type": "string" },
-        "clientId": { "type": "string" },
-        "clientName": { "type": "string" },
-        "clientPhone": { "type": "string" },
-        "staffId": { "type": "string" },
-        "staffName": { "type": "string" },
-        "type": { "type": "string", "description": "Vizionare, Întâlnire, Apel, Notă, Evaluare, Altele" },
-        "date": { "type": "string", "format": "date" },
-        "hour": { "type": "string" },
-        "status": { "type": "string", "enum": ["Programată", "Realizată", "Anulată"] },
-        "notes": { "type": "string" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["clientName", "date", "hour", "createdAt", "updatedAt"]
-    },
-    "Tenant": {
-      "title": "Agency Tenant",
-      "description": "Independent real-estate agency tenant with custom branding, quotas and configuration",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "subdomain": { "type": "string" },
-        "customDomain": { "type": "string" },
-        "name": { "type": "string" },
-        "status": { "type": "string", "enum": ["pending", "trial", "active", "suspended", "cancelled"] },
-        "planId": { "type": "string" },
-        "branding": { "type": "object" },
-        "enabledModules": { "type": "array" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "subdomain", "name", "status", "createdAt", "updatedAt"]
-    },
-    "TenantUser": {
-      "title": "Agency Tenant Member",
-      "description": "User membership record linking a user identity to an agency tenant with an RBAC role",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "tenantId": { "type": "string" },
-        "userId": { "type": "string" },
-        "email": { "type": "string" },
-        "name": { "type": "string" },
-        "role": { "type": "string", "enum": ["agency_owner", "agency_admin", "manager", "agent", "assistant"] },
-        "status": { "type": "string", "enum": ["invited", "active", "suspended", "revoked"] },
-        "permissions": { "type": "array" },
-        "createdAt": { "type": "string", "format": "date-time" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "tenantId", "userId", "email", "role", "status", "createdAt", "updatedAt"]
-    },
-    "AutomationConfig": {
-      "title": "Agency Automation Rule Config",
-      "description": "Agency-scoped configuration for external ad title formatting rules, category priorities, and character bounds",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string" },
-        "tenantId": { "type": "string" },
-        "titleRule": { "type": "object" },
-        "version": { "type": "number" },
-        "updatedBy": { "type": "string" },
-        "updatedAt": { "type": "string", "format": "date-time" }
-      },
-      "required": ["id", "tenantId", "titleRule", "updatedAt"]
-    },
-    "SharedLead": {
-      "title": "Global Shared Auto-Crawled Lead",
-      "description": "Real estate lead imported by Super Admin Auto Crawl and automatically displayed identically in every agency's Leads section",
-      "type": "object",
-      "properties": {
-        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
         "propertyId": { "type": "string", "maxLength": 64 },
         "url": { "type": "string", "maxLength": 2048 },
         "title": { "type": "string", "maxLength": 500 },
@@ -219,35 +17,387 @@
         "transactionType": { "type": "string", "enum": ["Vânzare", "Închiriere"] },
         "categoria": { "type": "string", "maxLength": 100 },
         "status": { "type": "string", "maxLength": 64 },
-        "leadType": { "type": "string", "maxLength": 64 },
-        "coverImage": { "type": "string", "maxLength": 2048 },
-        "images": { "type": "array" },
-        "notes": { "type": "string", "maxLength": 10000 },
         "extractedData": { "type": "object" },
-        "isSharedLead": { "type": "boolean" },
-        "source": { "type": "string", "maxLength": 64 },
-        "createdByName": { "type": "string", "maxLength": 200 },
-        "createdByEmail": { "type": "string", "maxLength": 200 },
-        "author": { "type": "string", "maxLength": 200 },
-        "agent": { "type": "string", "maxLength": 200 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
         "lastMovedAt": { "type": "string", "format": "date-time" }
       },
+      "required": ["tenantId", "status", "createdAt", "updatedAt"]
+    },
+    "LeadSummary": {
+      "title": "Slim Agency Lead Summary Projection",
+      "description": "Read-only <=2.5 KB slim list/table/filter projection atomically synchronized with /tenants/{tenantId}/leads. Explicitly excludes images[], extractedData, notes, memoPrivat, and notePrivate.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "url": { "type": "string", "maxLength": 512 },
+        "title": { "type": "string", "maxLength": 220 },
+        "zone": { "type": "string", "maxLength": 120 },
+        "city": { "type": "string", "maxLength": 80 },
+        "price": { "type": "string", "maxLength": 64 },
+        "priceNumeric": { "type": "number" },
+        "usefulArea": { "type": "number" },
+        "rooms": { "type": "number" },
+        "compartimentare": { "type": "string", "maxLength": 64 },
+        "floor": { "type": "string", "maxLength": 64 },
+        "constructieBuckets": { "type": "array" },
+        "transactionType": { "type": "string", "enum": ["Vânzare", "Închiriere"] },
+        "categoria": { "type": "string", "maxLength": 64 },
+        "olxCategoryId": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "maxLength": 64 },
+        "entityKind": { "type": "string", "enum": ["lead", "property", "cerere"] },
+        "leadType": { "type": "string", "maxLength": 64 },
+        "coverThumbUrl": { "type": "string", "maxLength": 512 },
+        "ownerName": { "type": "string", "maxLength": 120 },
+        "ownerPhone": { "type": "string", "maxLength": 48 },
+        "agent": { "type": "string", "maxLength": 120 },
+        "assignedAgentId": { "type": "string", "maxLength": 128 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "lastMovedAt": { "type": "string", "format": "date-time" },
+        "deletedAt": { "type": "string", "format": "date-time" },
+        "docVersion": { "type": "number" },
+        "isSummary": { "type": "boolean" },
+        "searchTokens": { "type": "array" }
+      },
+      "required": ["id", "tenantId", "status", "docVersion", "isSummary", "createdAt", "updatedAt"]
+    },
+    "Contact": {
+      "title": "Property Contact",
+      "description": "An owner, renter, buyer, or partner agent within an agency",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "contactId": { "type": "string", "maxLength": 64 },
+        "firstName": { "type": "string", "maxLength": 200 },
+        "lastName": { "type": "string", "maxLength": 200 },
+        "type": { "type": "string", "maxLength": 64 },
+        "phone": { "type": "string", "maxLength": 100 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "commissionValue": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "createdAt", "updatedAt"]
+    },
+    "Viewing": {
+      "title": "Property Viewing",
+      "description": "A scheduled viewing between an agent and client",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "contactId": { "type": "string", "maxLength": 128 },
+        "contactName": { "type": "string", "maxLength": 200 },
+        "agentId": { "type": "string", "maxLength": 128 },
+        "agentName": { "type": "string", "maxLength": 200 },
+        "date": { "type": "string", "format": "date" },
+        "hour": { "type": "string", "maxLength": 32 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "date", "hour", "updatedAt"]
+    },
+    "Staff": {
+      "title": "Agency Staff Member",
+      "description": "An agent, broker, manager, or staff member in the agency",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "staffId": { "type": "string", "maxLength": 64 },
+        "personalId": { "type": "string", "maxLength": 64 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "maxLength": 200 },
+        "role": { "type": "string", "maxLength": 100 },
+        "phone": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["Activ", "Inactiv", "active", "inactive"] },
+        "zone": { "type": "string", "maxLength": 200 },
+        "notes": { "type": "string", "maxLength": 5000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "name", "status", "createdAt", "updatedAt"]
+    },
+    "Document": {
+      "title": "Property Document",
+      "description": "Contracts, title deeds, floor plans, energy certificates, and identity files",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "documentId": { "type": "string", "maxLength": 64 },
+        "title": { "type": "string", "maxLength": 500 },
+        "type": { "type": "string", "maxLength": 100 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "fileUrl": { "type": "string", "maxLength": 2048 },
+        "notes": { "type": "string", "maxLength": 5000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "title", "createdAt", "updatedAt"]
+    },
+    "Tour": {
+      "title": "Property Tour Viewing",
+      "description": "A scheduled property tour viewing with a client and staff member",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "tourId": { "type": "string", "maxLength": 64 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 200 },
+        "clientPhone": { "type": "string", "maxLength": 100 },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "staffName": { "type": "string", "maxLength": 200 },
+        "date": { "type": "string", "format": "date" },
+        "hour": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["Programată", "Realizată", "Anulată"] },
+        "notes": { "type": "string", "maxLength": 5000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "date", "hour", "createdAt", "updatedAt"]
+    },
+    "Activity": {
+      "title": "Agency Activity",
+      "description": "A scheduled activity such as property viewing, meeting, call, inspection, or task",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "activityId": { "type": "string", "maxLength": 64 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "clientId": { "type": "string", "maxLength": 128 },
+        "clientName": { "type": "string", "maxLength": 200 },
+        "clientPhone": { "type": "string", "maxLength": 100 },
+        "staffId": { "type": "string", "maxLength": 128 },
+        "staffName": { "type": "string", "maxLength": 200 },
+        "type": { "type": "string", "maxLength": 64 },
+        "date": { "type": "string", "format": "date" },
+        "hour": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "enum": ["Programată", "Realizată", "Anulată"] },
+        "notes": { "type": "string", "maxLength": 5000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "date", "hour", "createdAt", "updatedAt"]
+    },
+    "Notification": {
+      "title": "User Notification",
+      "description": "User-scoped agency CRM notification partitioned by userId inside the tenant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 300 },
+        "body": { "type": "string", "maxLength": 2000 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "userId", "createdAt", "updatedAt"]
+    },
+    "FcmToken": {
+      "title": "Push Notification Token",
+      "description": "Device FCM push notification token scoped to a user inside an agency",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 256 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "token": { "type": "string", "maxLength": 512 },
+        "email": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "userId", "token", "updatedAt"]
+    },
+    "EntityCounter": {
+      "title": "Sharded Atomic Entity Counter",
+      "description": "Per-entity-type atomic sequential counter inside a tenant eliminating single-doc write contention",
+      "type": "object",
+      "properties": {
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "key": { "type": "string", "maxLength": 64 },
+        "value": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tenantId", "updatedAt"]
+    },
+    "Tenant": {
+      "title": "Agency Tenant",
+      "description": "Independent real-estate agency tenant with custom branding, quotas and configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "subdomain": { "type": "string", "maxLength": 100 },
+        "customDomain": { "type": "string", "maxLength": 255 },
+        "name": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["pending", "trial", "active", "suspended", "cancelled"] },
+        "planId": { "type": "string", "maxLength": 100 },
+        "branding": { "type": "object" },
+        "enabledModules": { "type": "array" },
+        "authVersion": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "subdomain", "name", "status", "createdAt", "updatedAt"]
+    },
+    "TenantUser": {
+      "title": "Agency Tenant Member",
+      "description": "O(1) UID-keyed membership record linking a verified Firebase user to an agency tenant with an RBAC role",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "userId": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 200 },
+        "name": { "type": "string", "maxLength": 200 },
+        "role": { "type": "string", "enum": ["agency_owner", "agency_admin", "manager", "agent", "assistant"] },
+        "status": { "type": "string", "enum": ["invited", "active", "suspended", "revoked"] },
+        "permissions": { "type": "array" },
+        "authVersion": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "userId", "email", "role", "status", "createdAt", "updatedAt"]
+    },
+    "TenantSetting": {
+      "title": "Agency Setting",
+      "description": "Agency-scoped configuration document (e.g. market auto-import filter rules)",
+      "type": "object",
+      "properties": {
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["updatedAt"]
+    },
+    "AgencyAdminNote": {
+      "title": "Platform Admin Note on Agency",
+      "description": "Super Admin internal administrative note attached to an agency",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "author": { "type": "string", "maxLength": 200 },
+        "content": { "type": "string", "maxLength": 5000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "author", "content", "createdAt"]
+    },
+    "AutomationConfig": {
+      "title": "Automation Rule Config",
+      "description": "Platform default or agency-scoped external ad title formatting rules",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "titleRule": { "type": "object" },
+        "version": { "type": "number" },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "titleRule", "updatedAt"]
+    },
+    "PlatformSettings": {
+      "title": "Platform Settings",
+      "description": "Global platform configuration managed by Super Admins",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "platformName": { "type": "string", "maxLength": 200 },
+        "supportEmail": { "type": "string", "maxLength": 200 },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "updatedAt"]
+    },
+    "PlatformAuditLog": {
+      "title": "Platform Audit Log Entry",
+      "description": "Immutable individual audit record for Super Admin actions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "actorUserId": { "type": "string", "maxLength": 128 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "action": { "type": "string", "maxLength": 100 },
+        "targetType": { "type": "string", "maxLength": 64 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "actorUserId", "action", "timestamp"]
+    },
+    "SharedLead": {
+      "title": "Global Shared Auto-Crawled Lead",
+      "description": "Real estate lead imported by Super Admin Auto Crawl into the common repository",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "url": { "type": "string", "maxLength": 2048 },
+        "title": { "type": "string", "maxLength": 500 },
+        "zone": { "type": "string", "maxLength": 200 },
+        "price": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "maxLength": 64 },
+        "isSharedLead": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
       "required": ["url", "title", "status", "isSharedLead", "createdAt", "updatedAt"]
+    },
+    "SharedLeadSummary": {
+      "title": "Slim Shared Market Lead Summary Projection",
+      "description": "Read-only <=2.5 KB slim list/table/filter projection atomically synchronized with /platform_shared_leads. Explicitly excludes images[], extractedData, notes, memoPrivat, and notePrivate.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "propertyId": { "type": "string", "maxLength": 64 },
+        "url": { "type": "string", "maxLength": 512 },
+        "title": { "type": "string", "maxLength": 220 },
+        "zone": { "type": "string", "maxLength": 120 },
+        "city": { "type": "string", "maxLength": 80 },
+        "price": { "type": "string", "maxLength": 64 },
+        "priceNumeric": { "type": "number" },
+        "usefulArea": { "type": "number" },
+        "rooms": { "type": "number" },
+        "compartimentare": { "type": "string", "maxLength": 64 },
+        "floor": { "type": "string", "maxLength": 64 },
+        "constructieBuckets": { "type": "array" },
+        "transactionType": { "type": "string", "enum": ["Vânzare", "Închiriere"] },
+        "categoria": { "type": "string", "maxLength": 64 },
+        "olxCategoryId": { "type": "string", "maxLength": 32 },
+        "status": { "type": "string", "maxLength": 64 },
+        "entityKind": { "type": "string", "enum": ["lead", "property", "cerere"] },
+        "coverThumbUrl": { "type": "string", "maxLength": 512 },
+        "isSharedLead": { "type": "boolean" },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" },
+        "docVersion": { "type": "number" },
+        "isSummary": { "type": "boolean" },
+        "searchTokens": { "type": "array" }
+      },
+      "required": ["id", "url", "title", "status", "isSharedLead", "docVersion", "isSummary", "createdAt", "updatedAt"]
     },
     "PlatformAutoCrawlConfig": {
       "title": "Super Admin Auto Crawl Configuration",
-      "description": "Global platform configuration for automated OLX lead crawling filters, schedule, limit, and age bounds",
+      "description": "Global platform configuration for automated OLX lead crawling",
       "type": "object",
       "properties": {
         "filters": { "type": "object" },
         "scanIntervalMinutes": { "type": "number" },
         "scanLimit": { "type": "number" },
-        "minAdAgeHours": { "type": "number" },
-        "maxAdAgeHours": { "type": "number" },
-        "lastScanAt": { "type": "number" },
-        "lastScanNotice": { "type": "object" },
         "updatedBy": { "type": "string", "maxLength": 200 },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -255,32 +405,16 @@
     },
     "PublicShare": {
       "title": "Sanitized Public Share Snapshot",
-      "description": "PII-free public presentation snapshot of a shared lead, property, or request keyed by scope and entity code (e.g. global__L32 or ten_agency_a__P12)",
+      "description": "PII-free public presentation snapshot of a shared lead, property, or request",
       "type": "object",
       "properties": {
         "shareCode": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "entityKind": { "type": "string", "enum": ["lead", "property", "cerere"] },
         "tenantId": { "type": "string", "maxLength": 128 },
         "propertyId": { "type": "string", "maxLength": 64 },
-        "sourceDocId": { "type": "string", "maxLength": 128 },
         "title": { "type": "string", "maxLength": 500 },
-        "zone": { "type": "string", "maxLength": 200 },
         "price": { "type": "string", "maxLength": 100 },
-        "transactionType": { "type": "string", "maxLength": 64 },
-        "categoria": { "type": "string", "maxLength": 100 },
-        "status": { "type": "string", "maxLength": 64 },
-        "leadType": { "type": "string", "maxLength": 64 },
-        "mobilare": { "type": "string", "maxLength": 200 },
-        "parcare": { "type": "string", "maxLength": 200 },
-        "sursaIncalzire": { "type": "string", "maxLength": 200 },
-        "modIncalzire": { "type": "string", "maxLength": 200 },
-        "coverImage": { "type": "string", "maxLength": 2048 },
-        "images": { "type": "array" },
-        "extractedData": { "type": "object" },
-        "author": { "type": "string", "maxLength": 200 },
-        "agent": { "type": "string", "maxLength": 200 },
         "isPublicSnapshot": { "type": "boolean" },
-        "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["shareCode", "entityKind", "title", "isPublicSnapshot", "updatedAt"]
@@ -293,11 +427,27 @@
     },
     "platform_shared_leads/{leadId}": {
       "schema": { "$ref": "SharedLead" },
-      "description": "Global auto-crawled leads managed by Super Admin and visible to all agencies"
+      "description": "Global auto-crawled leads managed by Super Admin and readable by signed-in agencies"
+    },
+    "platform_shared_leads_summary/{leadId}": {
+      "schema": { "$ref": "SharedLeadSummary" },
+      "description": "Phase 2 slim <=2.5 KB read-only projection of platform_shared_leads written atomically by backend Core API"
     },
     "platform_auto_crawl/{configId}": {
       "schema": { "$ref": "PlatformAutoCrawlConfig" },
       "description": "Super Admin auto-crawl schedule and filter settings"
+    },
+    "platform_settings/{settingId}": {
+      "schema": { "$ref": "PlatformSettings" },
+      "description": "Global platform configuration managed by Super Admins"
+    },
+    "platform_audit_logs/{logId}": {
+      "schema": { "$ref": "PlatformAuditLog" },
+      "description": "Individual immutable audit log records for Super Admin operations"
+    },
+    "automation_configs/{configId}": {
+      "schema": { "$ref": "AutomationConfig" },
+      "description": "Platform default and agency-scoped external ad title automation configs"
     },
     "tenants/{tenantId}": {
       "schema": { "$ref": "Tenant" },
@@ -305,23 +455,43 @@
     },
     "tenants/{tenantId}/users/{userId}": {
       "schema": { "$ref": "TenantUser" },
-      "description": "Tenant membership records defining roles and permissions"
+      "description": "O(1) UID-keyed tenant membership records defining roles and permissions"
     },
-    "tenants/{tenantId}/automation/{ruleId}": {
-      "schema": { "$ref": "AutomationConfig" },
-      "description": "Agency-isolated automation rules for external ad extraction"
+    "tenants/{tenantId}/invites/{inviteEmail}": {
+      "schema": { "$ref": "TenantUser" },
+      "description": "O(1) email-keyed active staff invitations enabling zero-scan UID auto-binding on first sign-in"
+    },
+    "tenants/{tenantId}/counters/{counterKey}": {
+      "schema": { "$ref": "EntityCounter" },
+      "description": "Sharded per-entity-type atomic sequential ID counters"
+    },
+    "tenants/{tenantId}/settings/{settingId}": {
+      "schema": { "$ref": "TenantSetting" },
+      "description": "Agency-scoped configuration documents (e.g. market auto-import rules)"
+    },
+    "tenants/{tenantId}/admin_notes/{noteId}": {
+      "schema": { "$ref": "AgencyAdminNote" },
+      "description": "Super Admin administrative notes for an agency"
+    },
+    "tenants/{tenantId}/leads/{leadId}": {
+      "schema": { "$ref": "Lead" },
+      "description": "Agency-isolated real estate leads, properties, and requests"
+    },
+    "tenants/{tenantId}/leads_summary/{leadId}": {
+      "schema": { "$ref": "LeadSummary" },
+      "description": "Phase 2 slim <=2.5 KB read-only projection of tenant leads written atomically by backend Core API"
+    },
+    "tenants/{tenantId}/contacts/{contactId}": {
+      "schema": { "$ref": "Contact" },
+      "description": "Agency-isolated contacts"
     },
     "tenants/{tenantId}/staff/{staffId}": {
       "schema": { "$ref": "Staff" },
       "description": "Agency-isolated staff members"
     },
-    "tenants/{tenantId}/leads/{leadId}": {
-      "schema": { "$ref": "Lead" },
-      "description": "Agency-isolated real estate leads"
-    },
-    "tenants/{tenantId}/contacts/{contactId}": {
-      "schema": { "$ref": "Contact" },
-      "description": "Agency-isolated contacts"
+    "tenants/{tenantId}/personal/{personalId}": {
+      "schema": { "$ref": "Staff" },
+      "description": "Legacy agency staff subcollection (read/migration compatibility)"
     },
     "tenants/{tenantId}/documents/{documentId}": {
       "schema": { "$ref": "Document" },
@@ -331,33 +501,21 @@
       "schema": { "$ref": "Activity" },
       "description": "Agency-isolated scheduled activities and viewings"
     },
-    "leads": {
-      "schema": { "$ref": "Lead" },
-      "description": "Legacy collection of real estate leads (preserved for backward compatibility)"
-    },
-    "contacts": {
-      "schema": { "$ref": "Contact" },
-      "description": "Legacy collection of property contacts (preserved for backward compatibility)"
-    },
-    "personal": {
-      "schema": { "$ref": "Personal" },
-      "description": "Legacy collection of agency staff (preserved for backward compatibility)"
-    },
-    "documents": {
-      "schema": { "$ref": "Document" },
-      "description": "Legacy collection of agency and property documents"
-    },
-    "activities": {
-      "schema": { "$ref": "Activity" },
-      "description": "Legacy collection of agency activities"
-    },
-    "tours": {
+    "tenants/{tenantId}/tours/{tourId}": {
       "schema": { "$ref": "Tour" },
-      "description": "Legacy collection of scheduled tours"
+      "description": "Agency-isolated tour viewing mirror records"
     },
-    "viewings": {
+    "tenants/{tenantId}/viewings/{viewingId}": {
       "schema": { "$ref": "Viewing" },
-      "description": "Legacy collection of scheduled property viewings"
+      "description": "Agency-isolated viewing reminder mirror records"
+    },
+    "tenants/{tenantId}/notifications/{notificationId}": {
+      "schema": { "$ref": "Notification" },
+      "description": "User-scoped notifications inside an agency"
+    },
+    "tenants/{tenantId}/fcm_tokens/{tokenId}": {
+      "schema": { "$ref": "FcmToken" },
+      "description": "User-scoped FCM push tokens inside an agency"
     }
   }
 }

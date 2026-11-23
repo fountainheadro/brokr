@@ -57,6 +57,11 @@ const INITIAL_USAGE: Record<string, TenantUsageState> = {
 };
 
 function ensureUsageSeeded(): void {
+  // Phase 3: Never seed synthetic demo usage in development or production.
+  // Real agencies start cleanly at 0 and accrue real metered AI/scrape/storage usage.
+  if (process.env.NODE_ENV !== "test") {
+    return;
+  }
   PersistentStoreService.seedIfEmpty<TenantUsageState>(
     COL_TENANT_USAGE,
     Object.entries(INITIAL_USAGE).map(([tenantId, state]) => ({
@@ -121,7 +126,7 @@ export class QuotaService {
         aiRequests: 0,
         storageMb: 0,
       };
-      PersistentStoreService.set(COL_TENANT_USAGE, tenantId, usage);
+      PersistentStoreService.setCacheOnly(COL_TENANT_USAGE, tenantId, usage);
     }
 
     // Agents count is always live from TenantMembershipService
@@ -260,30 +265,32 @@ export class QuotaService {
 
   /**
    * Verifies if an agency has sufficient quota for a requested operation.
+   * Uses effective plan quotas (defaulting to plan_starter for newly created tenants without a seeded subscription).
    */
   public static checkQuota(tenantId: string, resource: QuotaResourceType, requestedAmount = 1): QuotaCheckResult {
-    const entitlements = this.getTenantEntitlements(tenantId);
-    const usage = getUsageValue(entitlements.currentUsage, resource);
+    const { quotas } = this.getEffectiveQuotas(tenantId);
+    const currentUsage = this.getUsage(tenantId);
+    const usage = getUsageValue(currentUsage, resource);
 
     let limit = -1;
     switch (resource) {
       case "agents":
-        limit = entitlements.effectiveQuotas.maxAgents;
+        limit = quotas.maxAgents;
         break;
       case "properties":
-        limit = entitlements.effectiveQuotas.maxProperties;
+        limit = quotas.maxProperties;
         break;
       case "leads":
-        limit = entitlements.effectiveQuotas.maxLeads;
+        limit = quotas.maxLeads;
         break;
       case "ai_tokens":
-        limit = entitlements.effectiveQuotas.monthlyAiTokens;
+        limit = quotas.monthlyAiTokens;
         break;
       case "ai_requests":
-        limit = entitlements.effectiveQuotas.monthlyAiRequests;
+        limit = quotas.monthlyAiRequests;
         break;
       case "storage_mb":
-        limit = entitlements.effectiveQuotas.storageMb;
+        limit = quotas.storageMb;
         break;
     }
 
@@ -451,8 +458,10 @@ export class QuotaService {
   public static resetDefaults(): void {
     PersistentStoreService.clearCollection(COL_TENANT_USAGE);
     PersistentStoreService.clearCollection(COL_AI_RESERVATIONS);
-    for (const [tenantId, state] of Object.entries(INITIAL_USAGE)) {
-      PersistentStoreService.set(COL_TENANT_USAGE, tenantId, { ...state });
+    if (process.env.NODE_ENV === "test") {
+      for (const [tenantId, state] of Object.entries(INITIAL_USAGE)) {
+        PersistentStoreService.set(COL_TENANT_USAGE, tenantId, { ...state });
+      }
     }
   }
 }

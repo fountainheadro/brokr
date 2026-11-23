@@ -19,7 +19,8 @@ import {
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { contactsService, Contact } from "../services/contactsService";
-import { Lead, getLeadRole } from "../services/leadsService";
+import { Lead, getLeadRole, leadsService } from "../services/leadsService";
+import { isSummaryLeadRecord } from "../core/crm/svc_lead-projection";
 import { getPublicShareUrl } from "../utils/shareUtils";
 import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
@@ -68,7 +69,15 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
 
   const handleShare = async () => {
     if (!publicShareUrl) return;
-    void publishPublicShareSnapshot(lead, { tenantId: tenant?.id, force: true });
+    if (isSummaryLeadRecord(lead) && lead.id) {
+      void leadsService.getLead(lead.id).then((canonical) => {
+        if (canonical) {
+          void publishPublicShareSnapshot(canonical, { tenantId: tenant?.id, force: true });
+        }
+      });
+    } else {
+      void publishPublicShareSnapshot(lead, { tenantId: tenant?.id, force: true });
+    }
     try {
       await navigator.clipboard.writeText(publicShareUrl);
       setCopiedShare(true);
@@ -91,8 +100,8 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
   };
 
   const internalId = lead.propertyId || (lead.id ? lead.id.slice(0, 5) : "");
-  const rooms = lead.extractedData?.crmData?.caracteristici?.detalii?.camere;
-  const suprafata = lead.extractedData?.crmData?.caracteristici?.suprafete?.utila;
+  const rooms = lead.extractedData?.crmData?.caracteristici?.detalii?.camere || lead.rooms;
+  const suprafata = lead.extractedData?.crmData?.caracteristici?.suprafete?.utila || (lead.usefulArea ? String(lead.usefulArea) : undefined);
 
   // Extract thumbnail
   const images = lead.extractedData?.crmData?.imagini;
@@ -101,7 +110,7 @@ export const PropertyQuickViewModal: React.FC<PropertyQuickViewModalProps> = ({
   ) : null;
   const displayImage = typeof rawFirstImage === 'object' && rawFirstImage !== null
     ? rawFirstImage.original
-    : (typeof rawFirstImage === 'string' ? rawFirstImage : (lead.coverImage || null));
+    : (typeof rawFirstImage === 'string' ? rawFirstImage : (lead.coverImage || lead.coverThumbUrl || null));
 
   return (
     <AnimatePresence>

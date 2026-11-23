@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from "express";
 import { TenantMembershipService } from "../../src/core/tenancy/svc_tenant-membership";
+import { TenantResolutionService } from "../../src/core/tenancy/svc_tenant-resolution";
 import { TenantMembershipRecord } from "../../src/core/tenancy/typ_tenant-context";
 import { createErrorResponse } from "../../src/core/api/api_response";
 import { AppError, UnauthorizedError, ForbiddenError } from "../../src/core/errors/app_error";
@@ -14,10 +15,15 @@ declare global {
 
 /**
  * Tenant membership middleware:
- * Verifies that the authenticated user has an active, valid membership in the resolved tenant.
- * Rejects suspended users, users accessing another tenant's agency, and suspended tenants.
+ * Verifies that the authenticated user has an active, valid membership in the resolved tenant
+ * using O(1) Firestore lookup (/tenants/{tenantId}/users/{uid} -> /tenants/{tenantId}/invites/{email})
+ * and auto-binds verified Firebase UIDs on first sign-in so Firestore rules match immediately.
  */
-export function mwTenantMembership(req: Request, res: Response, next: NextFunction): void {
+export async function mwTenantMembership(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
   if (req.isPreviewSession && req.membership) {
     return next();
   }
@@ -35,12 +41,16 @@ export function mwTenantMembership(req: Request, res: Response, next: NextFuncti
   }
 
   try {
-    const membership = TenantMembershipService.verifyMembership(
+    const membership = await TenantMembershipService.verifyMembershipAsync(
       req.resolvedTenant.id,
       req.authUser.uid,
       req.authUser.email,
       req.authUser.emailVerified
     );
+    const latestTenant =
+      TenantResolutionService.getTenantById(req.resolvedTenant.id) || req.resolvedTenant;
+    TenantMembershipService.verifyAuthVersion(membership, latestTenant, req.authUser.claims);
+    req.resolvedTenant = latestTenant;
     req.membership = membership;
     next();
   } catch (error) {

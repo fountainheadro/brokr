@@ -22,6 +22,7 @@ import {
   OLX_MAX_AGE_STEPS,
 } from "../components/OlxLeadDrawer";
 import { hydrateEntityTimestamps } from "../core/crm/svc_crm-client";
+import { clientDataHub, isClientDataHubEnabled } from "../core/crm/svc_client-data-hub";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { resolveAreaFromAd } from "../utils/zoneResolutionUtils";
 import { syncPublicShareSnapshotsBatch } from "./publicShareService";
@@ -282,6 +283,17 @@ export const platformAutoCrawlService = {
   },
 
   subscribeToSharedLeads(callback: (leads: Lead[]) => void): () => void {
+    if (isClientDataHubEnabled()) {
+      return clientDataHub.subscribePlatformSharedLeads<Lead>((items) => {
+        callback(items);
+        // Only batch-sync public_shares for full canonical docs (never slim summaries)
+        const canonicalItems = items.filter((item) => !(item as any)?.isSummary);
+        if (canonicalItems.length > 0) {
+          void syncPublicShareSnapshotsBatch(canonicalItems);
+        }
+      });
+    }
+
     let unsubSnapshot: (() => void) | null = null;
     let active = true;
 
@@ -371,7 +383,32 @@ export const platformAutoCrawlService = {
     }
   },
 
+  async saveSharedLeadDualWrite(docId: string, docPayload: Record<string, any>): Promise<void> {
+    try {
+      const headers = await getApiAuthHeaders({ "Content-Type": "application/json" });
+      const res = await fetch("/api/platform/shared-leads", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...docPayload, id: docId }),
+      });
+      if (res.ok) return;
+    } catch {
+      // Fallback to direct canonical Firestore write below if server route unavailable
+    }
+    await setDoc(doc(db, SHARED_LEADS_COLLECTION, docId), docPayload);
+  },
+
   async deleteSharedLead(leadId: string): Promise<void> {
+    try {
+      const headers = await getApiAuthHeaders();
+      const res = await fetch(`/api/platform/shared-leads/${encodeURIComponent(leadId)}`, {
+        method: "DELETE",
+        headers,
+      });
+      if (res.ok) return;
+    } catch {
+      // Fallback to direct canonical delete below
+    }
     try {
       await deleteDoc(doc(db, SHARED_LEADS_COLLECTION, leadId));
     } catch (err) {
@@ -381,17 +418,35 @@ export const platformAutoCrawlService = {
 
   async clearAllSharedLeads(): Promise<number> {
     try {
-      const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
       let deleted = 0;
-      if (!snap.empty) {
-        const docs = snap.docs;
-        for (let i = 0; i < docs.length; i += 400) {
-          const batch = writeBatch(db);
-          for (const d of docs.slice(i, i + 400)) {
-            batch.delete(d.ref);
-            deleted++;
+      let clearedViaApi = false;
+      try {
+        const headers = await getApiAuthHeaders();
+        const res = await fetch("/api/platform/shared-leads", {
+          method: "DELETE",
+          headers,
+        });
+        if (res.ok) {
+          const json = await res.json().catch(() => ({}));
+          deleted = Number(json?.data?.deletedCount || 0);
+          clearedViaApi = true;
+        }
+      } catch {
+        clearedViaApi = false;
+      }
+
+      if (!clearedViaApi) {
+        const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
+        if (!snap.empty) {
+          const docs = snap.docs;
+          for (let i = 0; i < docs.length; i += 400) {
+            const batch = writeBatch(db);
+            for (const d of docs.slice(i, i + 400)) {
+              batch.delete(d.ref);
+              deleted++;
+            }
+            await batch.commit();
           }
-          await batch.commit();
         }
       }
       // Reset daily shared-lead counters so new crawls start cleanly from YYYY-MM-DD-1
@@ -778,7 +833,7 @@ export const platformAutoCrawlService = {
       });
 
       try {
-        await setDoc(doc(db, SHARED_LEADS_COLLECTION, docId), docPayload);
+        await this.saveSharedLeadDualWrite(docId, docPayload);
         addedCount++;
       } catch (saveErr: any) {
         console.warn("[platformAutoCrawlService] Failed saving shared OLX lead:", saveErr);
@@ -1081,7 +1136,7 @@ export const platformAutoCrawlService = {
       lastMovedAt: nowIso,
     });
 
-    await setDoc(doc(db, SHARED_LEADS_COLLECTION, docId), docPayload);
+    await this.saveSharedLeadDualWrite(docId, docPayload);
 
     const notice: AutoCrawlScanNotice = {
       type: "success",

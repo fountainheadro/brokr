@@ -1,24 +1,84 @@
 import { getApps, initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore, initializeFirestore, doc, getDocFromServer } from 'firebase/firestore';
+import {
+  getFirestore,
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  memoryLocalCache,
+  terminate,
+  clearIndexedDbPersistence,
+  doc,
+  getDocFromServer,
+  type Firestore,
+} from 'firebase/firestore';
 import { getMessaging, isSupported as isMessagingSupported } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
 
+export type FirestoreCacheMode = 'indexeddb-multi-tab' | 'memory-fallback' | 'server';
+
 const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
-export const db = (() => {
+
+let resolvedCacheMode: FirestoreCacheMode = 'server';
+
+export const db: Firestore = (() => {
   if (typeof window !== 'undefined') {
     try {
-      return initializeFirestore(
+      const instance = initializeFirestore(
         app,
-        { experimentalForceLongPolling: true },
+        {
+          localCache: persistentLocalCache({
+            tabManager: persistentMultipleTabManager(),
+          }),
+          experimentalAutoDetectLongPolling: true,
+        },
         firebaseConfig.firestoreDatabaseId
       );
+      resolvedCacheMode = 'indexeddb-multi-tab';
+      return instance;
     } catch {
-      return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+      try {
+        const fallbackInstance = initializeFirestore(
+          app,
+          {
+            localCache: memoryLocalCache(),
+            experimentalAutoDetectLongPolling: true,
+          },
+          firebaseConfig.firestoreDatabaseId
+        );
+        resolvedCacheMode = 'memory-fallback';
+        return fallbackInstance;
+      } catch {
+        resolvedCacheMode = 'memory-fallback';
+        return getFirestore(app, firebaseConfig.firestoreDatabaseId);
+      }
     }
   }
+  resolvedCacheMode = 'server';
   return getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
 })();
+
+export const firestoreCacheMode: FirestoreCacheMode = resolvedCacheMode;
+
+/**
+ * Terminates the local Firestore client and purges IndexedDB offline persistence
+ * on explicit user sign-out so no prior account or agency records remain on disk.
+ * Returns true if the local instance was terminated (caller should reload to mint a fresh runtime).
+ */
+export async function clearLocalFirestorePersistenceOnSignOut(): Promise<boolean> {
+  if (typeof window === 'undefined' || resolvedCacheMode !== 'indexeddb-multi-tab') {
+    return false;
+  }
+  try {
+    await terminate(db);
+    await clearIndexedDbPersistence(db);
+    return true;
+  } catch (err) {
+    console.warn('[Firebase] Could not purge IndexedDB persistence on sign-out:', err);
+    return false;
+  }
+}
+
 export const auth = getAuth(app);
 
 // Safe async Messaging getter to deal with sandbox iFrame missing APIs

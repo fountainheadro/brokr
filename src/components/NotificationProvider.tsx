@@ -64,10 +64,16 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
   // Sync notification lists and calculate unread counts for native badges
   useEffect(() => {
-    // Wait until user is authenticated
+    let unsubNotifications: (() => void) | null = null;
+
     const unsubAuth = auth.onAuthStateChanged((user) => {
+      if (unsubNotifications) {
+        unsubNotifications();
+        unsubNotifications = null;
+      }
+
       if (user) {
-        const unsubFirestore = notificationsService.getNotifications((list) => {
+        unsubNotifications = notificationsService.getNotifications((list) => {
           setNotificationsList(list);
           const unread = list.filter(n => !n.read).length;
           setUnreadCount(unread);
@@ -81,14 +87,18 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
             }
           }
         });
-        return () => unsubFirestore();
       } else {
         setNotificationsList([]);
         setUnreadCount(0);
       }
     });
 
-    return () => unsubAuth();
+    return () => {
+      unsubAuth();
+      if (unsubNotifications) {
+        unsubNotifications();
+      }
+    };
   }, []);
 
   // Register automated synchronization to back-end cache for offline push execution

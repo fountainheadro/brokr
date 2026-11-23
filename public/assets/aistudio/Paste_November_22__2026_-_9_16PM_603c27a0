@@ -1,0 +1,2041 @@
+# BROKR — COMPLETE ARCHITECTURE REVIEW, SCALABILITY STRATEGY & PHASED IMPLEMENTATION PLAN
+
+## 1. OBJECTIVE AND CONTEXT
+
+I want you to perform a comprehensive architectural review of the existing BROKR application and produce a revised, technically detailed architecture and implementation roadmap.
+
+This is a planning and documentation task only.
+
+**DO NOT implement anything at this stage. DO NOT modify source code, existing configuration files, database structures, Firestore rules, infrastructure, deployment settings or any existing project files.**
+
+Your task is to inspect the actual project, evaluate its current architecture, identify problems, and produce a complete, realistic and technically justified plan for improving it.
+
+The revised plan must account for:
+
+1. The application's current architecture and actual implementation.
+2. Performance, database efficiency and real-time data synchronization.
+3. Security, multi-tenancy and authorization.
+4. Scalability and the ability to operate across multiple servers.
+5. Future growth into a multi-agency SaaS platform.
+6. Future publishing of properties to external real-estate portals.
+7. A very limited initial budget.
+8. A phased implementation strategy that minimizes risk and allows the application to evolve gradually.
+
+Do not design an infrastructure deployment for thousands of users if the initial commercial launch will involve only one or two agencies.
+
+The objective is to build a technically sound and commercially viable foundation that can grow without requiring expensive infrastructure or major architectural rewrites prematurely.
+
+---
+
+# PART I — UNDERSTAND THE EXISTING APPLICATION
+
+## 2. INSPECT THE ACTUAL PROJECT BEFORE MAKING RECOMMENDATIONS
+
+Do not rely exclusively on previous architecture analyses or assumptions.
+
+Inspect the actual source code, project structure, configuration, database access patterns, authentication mechanisms, frontend components, backend routes, background processes and deployment configuration.
+
+Use the existing architecture analysis and previous implementation plans as reference material, but verify their claims against the actual codebase.
+
+Identify:
+
+- Frontend architecture and component organization.
+- Backend architecture and API structure.
+- Current hosting and deployment model.
+- Firebase Authentication implementation.
+- Firestore database structure.
+- Firestore Security Rules.
+- Firestore queries and listeners.
+- Storage architecture.
+- Caching mechanisms.
+- Rate limiting.
+- Tenant resolution and authorization.
+- Background tasks and scheduling.
+- AI and Gemini integrations.
+- Web scraping and property import.
+- Image processing and media delivery.
+- WebSockets and AI voice functionality.
+- External service dependencies.
+- Error handling and logging.
+- Existing performance monitoring.
+- Existing testing infrastructure.
+
+For each important finding, identify the relevant source files and explain how the implementation currently works.
+
+Distinguish clearly between:
+
+- Verified facts from the codebase.
+- Assumptions that could not be verified.
+- Architectural recommendations.
+- Future capabilities that do not yet exist.
+
+Do not invent existing functionality.
+
+## 3. PRESERVE THE EXISTING FUNCTIONALITY AND ATOMIC DESIGN
+
+The current application already contains substantial functionality and a developed user interface.
+
+The architecture improvements must preserve existing functionality.
+
+Maintain the existing Atomic Design philosophy:
+
+- Design tokens.
+- Atoms.
+- Molecules.
+- Organisms.
+- Templates.
+- Pages.
+
+Do not replace this structure with an unrelated frontend architecture.
+
+New functionality, including performance monitoring, data synchronization, external publishing and future administrative tools, must follow the existing design system.
+
+Avoid unnecessary redesigns or changes to established user workflows.
+
+The implementation strategy must use incremental refactoring, preferably following the Strangler Fig pattern where appropriate.
+
+Do not propose rewriting the application from scratch.
+
+---
+
+# PART II — INITIAL BUSINESS AND BUDGET CONSTRAINTS
+
+## 4. THE MOST IMPORTANT CONSTRAINT: VERY LIMITED INITIAL BUDGET
+
+BROKR is at an early stage.
+
+The application will initially be tested with only one or two real-estate agencies.
+
+We are starting the entire project and its services with a very limited budget.
+
+This must fundamentally influence your technical recommendations.
+
+I do not want to pay for expensive infrastructure, unnecessary managed services, multiple always-on servers or sophisticated distributed systems before there is sufficient usage to justify them.
+
+The architecture must distinguish between:
+
+**A. Designing for future scalability.**
+
+Building modular software, defining interfaces, separating responsibilities and avoiding architectural dependencies that would make future scaling difficult.
+
+**B. Paying for future scalability.**
+
+Provisioning additional servers, Redis clusters, multiple regions, independent services and other infrastructure before they provide measurable value.
+
+These are not the same thing.
+
+I want A from the beginning.
+
+I only want B when actual requirements justify it.
+
+## 5. RECOMMENDED INITIAL ARCHITECTURAL DIRECTION
+
+Evaluate a budget-conscious initial architecture, potentially consisting of:
+
+- One primary Cloud Run application service.
+- Firebase Authentication.
+- Firestore.
+- Firebase Storage or Google Cloud Storage, depending on actual cost and suitability.
+- Cloud Scheduler where necessary.
+- Cloud Tasks where asynchronous processing provides a demonstrable benefit.
+- Existing application functionality retained within the main application where appropriate.
+- Lightweight background processing.
+- Basic but useful monitoring.
+- Automated backups.
+- Appropriate security and tenant isolation.
+
+This is a candidate architecture, not a mandatory predetermined stack.
+
+Evaluate whether some background tasks should remain within the existing application during the initial pilot, and which ones genuinely require separation.
+
+Do not introduce Redis simply because it appeared in an earlier architecture proposal.
+
+Do not introduce Kubernetes.
+
+Do not introduce multiple regions.
+
+Do not create six separately deployed services simply to achieve architectural separation.
+
+Do not introduce expensive infrastructure without demonstrating why it is necessary.
+
+At the same time, do not sacrifice security, data integrity or basic reliability to save negligible amounts of money.
+
+## 6. THREE INFRASTRUCTURE EVOLUTION STAGES
+
+Design the architecture around three progressive stages.
+
+### STAGE A — INITIAL PILOT
+
+<escape>Approximately 1–2 agencies.</escape>
+
+Priorities:
+
+- Low operating costs.
+- Reliable core application.
+- Secure multi-tenancy.
+- Efficient database access.
+- Centralized frontend data management.
+- Efficient real-time synchronization.
+- Basic background-job management.
+- Secure media storage.
+- Essential monitoring.
+- Backup and recovery.
+- Preparation for future portal integrations.
+
+Avoid unnecessary infrastructure.
+
+Keep the deployment simple and manageable.
+
+### STAGE B — EARLY COMMERCIAL GROWTH
+
+<escape>Approximately 5–20 agencies.</escape>
+
+Introduce infrastructure only when justified by measured requirements.
+
+Potential additions:
+
+- Dedicated scraping workers.
+- Dedicated AI processing workers.
+- Dedicated media processing workers.
+- Redis for shared caching or coordination.
+- More advanced job orchestration.
+- Improved tenant-level resource limits.
+- More advanced monitoring.
+- Increased application capacity.
+
+Not every service needs to be separated immediately.
+
+### STAGE C — ESTABLISHED PLATFORM
+
+<escape>Approximately 20–100+ agencies and beyond.</escape>
+
+Evaluate:
+
+- Independent workload scaling.
+- Redis HA.
+- Dedicated search infrastructure.
+- More advanced queue partitioning.
+- Regional redundancy.
+- Multi-region capabilities.
+- Advanced analytics and cost attribution.
+- Higher availability requirements.
+
+These agency counts are indicative planning scenarios, not mandatory upgrade triggers.
+
+Infrastructure upgrades must be driven by actual technical measurements, business requirements and cost-benefit analysis.
+
+## 7. INFRASTRUCTURE UPGRADE TRIGGERS
+
+For every proposed infrastructure component, explain:
+
+1. What problem it solves.
+2. Whether that problem currently exists.
+3. How the problem will be measured.
+4. What the current alternative is.
+5. When the upgrade becomes justified.
+6. Estimated additional monthly cost.
+7. Operational complexity introduced.
+8. Potential disadvantages.
+
+Include an upgrade matrix covering at least:
+
+- Redis.
+- Dedicated Cloud Run workers.
+- Cloud Tasks.
+- Dedicated search engine.
+- Cloud CDN.
+- Redis HA.
+- Multi-region deployment.
+- Advanced monitoring.
+
+Do not use agency count alone as the decision criterion.
+
+---
+
+# PART III — CURRENT PERFORMANCE AND DATABASE ARCHITECTURE
+
+## 8. FIRESTORE QUERY AND READ OPTIMIZATION
+
+Analyze all important Firestore access patterns.
+
+Identify:
+
+- Repeated queries.
+- Duplicate listeners.
+- Unnecessary full-document reads.
+- Large documents.
+- Unnecessary real-time subscriptions.
+- Excessive reads caused by navigation.
+- Inefficient filtering.
+- Missing indexes.
+- Expensive aggregation patterns.
+- Repeated authorization lookups.
+- Unnecessary writes.
+- Potential hot documents and write contention.
+
+Evaluate the existing application in the context of multiple agencies and multiple users per agency.
+
+Do not assume that every Firestore listener represents an independent network connection.
+
+Distinguish between:
+
+- Snapshot listeners.
+- Active SDK connections.
+- Query executions.
+- Initial snapshot document reads.
+- Incremental document changes.
+- Reconnection-related reads.
+- Actual billable read units.
+
+The objective is to reduce unnecessary database activity without compromising the user experience or real-time functionality.
+
+## 9. SLIM SUMMARY PROJECTIONS
+
+Evaluate introducing lightweight summary documents for frequently displayed lists.
+
+Potential examples:
+
+- Leads.
+- Properties.
+- Contacts.
+- Requests.
+- Staff.
+- Viewings.
+- Notifications.
+
+The objective is to avoid downloading large documents when the interface only needs a small subset of their data.
+
+For example, property lists should not necessarily download all images, AI extraction results, large descriptions and unrelated metadata.
+
+Evaluate:
+
+- Which collections benefit from projections.
+- Which fields belong in summary documents.
+- Which fields should only be fetched when opening details.
+- Whether projections are worth their additional write complexity.
+- Whether they can be introduced incrementally.
+
+Define the authoritative data source and projection synchronization mechanism.
+
+Projection updates must not become a source of inconsistent data.
+
+Include:
+
+- Atomic write strategies where possible.
+- Transaction boundaries.
+- Failure recovery.
+- Backfill.
+- Reconciliation.
+- Deletion handling.
+- Migration verification.
+
+Use a single authoritative write path.
+
+If a primary document update succeeds but its projection update fails, the system must have a defined recovery mechanism.
+
+Do not assume that a background process will automatically keep all projections consistent.
+
+## 10. CLIENT DATA HUB AND LISTENER MANAGEMENT
+
+Evaluate centralizing frontend Firestore data access.
+
+The objective is to avoid multiple components independently subscribing to the same collections and downloading the same data.
+
+Consider a centralized Client Data Hub that supports:
+
+- Shared query subscriptions.
+- Listener deduplication.
+- Reference counting.
+- Cursor-based pagination.
+- Lazy detail hydration.
+- Consistent loading and error states.
+- Cache management.
+- Tenant-aware data isolation.
+- Authentication-aware data lifecycle.
+- Controlled real-time updates.
+
+Preserve existing component boundaries and Atomic Design.
+
+The data layer should be independent of individual UI components.
+
+Do not introduce an unnecessarily complicated state-management system if a simpler implementation meets the requirements.
+
+## 11. INDEXEDDB AND MULTI-TAB SYNCHRONIZATION
+
+Evaluate Firestore's native persistent local cache and multi-tab persistence capabilities.
+
+Consider:
+
+- `persistentLocalCache`.
+- `persistentMultipleTabManager`.
+- Appropriate long-polling configuration, including whether `experimentalAutoDetectLongPolling` is preferable to the current configuration.
+
+Do not assume that IndexedDB automatically deduplicates listeners or network traffic across browser tabs.
+
+Investigate whether native Firestore multi-tab persistence is sufficient.
+
+Only introduce custom cross-tab coordination if measurements justify it.
+
+If using BroadcastChannel, Web Locks or leader election, specify:
+
+- Leader selection.
+- Heartbeats.
+- Leader recovery.
+- Suspended or frozen tabs.
+- Tab closure.
+- Authentication changes.
+- Tenant changes.
+- Recovery after browser crashes.
+- Data resynchronization.
+- Split-brain prevention.
+
+Do not promise arbitrary failover times without proving they are achievable.
+
+A tab that stops sending heartbeats may be suspended rather than terminated. The coordination design must account for this.
+
+## 12. LOCAL CACHE SECURITY
+
+Persistent local data creates security considerations.
+
+The architecture must ensure:
+
+- Data is appropriately isolated by user and tenant.
+- Cached data cannot accidentally appear after switching accounts or agencies.
+- Logout performs the necessary local cache cleanup or isolation.
+- Revoked access is handled appropriately.
+- Sensitive information is not unnecessarily persisted.
+- Offline data is not treated as authoritative.
+- A user cannot use cached data to bypass server authorization.
+
+Remember that Firestore Security Rules cannot remotely erase data already stored in a browser's IndexedDB.
+
+Define the cache lifecycle and cleanup strategy.
+
+## 13. OFFLINE FUNCTIONALITY
+
+Do not automatically introduce a sophisticated offline editing system.
+
+Evaluate what offline capabilities are genuinely necessary.
+
+If offline mutations are introduced, define:
+
+- Which operations can be performed offline.
+- Which operations are prohibited.
+- Conflict resolution.
+- Document versioning.
+- Permission revalidation.
+- Expiry of queued operations.
+- Duplicate submission prevention.
+- Recovery after reconnection.
+
+Start with safe, reversible operations if offline editing is justified.
+
+---
+
+# PART IV — SECURITY AND MULTI-TENANCY
+
+## 14. TENANT ISOLATION
+
+Multi-tenancy is a fundamental architectural requirement.
+
+Every agency must have isolated access to its own:
+
+- Properties.
+- Leads.
+- Contacts.
+- Requests.
+- Documents.
+- Employees.
+- Calendar events.
+- Notifications.
+- Portal connections.
+- External publications.
+- Settings.
+- Usage information.
+
+Inspect all existing tenant-resolution and authorization mechanisms.
+
+Identify any possibility of cross-tenant data access.
+
+Do not rely exclusively on frontend filtering or route-level restrictions.
+
+All sensitive operations must be authorized on the backend.
+
+## 15. FIREBASE AUTHENTICATION AND CUSTOM CLAIMS
+
+Evaluate the existing authorization system and whether custom claims could reduce unnecessary Firestore Security Rules lookups.
+
+If custom claims are proposed, account for their limitations.
+
+Firebase custom claims are embedded in ID tokens and are not instantly updated when an administrator changes a user's role or access.
+
+Define:
+
+- Token lifetime assumptions.
+- Token refresh strategy.
+- User authorization version.
+- Tenant authorization version.
+- Claims version.
+- Membership changes.
+- Tenant suspension.
+- Role changes.
+- Account suspension.
+- Token revocation.
+- Sensitive-operation authorization.
+
+Do not rely on an existence-only revocation document that continues blocking users even after they have received refreshed valid credentials.
+
+Do not assume `revokeRefreshTokens()` instantly invalidates every already-issued ID token.
+
+Define how the backend and Firestore Security Rules independently enforce authorization and revocation.
+
+For sensitive actions, establish how current authorization is verified.
+
+If Redis is unavailable, authorization must not silently become permissive.
+
+Use fail-closed behavior where security cannot be established.
+
+## 16. FIRESTORE SECURITY RULES AND ADMIN SDK
+
+Inspect the existing use of Firebase Admin SDK and browser Firebase SDK.
+
+Remember:
+
+**Firebase Admin SDK bypasses Firestore Security Rules.**
+
+If backend services use Admin SDK, they must implement their own complete authorization checks.
+
+Do not assume that Firestore Rules protect backend operations performed through Admin SDK.
+
+Document the authorization responsibility of each service.
+
+If end-user Firebase credentials are propagated through the backend, explain why and where this is necessary.
+
+If Admin SDK is used, enforce tenant isolation, membership, permissions and resource-level access explicitly.
+
+Include automated tests for cross-tenant access attempts.
+
+## 17. SECURITY CONTROLS
+
+Evaluate:
+
+- API authentication.
+- RBAC.
+- Tenant membership.
+- Subscription and quota checks.
+- Rate limiting.
+- IP handling.
+- Credential storage.
+- Secret Manager.
+- Worker authentication.
+- Internal service authentication.
+- WebSocket authorization.
+- File access.
+- Public property shares.
+- Sensitive information in logs.
+- AI usage limits.
+- Upload restrictions.
+
+Workers should not expose unnecessary public endpoints.
+
+Use authenticated service-to-service communication, such as OIDC, where appropriate.
+
+Do not trust forwarded IP headers unless they originate from a trusted proxy configuration.
+
+Do not store portal credentials, API secrets or sensitive tokens in frontend-accessible documents.
+
+---
+
+# PART V — CACHING, DISTRIBUTED COORDINATION AND BACKGROUND JOBS
+
+## 18. REDIS: OPTIONAL, NOT MANDATORY FROM DAY ONE
+
+Reevaluate the original recommendation to introduce Redis.
+
+Redis can be useful for:
+
+- Shared caching.
+- Distributed rate limiting.
+- Temporary coordination.
+- Pub/Sub.
+- Worker locks.
+- Idempotency support.
+- Session coordination.
+
+However, it introduces additional cost, monitoring, configuration and operational complexity.
+
+Determine whether Redis is genuinely necessary for the pilot.
+
+If not, defer it.
+
+The architecture should not make the future introduction of Redis difficult.
+
+### Redis failure behavior
+
+For every Redis-dependent feature, define its behavior during an outage.
+
+Distinguish between:
+
+- Cache failure.
+- Rate-limiter failure.
+- Coordination failure.
+- Pub/Sub failure.
+- Session failure.
+
+Cache failure may allow fallback to Firestore.
+
+Distributed coordination failure must not silently allow conflicting operations.
+
+Rate limiting must not become completely ineffective across multiple servers merely because the system falls back to independent local in-memory limits.
+
+Sensitive authorization must fail closed when it cannot be verified.
+
+## 19. DISTRIBUTED LOCKS AND LEASES
+
+Avoid split-brain behavior.
+
+Do not automatically switch between Redis locks and Firestore leases without defining which system is authoritative.
+
+A safe design must have one authoritative coordination mechanism.
+
+Evaluate Firestore transactional leases as an initial option if they are sufficient.
+
+Redis can potentially become an optimization later.
+
+If distributed leases are used, consider:
+
+- Lease expiration.
+- Renewal.
+- Worker crashes.
+- Ownership verification.
+- Fencing tokens.
+- Stale workers.
+- Duplicate execution.
+- Commit validation.
+
+A stale worker must not be able to overwrite the results of a newer worker.
+
+Do not rely solely on lock expiration as proof that a previous worker has stopped executing.
+
+## 20. TRANSACTIONAL OUTBOX AND IDEMPOTENCY
+
+Background jobs and external side effects must be designed for reliable execution.
+
+Do not claim exactly-once processing when the architecture cannot guarantee it.
+
+A database transaction and an external queue submission are not automatically atomic.
+
+Evaluate the transactional outbox pattern.
+
+For example:
+
+1. A business operation updates the authoritative Firestore document.
+2. The same Firestore transaction creates an outbox event.
+3. A dispatcher identifies pending events.
+4. The dispatcher submits them to the appropriate queue.
+5. A worker processes the event.
+6. The worker records its result and state.
+7. Retries are performed according to error classification.
+
+Use explicit job states, such as:
+
+- Pending.
+- Processing.
+- Completed.
+- Retryable.
+- Dead letter.
+
+Define:
+
+- Idempotency keys.
+- Attempt counters.
+- Retry schedules.
+- Lease expiration.
+- Ownership.
+- Failure classification.
+- Dead-letter handling.
+- Manual replay.
+- Cancellation.
+- Monitoring.
+
+An idempotency receipt created before an external side effect does not guarantee exactly-once execution.
+
+Design for at-least-once delivery with idempotent processing.
+
+External services may still produce duplicate side effects if they do not support idempotency. Document this limitation.
+
+## 21. CLOUD TASKS AND JOB MANAGEMENT
+
+Evaluate Cloud Tasks for asynchronous processing.
+
+Define:
+
+- Queue configuration.
+- Maximum concurrent dispatches.
+- Dispatch rate.
+- Retry policy.
+- Backoff.
+- Task authentication.
+- OIDC.
+- Job timeout.
+- Dead-letter strategy.
+- Manual retry.
+- Cancellation.
+- Monitoring.
+- Per-agency fairness.
+
+A single agency should not be able to consume all available background-processing capacity.
+
+Consider tenant-level quotas and fair scheduling.
+
+Do not introduce an unnecessarily complex job orchestration system during the pilot.
+
+---
+
+# PART VI — WORKLOAD SEPARATION AND SERVICE ARCHITECTURE
+
+## 22. REASSESS THE ORIGINAL SIX-SERVICE ARCHITECTURE
+
+The previous architecture proposed separating the application into:
+
+1. Core API.
+2. Scrape and Extraction Worker.
+3. AI Processing Worker.
+4. Media and OpenGraph Worker.
+5. Notification and Schedule Worker.
+6. AI Voice WebSocket Gateway.
+
+Evaluate whether all six services are necessary immediately.
+
+My expectation is that the initial pilot should probably retain a simpler deployment model, while maintaining logical boundaries in the code.
+
+Evaluate each workload individually.
+
+### Core API
+
+Handles interactive CRM operations, authorization and normal application requests.
+
+### Scraping and Extraction
+
+Uses browser automation and scraping libraries.
+
+Evaluate its memory and CPU requirements and whether it can safely remain within the main process initially.
+
+### AI Processing
+
+Uses Gemini and potentially other AI services.
+
+Evaluate cost controls, concurrency limits, timeouts and independent scaling requirements.
+
+### Media Processing
+
+Handles image transformations, thumbnails, watermarking and OpenGraph images.
+
+Evaluate storage and delivery architecture separately from processing.
+
+### Notifications and Scheduling
+
+Evaluate whether browser-based timers should be replaced by backend-owned scheduling.
+
+Use Cloud Scheduler or another appropriate mechanism where justified.
+
+### AI Voice and WebSockets
+
+Evaluate connection management, session persistence, authorization and scaling.
+
+If WebSocket sessions are tied to process memory, document the limitations when moving to multiple instances.
+
+Redis Pub/Sub is not durable.
+
+Voice transcripts and other information that must survive crashes need durable storage and replay mechanisms, including sequence numbers where appropriate.
+
+### Important distinction
+
+Logical service separation does not require separate infrastructure immediately.
+
+You can maintain independent modules, interfaces and workload boundaries inside the existing application.
+
+Extract services when independent deployment or resource isolation provides measurable value.
+
+Also evaluate whether AI and media processing should remain separate workloads rather than being combined into one worker service. They have different resource requirements and scaling characteristics.
+
+---
+
+# PART VII — MEDIA STORAGE AND DELIVERY
+
+## 23. MEDIA ARCHITECTURE
+
+Evaluate the current image and file storage implementation.
+
+Consider moving persistent media to Firebase Storage or Google Cloud Storage.
+
+Evaluate:
+
+- Original images.
+- Thumbnails.
+- Processed images.
+- Watermarked images.
+- OpenGraph images.
+- Public property images.
+- Private documents.
+- Temporary processing files.
+
+The architecture must distinguish between public and private assets.
+
+Evaluate Cloud CDN for public media and public property shares, but do not introduce it automatically if the initial traffic does not justify the expense.
+
+Use appropriate cache-control headers.
+
+Consider content-hashed or versioned URLs for immutable assets.
+
+Private media must use appropriately secured access, such as authenticated requests or signed URLs.
+
+Define:
+
+- Upload limits.
+- Image validation.
+- File-type validation.
+- Processing failures.
+- Orphaned media cleanup.
+- Retention policies.
+- Access permissions.
+- Migration of existing files.
+
+Do not use public caching for private documents.
+
+---
+
+# PART VIII — FUTURE EXTERNAL PROPERTY PORTAL PUBLISHING
+
+## 24. STRATEGIC REQUIREMENT
+
+BROKR is intended to become a multi-agency real-estate platform.
+
+At some point, advertisements created and managed inside BROKR must be publishable to external property portals.
+
+Potential platforms include:
+
+- Storia.ro.
+- Imobiliare.ro.
+- Publi24.ro.
+- Other Romanian property portals.
+- Potential international portals in the future.
+
+This is an important future capability and must be considered in the core architecture from the beginning.
+
+However, because the initial budget is limited, actual portal integrations should not necessarily be implemented during the initial pilot.
+
+**Prepare the architecture now; implement the actual integrations incrementally when commercially justified.**
+
+Do not assume every portal offers a public API.
+
+Do not assume all providers support the same publishing mechanisms.
+
+Investigate the actual integration possibilities before recommending implementation.
+
+## 25. PROVIDER-INDEPENDENT INTEGRATION ARCHITECTURE
+
+BROKR must remain the canonical source of truth for property data.
+
+External portal schemas must not dictate the internal property model.
+
+Design a provider-independent integration layer.
+
+Conceptually, each external portal should have its own adapter implementing a common contract.
+
+Examples:
+
+- StoriaProvider.
+- ImobiliareProvider.
+- Publi24Provider.
+- FuturePortalProvider.
+
+The integration architecture should separate:
+
+1. Canonical property data.
+2. Provider-specific mapping.
+3. Provider-specific validation.
+4. Publishing orchestration.
+5. Credentials and authentication.
+6. Publication state.
+7. Synchronization.
+8. Error handling.
+9. Retry management.
+10. External listing identification.
+
+Adding another portal should not require modifying unrelated CRM functionality or restructuring the canonical property model.
+
+## 26. CANONICAL PROPERTY MODEL
+
+Inspect the existing property schema and determine whether it can support future external publishing.
+
+Consider common fields such as:
+
+- Property type.
+- Transaction type.
+- Price.
+- Currency.
+- Location.
+- Area.
+- Number of rooms.
+- Bedrooms.
+- Bathrooms.
+- Floor.
+- Building floors.
+- Construction year.
+- Construction type.
+- Heating.
+- Energy performance information.
+- Furnishing.
+- Amenities.
+- Parking.
+- Balconies.
+- Terraces.
+- Property condition.
+- Finishes.
+- Utilities.
+- Description.
+- Images.
+- Video.
+- Contact information.
+- Agency details.
+- Publication status.
+
+Do not blindly add every possible field.
+
+Inspect actual BROKR data and identify which fields are missing, which are optional and which are justified by the target portals.
+
+Use a controlled extension mechanism for genuinely provider-specific fields.
+
+Avoid arbitrary provider-specific fields contaminating the canonical model.
+
+## 27. PROVIDER MAPPING AND VALIDATION
+
+Each provider may have its own taxonomy, required fields and restrictions.
+
+The integration layer must support:
+
+- Property-type mapping.
+- Transaction-type mapping.
+- Feature and amenity mapping.
+- Unit conversion.
+- Currency formatting.
+- Required-field validation.
+- Optional-field handling.
+- Unsupported-value detection.
+- Description length restrictions.
+- Image restrictions.
+- Image ordering.
+- Provider-specific metadata.
+
+Validation should occur before attempting publication.
+
+Where possible, show the agency exactly which fields must be completed before publishing to a particular portal.
+
+A property may be valid in BROKR but invalid for a specific external portal.
+
+This must not make the property invalid for the rest of the application.
+
+## 28. AGENCY-SPECIFIC PORTAL CONNECTIONS
+
+Publishing will occur on behalf of individual agencies.
+
+Each agency may have its own account and commercial agreement with an external portal.
+
+Design a secure multi-tenant connection model.
+
+It should support:
+
+- Agency ID.
+- Provider ID.
+- Connection status.
+- Authentication method.
+- Encrypted credentials.
+- Token renewal where supported.
+- Connection testing.
+- Account identification.
+- Permission validation.
+- Last synchronization.
+- Error state.
+- Disconnection.
+- Credential revocation.
+
+Credentials must never be stored in frontend-accessible Firestore documents, public property data, IndexedDB or logs.
+
+Evaluate Secret Manager and other secure credential storage approaches.
+
+Consider the actual cost of managing secrets at scale.
+
+Do not create secrets per property or per advertisement.
+
+## 29. PUBLICATION LIFECYCLE
+
+A property may have different publication states on different portals.
+
+For example:
+
+- Published successfully on Storia.ro.
+- Rejected on Imobiliare.ro because a required field is missing.
+- Awaiting publication on Publi24.ro.
+
+These states must be tracked independently.
+
+Design a publication record associated with the agency, property and portal.
+
+Consider fields such as:
+
+- Tenant ID.
+- Property ID.
+- Provider ID.
+- External listing ID.
+- Publication status.
+- Submitted property version.
+- Last successfully synchronized version.
+- Last synchronization time.
+- Last error.
+- Retry state.
+- Provider metadata.
+- External URL, if available.
+
+Support lifecycle states such as:
+
+- Not published.
+- Ready for publication.
+- Pending.
+- Publishing.
+- Published.
+- Update pending.
+- Rejected.
+- Paused.
+- Withdrawal pending.
+- Withdrawn.
+- Synchronization error.
+
+The exact states should reflect the actual provider capabilities.
+
+## 30. ASYNCHRONOUS PUBLISHING
+
+External portal operations must not block interactive CRM workflows.
+
+Use background processing for:
+
+- Initial publication.
+- Updates.
+- Price changes.
+- Image changes.
+- Pausing advertisements.
+- Withdrawals.
+- Deletions.
+- Synchronization checks.
+
+Use the transactional outbox and idempotency principles described earlier.
+
+Account for:
+
+- Provider downtime.
+- Rate limits.
+- Authentication expiration.
+- Invalid data.
+- Partial publication.
+- Duplicate requests.
+- Worker crashes.
+- Retry exhaustion.
+- Manual retries.
+- External changes.
+
+Distinguish transient errors from permanent validation or authentication errors.
+
+Use exponential backoff where appropriate.
+
+Do not blindly retry requests that cannot succeed without user intervention.
+
+If a provider supports external idempotency keys, use them.
+
+If not, define how duplicate external advertisements will be prevented or detected.
+
+## 31. VERIFY ACTUAL PROVIDER CAPABILITIES
+
+For each proposed portal, investigate:
+
+- Whether automated publishing is supported.
+- Whether an API is available.
+- Whether access is public or restricted.
+- Whether a commercial agreement is required.
+- Whether XML feeds are supported.
+- Whether FTP feeds are supported.
+- Whether CSV import is supported.
+- Whether updates are supported.
+- Whether withdrawals and deletions are supported.
+- Whether publication status can be queried.
+- Whether external listing IDs are returned.
+- Whether rate limits exist.
+- Whether fees or quotas apply.
+- Whether the integration method is permitted by the provider's terms.
+
+Do not invent API endpoints, credentials or integration capabilities.
+
+Do not propose browser automation to bypass access restrictions or provider terms.
+
+If a provider does not offer a suitable supported integration, document the limitation and evaluate legitimate alternatives.
+
+## 32. PORTAL IMPLEMENTATION ROADMAP
+
+The portal architecture should be introduced progressively.
+
+### Initial pilot
+
+Prepare:
+
+- Canonical property model compatibility.
+- Provider abstraction.
+- Publication record structure.
+- Mapping contracts.
+- Validation architecture.
+- Job orchestration compatibility.
+- Credential security design.
+- Mock provider for testing.
+
+Do not implement all real portal connections.
+
+### First real portal integration
+
+Select the first provider based on:
+
+- Actual agency demand.
+- Technical feasibility.
+- Commercial access.
+- Provider documentation.
+- Integration cost.
+- Expected business value.
+
+Implement its adapter independently.
+
+Test with a controlled agency account.
+
+### Additional integrations
+
+Add further providers independently, without changing the core property model.
+
+### Advanced publishing capabilities
+
+Defer bulk publishing, advanced synchronization analytics, publication quotas and subscription-based portal packages until actual usage justifies them.
+
+---
+
+# PART IX — NOTIFICATIONS, AUTOMATION AND AI
+
+## 33. BACKEND-OWNED SCHEDULING
+
+Inspect all current setInterval-based and browser-based automation.
+
+Determine which tasks should be owned by the backend.
+
+A browser timer must not be the authoritative mechanism for business-critical scheduled operations.
+
+Evaluate:
+
+- Cloud Scheduler.
+- Cloud Tasks.
+- Firestore scheduled-job records.
+- Transactional outbox.
+- Appropriate locking and idempotency.
+
+Ensure that multiple application instances do not execute the same scheduled work unintentionally.
+
+Define job ownership and recovery.
+
+## 34. AI COST CONTROL
+
+AI usage can become a significant variable expense.
+
+Evaluate:
+
+- Gemini API usage.
+- Token consumption.
+- Model selection.
+- Request limits.
+- Per-agency quotas.
+- User-level limits.
+- Concurrency.
+- Retry behavior.
+- Timeouts.
+- Failed requests.
+- Caching opportunities.
+- Cost monitoring.
+
+Avoid running AI operations unnecessarily.
+
+Do not allow one agency to generate uncontrolled AI costs for the platform.
+
+Design usage limits that can later be incorporated into subscription plans.
+
+## 35. AI VOICE AND WEBSOCKET ARCHITECTURE
+
+Inspect the existing AI Voice and Twilio implementation.
+
+Evaluate:
+
+- WebSocket lifecycle.
+- Authentication.
+- Session ownership.
+- Multiple Cloud Run instances.
+- Connection affinity.
+- Reconnection.
+- Session recovery.
+- Transcript persistence.
+- Audio processing.
+- Resource consumption.
+
+Do not assume Redis Pub/Sub provides durable message storage.
+
+Important transcripts and events must be persisted durably.
+
+If replay or recovery is required, use sequence numbers and a durable event history.
+
+Separate ephemeral voice coordination from durable business data.
+
+Do not overengineer this subsystem before its actual usage and reliability requirements are known.
+
+---
+
+# PART X — OBSERVABILITY AND SUPER ADMIN DASHBOARD
+
+## 36. PERFORMANCE AND USAGE MONITORING
+
+The platform needs visibility into performance and operating costs.
+
+However, the monitoring system itself must remain affordable.
+
+Define a minimal monitoring foundation for the pilot and an advanced monitoring roadmap for later stages.
+
+Monitor relevant metrics such as:
+
+### Application
+
+- Request count.
+- Request latency.
+- Error rate.
+- CPU.
+- Memory.
+- Instance count.
+- Cold starts.
+- Concurrent requests.
+
+### Database
+
+- Query patterns.
+- Reads.
+- Writes.
+- Document sizes.
+- Listener activity.
+- Reconnection behavior.
+- Query latency.
+
+### Background jobs
+
+- Pending jobs.
+- Processing jobs.
+- Completed jobs.
+- Failed jobs.
+- Retry count.
+- Processing duration.
+- Dead-letter count.
+
+### AI
+
+- Requests.
+- Token usage.
+- Model usage.
+- Failures.
+- Cost estimates.
+
+### External publishing
+
+- Publications per provider.
+- Successful publications.
+- Failed publications.
+- Pending synchronization.
+- Retry count.
+- Provider errors.
+- Processing duration.
+
+### Storage and media
+
+- Storage consumption.
+- Upload volume.
+- Processing volume.
+- Egress.
+- Failed transformations.
+
+## 37. SUPER ADMIN PERFORMANCE DASHBOARD
+
+The existing architecture proposal includes a Super Admin dashboard.
+
+Retain this concept, but introduce it progressively.
+
+### Pilot version
+
+Include only metrics that are genuinely useful and inexpensive to collect.
+
+Potential examples:
+
+- Active agencies.
+- Active users.
+- Application errors.
+- Request latency.
+- Basic Firestore usage.
+- AI usage.
+- Storage usage.
+- Background job failures.
+- External publishing activity, when implemented.
+
+### Advanced version
+
+Later introduce:
+
+- Per-agency usage.
+- Cost attribution.
+- Historical performance.
+- Resource consumption.
+- Workload analysis.
+- Queue monitoring.
+- Provider reliability.
+- Automated alerts.
+- Usage trends.
+
+Clearly distinguish between:
+
+1. Directly measured metrics.
+2. Application-level estimates.
+3. Cloud-provider monitoring metrics.
+4. Actual billing data.
+
+Do not claim exact per-agency Firestore billing if the platform does not have a reliable way to attribute those costs.
+
+Use Google Cloud Billing Export for actual billing analysis where appropriate.
+
+Per-agency cost attribution may require application-level instrumentation and documented allocation methods.
+
+Do not confuse the number of application listeners with the number of independent network connections.
+
+Do not promise reductions in billing or performance without measurements.
+
+---
+
+# PART XI — COST MODEL AND COMMERCIAL VIABILITY
+
+## 38. REALISTIC MONTHLY INFRASTRUCTURE COSTS
+
+Provide a detailed estimated monthly cost model for:
+
+- One agency.
+- Two agencies.
+- Five agencies.
+- Ten agencies.
+- Twenty agencies.
+- Fifty agencies.
+
+Include, where applicable:
+
+- Cloud Run.
+- Firestore.
+- Firebase Authentication.
+- Firebase Storage or Google Cloud Storage.
+- Network egress.
+- Cloud CDN.
+- Load balancing.
+- Cloud Tasks.
+- Cloud Scheduler.
+- Redis.
+- Gemini API.
+- Logging.
+- Monitoring.
+- Backups.
+- Secret Manager.
+- External services.
+- Other recurring costs.
+
+Use realistic pricing for the intended European region.
+
+Clearly identify:
+
+- Free-tier allowances.
+- Fixed costs.
+- Variable costs.
+- Usage assumptions.
+- Estimated monthly totals.
+- Optional infrastructure.
+- Costs deferred until later.
+
+Provide low, medium and high usage scenarios when exact usage is unknown.
+
+Do not invent pricing.
+
+Use current official pricing sources where possible and cite them.
+
+Do not present speculative savings as guaranteed.
+
+Include the cost of operating the application, not just the infrastructure cost of individual components.
+
+## 39. COST PER AGENCY
+
+Evaluate the possibility of calculating an approximate operating cost per agency.
+
+Consider:
+
+- Storage.
+- Database usage.
+- AI consumption.
+- Media processing.
+- External publishing.
+- Background processing.
+- Network traffic.
+
+Identify which costs can be measured directly and which must be allocated using estimates.
+
+This will become important when defining subscription pricing.
+
+Do not implement a sophisticated billing engine during the pilot unless necessary, but ensure the architecture can support future usage-based plans and quotas.
+
+---
+
+# PART XII — TESTING, DEPLOYMENT AND DISASTER RECOVERY
+
+## 40. TESTING STRATEGY
+
+Define testing requirements for every architectural phase.
+
+Include:
+
+- Unit tests.
+- Integration tests.
+- API tests.
+- Firestore Security Rules tests.
+- Tenant-isolation tests.
+- Authorization tests.
+- Background-job tests.
+- Idempotency tests.
+- Migration tests.
+- Portal-adapter contract tests.
+- Browser-based tests.
+- Performance tests.
+
+Use tools such as k6 or Artillery where appropriate.
+
+However, load-testing the backend alone is insufficient.
+
+Firestore browser SDK listeners and multiple real browser tabs must also be tested.
+
+A realistic test environment should simulate:
+
+- Multiple agencies.
+- Multiple users per agency.
+- Multiple browser tabs.
+- Realistic data volumes.
+- Navigation.
+- Concurrent updates.
+- Reconnection.
+- Background processing.
+- AI requests.
+- Image processing.
+- External publishing jobs.
+
+Do not claim that a test with a particular number of HTTP requests proves support for the same number of concurrent users.
+
+Define the actual measurement methodology.
+
+## 41. BACKUP AND DISASTER RECOVERY
+
+Include:
+
+- Firestore backups.
+- Storage backups.
+- Backup retention.
+- Restore procedures.
+- Recovery testing.
+- Recovery Point Objective (RPO).
+- Recovery Time Objective (RTO).
+- Data migration recovery.
+- Configuration recovery.
+- Index restoration.
+- Scheduled-job recovery.
+- Media reference integrity.
+
+A backup strategy is not complete until restoration has been tested.
+
+Include a periodic restore drill.
+
+## 42. CI/CD AND INFRASTRUCTURE AS CODE
+
+Evaluate introducing:
+
+- Terraform or another appropriate Infrastructure as Code solution.
+- Automated build and deployment.
+- Environment separation.
+- Secret management.
+- Database migration controls.
+- Firestore Rules deployment.
+- Index deployment.
+- Staged rollout.
+- Canary deployment where appropriate.
+- Rollback procedures.
+
+Do not introduce unnecessary CI/CD complexity for the pilot.
+
+However, every production change must have a documented and reliable recovery path.
+
+Specify exactly what rollback means for each phase.
+
+A code rollback does not automatically reverse a database migration or restore deleted data.
+
+Define how backward compatibility is maintained during gradual migrations.
+
+---
+
+# PART XIII — REVISED PHASED IMPLEMENTATION ROADMAP
+
+## 43. THIS IS A MANDATORY REQUIREMENT
+
+Do not present implementation as one large project or one big-bang migration.
+
+**Divide the complete implementation into approximately 8–12 clearly defined phases.**
+
+The phases must be ordered by priority, dependency and risk.
+
+Each phase must be independently reviewable and, where possible, independently deployable and reversible.
+
+The purpose is to allow me to implement, test, validate and approve one phase before proceeding to the next.
+
+Do not combine unrelated architectural changes into one phase.
+
+Do not assume that all phases must be implemented immediately.
+
+Some phases should be explicitly classified as future growth phases.
+
+## 44. SUGGESTED PHASE STRUCTURE
+
+You may adjust the number, order or scope of phases if the actual codebase justifies it.
+
+However, the roadmap should consider the following structure:
+
+### PHASE 0 — Architecture Verification and Baseline
+
+- Inspect the actual project.
+- Verify existing architecture assumptions.
+- Identify risks.
+- Establish performance baselines.
+- Establish cost baselines.
+- Identify critical technical debt.
+- Define migration principles.
+- Define backup and recovery requirements.
+- Establish testing methodology.
+
+Deliverable: verified baseline and approved architecture.
+
+### PHASE 1 — Frontend Data Architecture
+
+- Centralized Client Data Hub.
+- Listener deduplication.
+- Query reuse.
+- Reference counting.
+- Cursor-based pagination.
+- Lazy detail hydration.
+- Appropriate Firestore local caching.
+- Authentication-aware cache lifecycle.
+- Tenant-aware cache isolation.
+
+Preserve existing Atomic Design and UI behavior.
+
+### PHASE 2 — Firestore Optimization and Summary Projections
+
+- Identify expensive queries.
+- Introduce justified summary projections.
+- Reduce unnecessary document payloads.
+- Optimize indexes.
+- Implement projection synchronization.
+- Add backfill and reconciliation.
+- Validate data consistency.
+
+### PHASE 3 — Security and Authorization Hardening
+
+- Review tenant isolation.
+- Improve authorization.
+- Validate Firebase custom claims strategy.
+- Define revocation and permission changes.
+- Review Admin SDK usage.
+- Implement fail-closed behavior.
+- Add automated tenant-isolation tests.
+
+Do not combine unrelated Redis implementation with this phase.
+
+### PHASE 4 — Budget-Efficient Infrastructure Foundation
+
+- Review the initial Cloud Run deployment.
+- Define service boundaries.
+- Establish environment configuration.
+- Implement necessary basic monitoring.
+- Improve deployment reliability.
+- Establish backup and restore procedures.
+- Implement only justified managed services.
+
+Do not deploy future infrastructure prematurely.
+
+### PHASE 5 — Media and Storage Optimization
+
+- Evaluate storage architecture.
+- Improve image delivery.
+- Introduce appropriate caching.
+- Separate public and private assets.
+- Implement migration where justified.
+- Define media cleanup.
+
+Introduce CDN only if justified by actual requirements and cost.
+
+### PHASE 6 — Background Jobs and Workload Isolation
+
+- Replace critical browser-owned scheduling.
+- Introduce appropriate backend-owned jobs.
+- Implement outbox.
+- Implement idempotent workers.
+- Define retries and dead-letter handling.
+- Separate scraping, AI and media workloads only where justified.
+- Establish fair tenant-level resource allocation.
+
+### PHASE 7 — External Portal Publishing Foundation
+
+- Validate canonical property model.
+- Define provider abstraction.
+- Define portal-specific mapping contracts.
+- Define publication records.
+- Define publication lifecycle.
+- Define tenant-specific credentials.
+- Define asynchronous publishing architecture.
+- Implement mock provider and tests.
+
+This phase prepares the architecture without necessarily implementing live portal connections.
+
+### PHASE 8 — First External Portal Integration
+
+- Select the first portal based on actual feasibility and demand.
+- Verify its documentation and commercial requirements.
+- Implement its adapter.
+- Implement authentication.
+- Implement publishing.
+- Implement updates and withdrawals where supported.
+- Implement error handling and retries.
+- Test with a controlled agency account.
+
+Additional portals should be separate subsequent implementations.
+
+### PHASE 9 — Super Admin Monitoring and Cost Attribution
+
+- Implement the pilot dashboard.
+- Add useful application metrics.
+- Add agency-level usage instrumentation.
+- Add background-job visibility.
+- Add AI usage tracking.
+- Add portal publishing visibility.
+- Expand monitoring only where useful.
+
+### PHASE 10 — Scale Validation and Infrastructure Evolution
+
+- Conduct realistic browser and backend load tests.
+- Evaluate actual bottlenecks.
+- Validate cost assumptions.
+- Define Redis introduction criteria.
+- Define service separation criteria.
+- Define search infrastructure criteria.
+- Define multi-region criteria.
+- Document the next infrastructure stage.
+
+This phase must not automatically provision all future infrastructure.
+
+---
+
+# PART XIV — REQUIRED FORMAT FOR EVERY IMPLEMENTATION PHASE
+
+## 45. PHASE SPECIFICATION TEMPLATE
+
+For every phase, provide the following information.
+
+### A. Objective
+
+What problem does this phase solve?
+
+### B. Current State
+
+What currently exists in the codebase?
+
+### C. Scope
+
+What will change?
+
+What will explicitly remain unchanged?
+
+### D. Technical Implementation
+
+Explain how the change will work.
+
+Include relevant architecture diagrams, data flows, interfaces and schemas where appropriate.
+
+### E. Exact Project Files
+
+Identify the files, components, routes, services and configuration that are expected to be affected.
+
+Use actual file paths from the inspected project where possible.
+
+Do not invent file names.
+
+If implementation details are not yet known, state that they must be determined during the phase.
+
+### F. Database and Data Migration
+
+Explain:
+
+- Required schema changes.
+- Backfill.
+- Migration order.
+- Compatibility.
+- Data consistency.
+- Recovery.
+- Rollback.
+
+If no migration is necessary, explicitly state so.
+
+### G. Security Impact
+
+Explain authorization, tenant isolation, credentials and data-access implications.
+
+### H. Dependencies
+
+Identify which earlier phases must be completed.
+
+### I. Testing
+
+Specify the tests required before deployment.
+
+### J. Acceptance Criteria
+
+Define objective conditions that must be satisfied before the phase is considered complete.
+
+Avoid vague criteria such as "improved performance."
+
+### K. Deployment
+
+Explain how the phase will be deployed safely.
+
+### L. Rollback
+
+Explain exactly how to revert the phase if problems occur.
+
+### M. Cost Impact
+
+Estimate any additional monthly infrastructure or service costs.
+
+### N. Complexity
+
+Estimate implementation complexity, risk and relative effort.
+
+### O. Next Phase
+
+Explain what this phase enables.
+
+---
+
+# PART XV — PERFORMANCE TARGETS AND VALIDATION
+
+## 46. DO NOT PRESENT PROJECTIONS AS GUARANTEED RESULTS
+
+Previous architecture proposals included potential improvements such as:
+
+- 85–95% fewer Firestore reads.
+- 80–90% smaller client payloads.
+- 50–70% lower infrastructure or database costs.
+
+These figures must not be treated as guaranteed outcomes.
+
+Recalculate or qualify them based on actual measurements.
+
+For every performance target, define:
+
+- Baseline.
+- Measurement method.
+- Expected result.
+- Test conditions.
+- Confidence level.
+- Potential trade-offs.
+
+Distinguish between:
+
+- Application performance.
+- Firestore billing.
+- Network egress.
+- Cloud Run consumption.
+- Total infrastructure expenditure.
+
+A reduction in Firestore reads does not automatically mean the same percentage reduction in total operating costs.
+
+Include the cost of any additional infrastructure introduced to achieve those improvements.
+
+## 47. DEFINE MEASURABLE SUCCESS CRITERIA
+
+Define realistic targets for:
+
+- API latency.
+- Page load.
+- Navigation.
+- Initial data hydration.
+- Real-time update latency.
+- Database reads.
+- Database writes.
+- Client payload size.
+- Error rate.
+- Job processing time.
+- Recovery behavior.
+- Cost per agency.
+
+Targets must reflect the pilot's actual usage and should have a clearly documented measurement method.
+
+---
+
+# PART XVI — FUTURE SEARCH AND DATA GROWTH
+
+## 48. SEARCH ARCHITECTURE
+
+Evaluate whether the current Firestore search approach is sufficient.
+
+Consider future requirements involving:
+
+- Properties.
+- Leads.
+- Contacts.
+- Requests.
+- Global search.
+- Agency-level filtering.
+- Advanced filters.
+
+Do not introduce Typesense, Meilisearch, Elasticsearch or Vertex AI Search automatically.
+
+Identify the actual limitations of the existing search implementation.
+
+Define the conditions under which a dedicated search engine becomes justified.
+
+The search architecture must preserve tenant isolation and support provider-independent future expansion.
+
+---
+
+# PART XVII — FINAL DELIVERABLES
+
+## 49. WHAT I EXPECT YOU TO PRODUCE
+
+The final revised documentation must include all of the following.
+
+### 1. Executive Architectural Assessment
+
+- Current architecture.
+- Main problems.
+- Critical risks.
+- Recommended direction.
+- What should change immediately.
+- What should remain unchanged.
+
+### 2. Recommended Target Architecture
+
+Provide a clear architecture diagram.
+
+Show:
+
+- Frontend.
+- Core API.
+- Firebase Authentication.
+- Firestore.
+- Storage.
+- Background processing.
+- AI services.
+- Media processing.
+- External portal integration layer.
+- Queues.
+- Monitoring.
+
+Distinguish the initial pilot architecture from the future expanded architecture.
+
+### 3. Initial Pilot Infrastructure
+
+Specify exactly what should be deployed for one or two agencies.
+
+Include the rationale for every component.
+
+Clearly identify components that should not be introduced yet.
+
+### 4. Future Infrastructure Evolution
+
+Explain how the architecture evolves from the pilot to early growth and then to an established multi-agency platform.
+
+Include objective upgrade triggers.
+
+### 5. Complete Phased Implementation Roadmap
+
+Provide approximately 8–12 phases using the detailed phase template.
+
+Identify dependencies and the recommended implementation order.
+
+Clearly distinguish:
+
+- Required for the initial pilot.
+- Architectural preparation for future features.
+- Deferred until commercial demand exists.
+- Deferred until measurable technical thresholds are reached.
+
+### 6. Database Architecture
+
+Include:
+
+- Relevant Firestore collections.
+- Proposed summary projections.
+- Relevant schemas.
+- Indexes.
+- Data ownership.
+- Synchronization.
+- Migration strategy.
+
+### 7. Security Architecture
+
+Include:
+
+- Authentication.
+- Authorization.
+- Tenant isolation.
+- Token revocation.
+- Firestore Rules.
+- Admin SDK.
+- Credentials.
+- Worker authentication.
+- Cross-tenant testing.
+
+### 8. Background Job Architecture
+
+Include:
+
+- Transactional outbox.
+- Idempotency.
+- Retries.
+- Locks and leases.
+- Queue configuration.
+- Dead-letter handling.
+- Job monitoring.
+
+### 9. External Portal Integration Architecture
+
+Include:
+
+- Canonical property model.
+- Provider abstraction.
+- Provider adapters.
+- Field mapping.
+- Credentials.
+- Publication lifecycle.
+- Synchronization.
+- Error handling.
+- Future implementation sequence.
+
+### 10. Monitoring and Super Admin Dashboard
+
+Define the pilot version and future advanced version.
+
+Distinguish measured metrics from estimates.
+
+### 11. Monthly Cost Model
+
+Include realistic costs for 1, 2, 5, 10, 20 and 50 agencies.
+
+Show assumptions, free tiers, fixed costs and variable costs.
+
+### 12. Performance Validation Plan
+
+Define baselines, measurable targets and testing methodology.
+
+### 13. Disaster Recovery and Deployment
+
+Include backups, restoration, CI/CD, rollback and migration safety.
+
+### 14. Risk Register
+
+Identify the most important architectural, security, financial and operational risks.
+
+For each risk, provide:
+
+- Probability.
+- Impact.
+- Mitigation.
+- Responsible component or phase.
+
+### 15. Decisions Requiring My Approval
+
+List decisions that cannot responsibly be made without my input.
+
+Explain the trade-offs and recommend a default option.
+
+---
+
+# PART XVIII — FINAL RULES
+
+## 50. NON-NEGOTIABLE PRINCIPLES
+
+1. Do not modify any code or infrastructure.
+2. Inspect the actual project before making assumptions.
+3. Preserve existing functionality.
+4. Preserve Atomic Design.
+5. Do not propose rewriting the application from scratch.
+6. Prefer incremental refactoring.
+7. Optimize for the very limited initial budget.
+8. Design for future growth without paying for it prematurely.
+9. Do not introduce Redis or multiple services without a measurable justification.
+10. Do not introduce multi-region infrastructure during the pilot without a compelling requirement.
+11. Treat Firestore as the authoritative data source unless a clearly justified alternative is proposed.
+12. Ensure that all multi-tenant operations are secure.
+13. Do not claim exactly-once processing where it cannot be guaranteed.
+14. Do not use unsafe distributed lock fallbacks.
+15. Do not treat Redis Pub/Sub as durable storage.
+16. Do not assume Firestore Security Rules protect Admin SDK operations.
+17. Do not treat IndexedDB as a substitute for server-side authorization.
+18. Do not present estimated performance improvements as proven results.
+19. Do not invent external portal APIs or publishing capabilities.
+20. Design the external publishing architecture from the beginning, but defer unnecessary live integrations.
+21. Keep the canonical BROKR property model independent of external portal schemas.
+22. Make every implementation phase independently reviewable and, where possible, reversible.
+23. Include the cost implications of every significant architectural decision.
+24. Clearly distinguish what is necessary now from what is only necessary in the future.
+
+## 51. FINAL INSTRUCTION
+
+Produce a complete, coherent and technically detailed revision of the existing architecture and implementation plan.
+
+Do not simply append these requirements to the previous document.
+
+Reevaluate the entire architecture in light of all requirements and resolve any contradictions between the earlier proposals.
+
+The final recommendation must be internally consistent.
+
+In particular, the recommended architecture must make sense for a project that:
+
+- Already has a substantial working application.
+- Initially serves only one or two agencies.
+- Has a very limited budget.
+- Needs reliable multi-tenant foundations.
+- Must be capable of scaling to many agencies.
+- Will eventually publish property advertisements to external portals.
+- Must avoid expensive infrastructure and unnecessary complexity during the initial commercial launch.
+
+The implementation roadmap must be divided into clearly defined, sequential phases.
+
+**I want to implement and validate each phase separately, review the results, and explicitly approve the next phase before proceeding.**
+
+At the end, provide:
+
+1. Your recommended initial architecture.
+2. The exact phases and their dependencies.
+3. The estimated initial monthly operating cost.
+4. The three most important technical risks.
+5. The most important decisions requiring my approval.
+
+Wait for my explicit approval before implementing anything.

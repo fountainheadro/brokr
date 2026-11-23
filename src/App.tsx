@@ -5,6 +5,9 @@ import { NotificationProvider } from "./components/NotificationProvider";
 import { AuthProvider } from "./core/auth/ctx_auth";
 import { TenantProvider, useTenantContext } from "./core/tenancy/ctx_tenant";
 import { MolPreviewBanner } from "./ui/molecules/platform/mol_preview-banner";
+import { MolErrorRecoveryBanner } from "./ui/molecules/common/mol_error-recovery-banner";
+import { useDataHubSyncState } from "./core/crm/hooks_crm-hub";
+import { clientDataHub } from "./core/crm/svc_client-data-hub";
 
 const RELOAD_GUARD_KEY = "brokr_lazy_chunk_reload_ts";
 
@@ -157,6 +160,31 @@ const RootRouteElement = () => {
   );
 };
 
+const DataHubStatusBanner: React.FC = () => {
+  const sync = useDataHubSyncState();
+
+  if (!sync.isOnline) {
+    return (
+      <MolErrorRecoveryBanner
+        variant="offline"
+        message="Vizualizați datele salvate local în browser. Modificările vor fi reluate automat la revenirea conexiunii."
+      />
+    );
+  }
+
+  if (sync.lastError) {
+    return (
+      <MolErrorRecoveryBanner
+        variant="error"
+        message={sync.lastError}
+        onRetry={() => clientDataHub.retryFailedSlices()}
+      />
+    );
+  }
+
+  return null;
+};
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -164,6 +192,7 @@ export default function App() {
         <TenantProvider>
           <NotificationProvider>
             <MolPreviewBanner />
+            <DataHubStatusBanner />
             <RouteErrorBoundary>
               <Suspense fallback={<RouteLoadingFallback />}>
                 <Routes>

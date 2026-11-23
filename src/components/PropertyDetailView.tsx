@@ -64,6 +64,7 @@ export interface PropertyDetailViewProps {
   onDelete?: () => void;
   onAddActivity?: () => void;
   onUpdateLead?: (updatedData: Partial<Lead>) => void;
+  onRefreshPublicProperty?: () => void;
 }
 
 interface NavSection {
@@ -361,7 +362,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   showTopNavbar = false,
   onDelete,
   onAddActivity,
-  onUpdateLead
+  onUpdateLead,
+  onRefreshPublicProperty
 }) => {
   const { tenant, platformRootDomain } = useTenantContext();
   const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
@@ -795,6 +797,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         }
       });
     }
+    if (Array.isArray((lead as any)?.images)) {
+      (lead as any).images.forEach((item: any) => {
+        const url = typeof item === "string" ? item : item?.original;
+        addClean(url);
+      });
+    }
     return images;
   }, [lead]);
 
@@ -849,14 +857,16 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   // Normalized price parts: amount, symbol '€' (strictly replacing any 'EUR', 'euro'), and rent flag
   const priceParts = useMemo(() => {
-    let rawStr = "";
-    if (crmData?.pret?.detalii?.pret) {
-      rawStr = String(crmData.pret.detalii.pret);
-    } else if (lead?.price) {
-      rawStr = String(lead.price);
-    } else {
-      rawStr = isRent ? "775" : "145.000";
-    }
+    const normalizeCandidate = (val: unknown): string => {
+      if (val === null || val === undefined) return "";
+      const s = String(val).trim();
+      if (!s || s === "-" || s.toUpperCase() === "N/A") return "";
+      return s;
+    };
+
+    const topLevelPrice = normalizeCandidate(lead?.price);
+    const crmPrice = normalizeCandidate(crmData?.pret?.detalii?.pret);
+    const rawStr = topLevelPrice || crmPrice || (isRent ? "775" : "145.000");
 
     // Strip out currency words & suffixes to keep pure formatted number
     let numOnly = rawStr
@@ -1214,10 +1224,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         ...(saved.acte || {})
       },
       tranzactie: {
-        "Preț": saved.tranzactie?.["Preț"] || formattedPrice,
+        ...(saved.tranzactie || {}),
+        "Preț": formattedPrice,
         "TVA": saved.tranzactie?.["TVA"] || "Scutit de TVA / conform legislației în vigoare",
         "Comision": saved.tranzactie?.["Comision"] || defaultCommission,
-        ...(saved.tranzactie || {})
       }
     };
   }, [lead, crmData?.descriere?.titlu, displayTitle, summaryDescription, suprafataUtila, compartimentare, etaj, anConstructie, camere, bai, balcoane, stareInterior, formattedPrice, defaultCommission]);
@@ -1246,6 +1256,36 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       setIsPhotosDirty(false);
     }
   }, [allImages, isEditingPhotos]);
+
+  const galleryImages = isPublicShared ? allImages : imagesList;
+
+  const openLightboxAt = (index: number) => {
+    if (galleryImages.length === 0) return;
+    const clamped = Math.max(0, Math.min(index, galleryImages.length - 1));
+    setSelectedPhotoIndex(clamped);
+    setIsGalleryOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isGalleryOpen || galleryImages.length === 0) return;
+    const handleLightboxKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        setIsGalleryOpen(false);
+      } else if (e.key === "ArrowRight" && galleryImages.length > 1) {
+        setSelectedPhotoIndex((prev) => (prev >= galleryImages.length - 1 ? 0 : prev + 1));
+      } else if (e.key === "ArrowLeft" && galleryImages.length > 1) {
+        setSelectedPhotoIndex((prev) => (prev <= 0 ? galleryImages.length - 1 : prev - 1));
+      }
+    };
+    window.addEventListener("keydown", handleLightboxKeyDown);
+    return () => window.removeEventListener("keydown", handleLightboxKeyDown);
+  }, [isGalleryOpen, galleryImages.length]);
+
+  useEffect(() => {
+    if (selectedPhotoIndex >= galleryImages.length && galleryImages.length > 0) {
+      setSelectedPhotoIndex(0);
+    }
+  }, [galleryImages.length, selectedPhotoIndex]);
 
   useEffect(() => {
     const page = Math.floor(carouselIndex / 4);
@@ -1471,11 +1511,42 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         }
       }
 
-      await leadsService.updateLeadData(lead.id, updates);
+      const persisted = await leadsService.updateLeadData(lead.id, updates);
 
-      if (onUpdateLead && sectionId === "introducere") {
+      if (sectionId === "tranzactie") {
+        const nextPrice = updatedSec["Preț"] ? String(updatedSec["Preț"]).trim() : undefined;
+        const patchedExtracted = {
+          ...(lead.extractedData || {}),
+          presentationSections: nextSectionData,
+          crmData: {
+            ...(lead.extractedData?.crmData || {}),
+            ...(nextPrice
+              ? {
+                  pret: {
+                    ...(lead.extractedData?.crmData?.pret || {}),
+                    detalii: {
+                      ...(lead.extractedData?.crmData?.pret?.detalii || {}),
+                      pret: nextPrice,
+                    },
+                  },
+                }
+              : {}),
+          },
+        } as any;
+        const localPatch: Partial<Lead> = {
+          ...(nextPrice ? { price: nextPrice } : {}),
+          extractedData: patchedExtracted,
+        };
+        if (onUpdateLead) {
+          onUpdateLead(localPatch);
+        }
+        void publishPublicShareSnapshot(
+          { ...lead, ...localPatch, ...(persisted || {}) },
+          { tenantId: tenant?.id, force: true }
+        );
+      } else if (sectionId === "introducere") {
         const trimmedTitle = (updatedSec["titlu"] || "").trim();
-        onUpdateLead({
+        const localPatch: Partial<Lead> = {
           ...(trimmedTitle ? { title: trimmedTitle } : {}),
           extractedData: {
             ...(lead.extractedData || {}),
@@ -1489,7 +1560,26 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               },
             },
           } as any,
-        });
+        };
+        if (onUpdateLead) {
+          onUpdateLead(localPatch);
+        }
+        void publishPublicShareSnapshot(
+          { ...lead, ...localPatch, ...(persisted || {}) },
+          { tenantId: tenant?.id, force: true }
+        );
+      } else {
+        void publishPublicShareSnapshot(
+          {
+            ...lead,
+            extractedData: {
+              ...(lead.extractedData || {}),
+              presentationSections: nextSectionData,
+            } as any,
+            ...(persisted || {}),
+          },
+          { tenantId: tenant?.id, force: true }
+        );
       }
 
       toast.success("Modificările au fost salvate cu succes!");
@@ -1756,7 +1846,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               <div id="photos" className="w-full h-[50vh] lg:h-[420px] rounded-xl overflow-hidden grid grid-cols-4 grid-rows-1 gap-2 bg-gray-100 select-none scroll-mt-[104px]">
                 {/* Col 1 (50% width) - 1st photo */}
                 <div 
-                  onClick={() => { setSelectedPhotoIndex(0); setIsGalleryOpen(true); }}
+                  onClick={() => openLightboxAt(0)}
                   className="col-span-2 relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                 >
                   {isPublicShared ? (
@@ -1764,6 +1854,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       src={getThumbnailImageUrl(allImages[0], 1000)}
                       alt={`${displayTitle} - foto principală`}
                       fit="cover"
+                      priority="high"
+                      onAuthExpired={onRefreshPublicProperty}
                       className="group-hover:scale-102 transition-transform duration-300"
                     />
                   ) : (
@@ -1780,7 +1872,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 {/* Col 2 (25% width) - 2 equal 50% height stacked photos aligned with Col 1 bottom */}
                 <div className="col-span-1 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 h-full min-h-0">
                   <div 
-                    onClick={() => { setSelectedPhotoIndex(1); setIsGalleryOpen(true); }}
+                    onClick={() => openLightboxAt(1)}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
                     {isPublicShared ? (
@@ -1788,6 +1880,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         src={getThumbnailImageUrl(allImages[1] || allImages[0], 560)}
                         alt={`${displayTitle} - foto 2`}
                         fit="cover"
+                        onAuthExpired={onRefreshPublicProperty}
                         className="group-hover:scale-102 transition-transform duration-300"
                       />
                     ) : (
@@ -1801,7 +1894,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     )}
                   </div>
                   <div 
-                    onClick={() => { setSelectedPhotoIndex(2); setIsGalleryOpen(true); }}
+                    onClick={() => openLightboxAt(2)}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
                     {isPublicShared ? (
@@ -1809,6 +1902,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         src={getThumbnailImageUrl(allImages[2] || allImages[0], 560)}
                         alt={`${displayTitle} - foto 3`}
                         fit="cover"
+                        onAuthExpired={onRefreshPublicProperty}
                         className="group-hover:scale-102 transition-transform duration-300"
                       />
                     ) : (
@@ -1826,7 +1920,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 {/* Col 3 (25% width) - 2 equal 50% height stacked photos aligned with Col 1 bottom, last photo acts as open lightbox link */}
                 <div className="col-span-1 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 h-full min-h-0">
                   <div 
-                    onClick={() => { setSelectedPhotoIndex(3); setIsGalleryOpen(true); }}
+                    onClick={() => openLightboxAt(3)}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
                     {isPublicShared ? (
@@ -1834,6 +1928,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         src={getThumbnailImageUrl(allImages[3] || allImages[0], 560)}
                         alt={`${displayTitle} - foto 4`}
                         fit="cover"
+                        onAuthExpired={onRefreshPublicProperty}
                         className="group-hover:scale-102 transition-transform duration-300"
                       />
                     ) : (
@@ -1847,7 +1942,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     )}
                   </div>
                   <div 
-                    onClick={() => { setSelectedPhotoIndex(4); setIsGalleryOpen(true); }}
+                    onClick={() => openLightboxAt(4)}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
                   >
                     {isPublicShared ? (
@@ -1855,6 +1950,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         src={getThumbnailImageUrl(allImages[4] || allImages[0], 560)}
                         alt={`${displayTitle} - foto 5`}
                         fit="cover"
+                        onAuthExpired={onRefreshPublicProperty}
                         className="group-hover:scale-102 transition-transform duration-300"
                       />
                     ) : (
@@ -2914,12 +3010,12 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       )}
 
       {/* Lightbox Photo Gallery Modal */}
-      {isGalleryOpen && allImages.length > 0 && (
+      {isGalleryOpen && galleryImages.length > 0 && (
         <div className="fixed inset-0 z-50 bg-black/95 backdrop-blur-md flex flex-col">
           <div className="h-14 px-6 flex items-center justify-between text-white border-b border-white/10 shrink-0">
             <div className="flex items-center gap-3">
               <span className="text-xs font-semibold bg-white/10 px-2 py-1 rounded tabular-nums">
-                {selectedPhotoIndex + 1} / {allImages.length}
+                {Math.min(selectedPhotoIndex, galleryImages.length - 1) + 1} / {galleryImages.length}
               </span>
               <span className="text-xs text-gray-300 hidden sm:inline truncate max-w-md">
                 {displayTitle}
@@ -2929,37 +3025,40 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             <button
               type="button"
               onClick={() => setIsGalleryOpen(false)}
-              className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors"
+              className="p-2 text-gray-400 hover:text-white rounded-lg hover:bg-white/10 transition-colors cursor-pointer"
               title="Închide galeria (Esc)"
             >
               <X size={22} />
             </button>
           </div>
 
-          <div className="flex-1 relative flex items-center justify-center p-4">
+          <div className="flex-1 min-h-0 relative flex items-center justify-center p-4">
             {isPublicShared ? (
-              <div className="w-full h-[82vh] max-w-[90vw]">
+              <div className="w-full h-full max-w-[90vw] max-h-full">
                 <ProtectedPublicImage
-                  src={getThumbnailImageUrl(imagesList[selectedPhotoIndex] || imagesList[0], 1600)}
+                  src={getThumbnailImageUrl(galleryImages[selectedPhotoIndex] || galleryImages[0], 1600)}
                   alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
                   fit="contain"
+                  priority="high"
+                  theme="dark"
+                  onAuthExpired={onRefreshPublicProperty}
                   className="rounded shadow-2xl"
                 />
               </div>
             ) : (
               <img 
-                src={getThumbnailImageUrl(imagesList[selectedPhotoIndex] || imagesList[0], 1600)} 
+                src={getThumbnailImageUrl(galleryImages[selectedPhotoIndex] || galleryImages[0], 1600)} 
                 alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
                 decoding="async"
-                className="max-h-[82vh] max-w-[90vw] object-contain rounded shadow-2xl transition-all"
+                className="max-h-full max-w-[90vw] object-contain rounded shadow-2xl transition-all"
                 referrerPolicy="no-referrer"
               />
             )}
 
-            {imagesList.length > 1 && (
+            {galleryImages.length > 1 && (
               <button
                 type="button"
-                onClick={() => setSelectedPhotoIndex(prev => (prev === 0 ? imagesList.length - 1 : prev - 1))}
+                onClick={() => setSelectedPhotoIndex(prev => (prev <= 0 ? galleryImages.length - 1 : prev - 1))}
                 className="absolute left-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm cursor-pointer"
                 title="Fotografia anterioară"
               >
@@ -2967,10 +3066,10 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </button>
             )}
 
-            {imagesList.length > 1 && (
+            {galleryImages.length > 1 && (
               <button
                 type="button"
-                onClick={() => setSelectedPhotoIndex(prev => (prev === imagesList.length - 1 ? 0 : prev + 1))}
+                onClick={() => setSelectedPhotoIndex(prev => (prev >= galleryImages.length - 1 ? 0 : prev + 1))}
                 className="absolute right-4 top-1/2 -translate-y-1/2 z-20 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors backdrop-blur-sm cursor-pointer"
                 title="Următoarea fotografie"
               >
@@ -2979,13 +3078,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             )}
           </div>
 
-          <div className="h-20 bg-black/60 border-t border-white/10 px-4 flex items-center justify-center gap-2 overflow-x-auto no-scrollbar shrink-0">
-            {imagesList.map((img, idx) => (
+          <div className="h-20 bg-black/60 border-t border-white/10 px-4 flex items-center justify-start sm:justify-center gap-2 overflow-x-auto no-scrollbar shrink-0">
+            {galleryImages.map((img, idx) => (
               <button
                 key={idx}
                 type="button"
                 onClick={() => setSelectedPhotoIndex(idx)}
-                className={`w-14 h-12 rounded overflow-hidden border-2 transition-all shrink-0 cursor-pointer ${
+                className={`relative block w-14 h-12 rounded overflow-hidden border-2 transition-all shrink-0 cursor-pointer ${
                   selectedPhotoIndex === idx 
                     ? "border-[#BE9662] scale-105" 
                     : "border-transparent opacity-50 hover:opacity-100"
@@ -2996,6 +3095,9 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                     src={getThumbnailImageUrl(img, 140)}
                     alt={`thumb-${idx}`}
                     fit="cover"
+                    lazy={true}
+                    theme="dark"
+                    onAuthExpired={onRefreshPublicProperty}
                   />
                 ) : (
                   <img src={getThumbnailImageUrl(img, 140)} alt={`thumb-${idx}`} loading="lazy" decoding="async" className="w-full h-full object-cover" referrerPolicy="no-referrer" />

@@ -109,29 +109,80 @@ async function runAdcAndFirestoreTests() {
     next();
   });
 
-  // Firestore :commit
+  // Firestore :commit (including atomic updateTransforms increment)
   mockGcpApp.post("/v1/projects/:project/databases/:db/documents\\:commit", (req, res) => {
     const writes: any[] = Array.isArray(req.body?.writes) ? req.body.writes : [];
     const prefix = `projects/${req.params.project}/databases/${req.params.db}/documents/`;
+    const writeResults: any[] = [];
     for (const w of writes) {
       if (w.delete) {
         const rel = String(w.delete).startsWith(prefix)
           ? String(w.delete).slice(prefix.length)
           : String(w.delete);
         mockFirestoreDocs.delete(rel);
+        writeResults.push({});
       } else if (w.update) {
         const fullName = String(w.update.name || "");
         const rel = fullName.startsWith(prefix) ? fullName.slice(prefix.length) : fullName;
         if (w.currentDocument?.exists === false && mockFirestoreDocs.has(rel)) {
           return res.status(409).json({ error: { code: 409, message: "ALREADY_EXISTS" } });
         }
+        const existing = mockFirestoreDocs.get(rel);
+        const mergedFields: Record<string, any> = w.updateMask
+          ? { ...(existing?.fields || {}), ...(w.update.fields || {}) }
+          : { ...(w.update.fields || {}) };
+        const transformResults: any[] = [];
+        if (Array.isArray(w.updateTransforms)) {
+          for (const tr of w.updateTransforms) {
+            if (tr.fieldPath && tr.increment?.integerValue !== undefined) {
+              const prev = Number(mergedFields[tr.fieldPath]?.integerValue || 0);
+              const nextVal = prev + Number(tr.increment.integerValue);
+              const encoded = { integerValue: String(nextVal) };
+              mergedFields[tr.fieldPath] = encoded;
+              transformResults.push(encoded);
+            }
+          }
+        }
         mockFirestoreDocs.set(rel, {
           name: fullName,
-          fields: w.update.fields || {},
+          fields: mergedFields,
         });
+        writeResults.push(transformResults.length > 0 ? { transformResults } : {});
+      } else {
+        writeResults.push({});
       }
     }
-    return res.json({ writeResults: writes.map(() => ({})) });
+    return res.json({ writeResults });
+  });
+
+  // Firestore :runQuery (top-level or under parent doc path)
+  mockGcpApp.post(/^\/v1\/projects\/([^/]+)\/databases\/([^/]+)\/documents(?:\/(.+))?:runQuery$/, (req, res) => {
+    const parentRel = req.params[2]
+      ? req.params[2]
+          .split("/")
+          .map((s: string) => decodeURIComponent(s))
+          .join("/")
+      : "";
+    const sq = req.body?.structuredQuery || {};
+    const collectionId = sq.from?.[0]?.collectionId;
+    if (!collectionId) return res.json([]);
+    const targetPrefix = parentRel ? `${parentRel}/${collectionId}/` : `${collectionId}/`;
+    const filter = sq.where?.fieldFilter;
+    const rows: any[] = [];
+    for (const [k, v] of mockFirestoreDocs.entries()) {
+      if (!k.startsWith(targetPrefix)) continue;
+      const rest = k.slice(targetPrefix.length);
+      if (rest.includes("/")) continue;
+      if (filter) {
+        const fieldPath = filter.field?.fieldPath;
+        const expected = filter.value?.stringValue ?? filter.value?.integerValue;
+        const actual = v.fields?.[fieldPath]?.stringValue ?? v.fields?.[fieldPath]?.integerValue;
+        if (actual !== expected) continue;
+      }
+      rows.push({ document: v });
+      if (sq.limit && rows.length >= sq.limit) break;
+    }
+    return res.json(rows);
   });
 
   // Firestore generic document/collection routes (supports nested paths like tenants/:t/:c/:d)
@@ -488,11 +539,11 @@ async function runAdcAndFirestoreTests() {
         title: "Vilă Pipera Alpha Actualizată",
       });
 
-      // Verify exact Firestore subcollection paths
+      // Verify exact Firestore subcollection paths (including sharded per-entity counters)
       const exactPathA = mockFirestoreDocs.has("tenants/ten_agency_a/leads/prop_alpha_1");
       const exactPathB = mockFirestoreDocs.has("tenants/ten_agency_b/leads/prop_beta_1");
-      const exactCounterA = mockFirestoreDocs.has("tenants/ten_agency_a/counters/entities");
-      const exactCounterB = mockFirestoreDocs.has("tenants/ten_agency_b/counters/entities");
+      const exactCounterA = mockFirestoreDocs.has("tenants/ten_agency_a/counters/property");
+      const exactCounterB = mockFirestoreDocs.has("tenants/ten_agency_b/counters/property");
 
       // Verify strict isolation
       const listA = await CrmTenantStoreService.list("ten_agency_a", "leads");

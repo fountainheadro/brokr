@@ -5,6 +5,8 @@ import {
   CrmTenantStoreService,
 } from "../../src/core/crm/svc_crm-tenant-store";
 import { createErrorResponse, createSuccessResponse } from "../../src/core/api/api_response";
+import { backfillTenantLeadSummaries } from "../migration/job_backfill-summaries";
+import { reconcileTenantLeadSummaries } from "../migration/job_reconcile-summaries";
 
 export const crmRouter = Router();
 
@@ -139,6 +141,130 @@ crmRouter.delete("/leads", async (req: Request, res: Response) => {
 });
 
 /**
+ * Phase 2 Read-Only Slim Summary Endpoints:
+ * `leads_summary` is strictly server-projected via atomic `:commit` dual-write.
+ * Any client write attempt returns HTTP 403 FORBIDDEN.
+ */
+crmRouter.get("/leads_summary", async (req: Request, res: Response) => {
+  if (!assertNoTenantSpoofing(req, res)) return;
+  try {
+    const ctx = req.tenantContext!;
+    const propertyId =
+      typeof req.query.propertyId === "string" && req.query.propertyId.trim()
+        ? req.query.propertyId.trim()
+        : undefined;
+    const statusFilter =
+      typeof req.query.status === "string" && req.query.status.trim()
+        ? req.query.status.trim()
+        : undefined;
+    const rawLimit = typeof req.query.limit === "string" ? parseInt(req.query.limit, 10) : NaN;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(2000, rawLimit) : undefined;
+
+    const summaries = await CrmTenantStoreService.listLeadSummaries(ctx.tenantId, {
+      propertyId,
+      status: statusFilter,
+      limit,
+    });
+    res.json(createSuccessResponse(summaries));
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "INTERNAL_ERROR", err?.message || String(err)));
+  }
+});
+
+crmRouter.get("/leads_summary/:id", async (req: Request, res: Response) => {
+  if (!assertNoTenantSpoofing(req, res)) return;
+  try {
+    const ctx = req.tenantContext!;
+    const item = await CrmTenantStoreService.getLeadSummaryById(ctx.tenantId, req.params.id);
+    if (!item) {
+      res
+        .status(404)
+        .json(createErrorResponse("NOT_FOUND", "Sumarul solicitat nu există în agenția curentă."));
+      return;
+    }
+    res.json(createSuccessResponse(item));
+  } catch (err: any) {
+    const status = err?.statusCode || 404;
+    res.status(status).json(createErrorResponse(err?.code || "FORBIDDEN", err?.message || String(err)));
+  }
+});
+
+crmRouter.all("/leads_summary", (_req: Request, res: Response) => {
+  res
+    .status(403)
+    .json(
+      createErrorResponse(
+        "FORBIDDEN",
+        "Proiecția leads_summary este exclusiv read-only și este gestionată atomic de server."
+      )
+    );
+});
+
+crmRouter.all("/leads_summary/:id", (_req: Request, res: Response) => {
+  res
+    .status(403)
+    .json(
+      createErrorResponse(
+        "FORBIDDEN",
+        "Proiecția leads_summary este exclusiv read-only și este gestionată atomic de server."
+      )
+    );
+});
+
+/**
+ * POST /api/crm/admin/backfill-summaries
+ * Idempotent Phase 2 summary projection backfill for the authenticated agency (admin roles only).
+ */
+crmRouter.post("/admin/backfill-summaries", async (req: Request, res: Response) => {
+  if (!assertNoTenantSpoofing(req, res)) return;
+  const ctx = req.tenantContext!;
+  if (ctx.role !== "agency_owner" && ctx.role !== "agency_admin") {
+    res
+      .status(403)
+      .json(createErrorResponse("FORBIDDEN", "Doar administratorii agenției pot rula backfill-ul."));
+    return;
+  }
+  try {
+    const dryRun = Boolean(req.body?.dryRun);
+    const report = await backfillTenantLeadSummaries(ctx.tenantId, { dryRun });
+    res.json(createSuccessResponse(report));
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "INTERNAL_ERROR", err?.message || String(err)));
+  }
+});
+
+/**
+ * GET /api/crm/admin/reconcile-summaries
+ * Verifies canonical vs leads_summary parity for the authenticated agency (admin roles only).
+ */
+crmRouter.get("/admin/reconcile-summaries", async (req: Request, res: Response) => {
+  if (!assertNoTenantSpoofing(req, res)) return;
+  const ctx = req.tenantContext!;
+  if (ctx.role !== "agency_owner" && ctx.role !== "agency_admin") {
+    res
+      .status(403)
+      .json(createErrorResponse("FORBIDDEN", "Doar administratorii agenției pot verifica paritatea."));
+    return;
+  }
+  try {
+    const autoRepair = req.query.repair === "true";
+    const report = await reconcileTenantLeadSummaries(ctx.tenantId, { autoRepair });
+    res.json(createSuccessResponse(report));
+  } catch (err: any) {
+    const status = err?.statusCode || 500;
+    res
+      .status(status)
+      .json(createErrorResponse(err?.code || "INTERNAL_ERROR", err?.message || String(err)));
+  }
+});
+
+/**
  * GET /api/crm/:collection
  * Lists all documents in a collection strictly for req.tenantContext.tenantId.
  */
@@ -151,6 +277,12 @@ crmRouter.get("/:collection", async (req: Request, res: Response) => {
       typeof req.query.propertyId === "string" && req.query.propertyId.trim()
         ? req.query.propertyId.trim()
         : undefined;
+    const statusFilter =
+      typeof req.query.status === "string" && req.query.status.trim()
+        ? req.query.status.trim()
+        : undefined;
+    const rawLimit = typeof req.query.limit === "string" ? parseInt(req.query.limit, 10) : NaN;
+    const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(2000, rawLimit) : undefined;
     const scopeUser =
       col === "notifications" && req.query.onlyMine === "true"
         ? ctx.userId
@@ -159,6 +291,8 @@ crmRouter.get("/:collection", async (req: Request, res: Response) => {
     const items = await CrmTenantStoreService.list(ctx.tenantId, col, {
       propertyId,
       userId: scopeUser,
+      status: statusFilter,
+      limit,
     });
     res.json(createSuccessResponse(items));
   } catch (err: any) {

@@ -6,7 +6,7 @@ import {
   resolveEffectiveRootDomain,
 } from "../../src/core/tenancy/svc_tenant-resolution";
 import { TenantMembershipService } from "../../src/core/tenancy/svc_tenant-membership";
-import { TenantScopedRepository, TenantScopedEntity } from "../../src/core/database/repo_tenant-scoped";
+import { CrmTenantStoreService } from "../../src/core/crm/svc_crm-tenant-store";
 import { createSuccessResponse, createErrorResponse } from "../../src/core/api/api_response";
 import { updateMembershipRoleValidator, updateMembershipStatusValidator } from "../../src/core/tenancy/sch_tenant-membership";
 import { AppError } from "../../src/core/errors/app_error";
@@ -15,19 +15,7 @@ import { QuotaService } from "../../src/core/subscription/svc_quota";
 import { BillingManager } from "../../src/core/subscription/svc_billing-manager";
 import { PlanService } from "../../src/core/subscription/svc_plan";
 
-
 export const tenantRouter = Router();
-
-export interface SampleLeadEntity extends TenantScopedEntity {
-  title: string;
-  price?: string;
-  zone?: string;
-  status: string;
-  url?: string;
-}
-
-// In-memory / Firestore repository instance for tenant leads
-const leadsRepo = new TenantScopedRepository<SampleLeadEntity>(null, "leads");
 
 /**
  * Public endpoint to resolve public tenant branding for the requesting domain.
@@ -93,12 +81,12 @@ tenantRouter.get("/me", requireTenantContext, (req: Request, res: Response) => {
 });
 
 /**
- * Protected: Lists active members of the authenticated user's agency (safe directory fields only).
+ * Protected: Lists active members of the authenticated user's agency directly from Firestore.
  */
-tenantRouter.get("/members", requireTenantContext, (req: Request, res: Response) => {
+tenantRouter.get("/members", requireTenantContext, async (req: Request, res: Response) => {
   try {
     const tenantId = req.tenantContext!.tenantId;
-    const members = TenantMembershipService.listTenantMembers(tenantId)
+    const members = (await TenantMembershipService.listTenantMembersAsync(tenantId))
       .filter((m) => m.status === "active")
       .map((m) => ({
         id: m.id,
@@ -117,8 +105,7 @@ tenantRouter.get("/members", requireTenantContext, (req: Request, res: Response)
 });
 
 /**
- * Protected: Lists leads strictly scoped to the authenticated tenant.
- * Enforces: Tenant subscription must include the 'mod_leads' module.
+ * Protected: Lists leads strictly scoped to the authenticated tenant directly from Firestore.
  */
 tenantRouter.get(
   "/leads",
@@ -127,8 +114,8 @@ tenantRouter.get(
   async (req: Request, res: Response) => {
     try {
       const tenantId = req.tenantContext!.tenantId;
-      const result = await leadsRepo.list(tenantId);
-      res.json(createSuccessResponse(result.items, { total: result.total, tenantId }));
+      const items = await CrmTenantStoreService.list(tenantId, "leads");
+      res.json(createSuccessResponse(items, { total: items.length, tenantId }));
     } catch (err: any) {
       res.status(500).json(createErrorResponse("INTERNAL_ERROR", err?.message || String(err)));
     }
@@ -136,11 +123,7 @@ tenantRouter.get(
 );
 
 /**
- * Protected: Creates a lead strictly bound to the authenticated tenant.
- * Enforces:
- * 1. Tenant subscription must include 'mod_leads'.
- * 2. Tenant must not have exhausted their leads quota.
- * Any tenant_id passed in the body is explicitly ignored or overwritten.
+ * Protected: Creates a lead strictly bound to the authenticated tenant in Cloud Firestore.
  */
 tenantRouter.post(
   "/leads",
@@ -153,11 +136,11 @@ tenantRouter.post(
       const userId = req.tenantContext!.userId;
       const { id, title, price, zone, status, url } = req.body;
 
-      const leadId = id || `lead_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
-      const created = await leadsRepo.create(
+      const created = await CrmTenantStoreService.create(
         tenantId,
-        leadId,
+        "leads",
         {
+          ...(id ? { id } : {}),
           title: title || "Proprietate nouă",
           price: price || "Nespecificat",
           zone: zone || "Zonă centrală",
@@ -178,13 +161,12 @@ tenantRouter.post(
 );
 
 /**
- * Protected: Retrieves a single lead.
- * Enforces cross-tenant isolation: cannot retrieve a document belonging to another agency.
+ * Protected: Retrieves a single lead directly from Cloud Firestore.
  */
 tenantRouter.get("/leads/:id", requireTenantContext, async (req: Request, res: Response) => {
   try {
     const tenantId = req.tenantContext!.tenantId;
-    const lead = await leadsRepo.findById(tenantId, req.params.id);
+    const lead = await CrmTenantStoreService.getById(tenantId, "leads", req.params.id);
     if (!lead) {
       res.status(404).json(createErrorResponse("NOT_FOUND", "Lead-ul solicitat nu a fost găsit în agenție."));
       return;
@@ -196,16 +178,13 @@ tenantRouter.get("/leads/:id", requireTenantContext, async (req: Request, res: R
 });
 
 /**
- * Protected: Updates role of a tenant member.
- * Enforces:
- * 1. User cannot modify their own role.
- * 2. Only agency_owner or agency_admin can modify roles.
+ * Protected: Updates role of a tenant member permanently in Firestore.
  */
 tenantRouter.post(
   "/members/:userId/role",
   requireTenantContext,
   requireRole(["agency_owner", "agency_admin"]),
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
       const actor = req.membership!;
       const targetUserId = req.params.userId;
@@ -218,7 +197,11 @@ tenantRouter.post(
         return;
       }
 
-      const updated = TenantMembershipService.updateMemberRole(actor, targetUserId, newRole);
+      const updated = await TenantMembershipService.updateMemberRoleAsync(
+        actor,
+        targetUserId,
+        newRole
+      );
       res.json(createSuccessResponse(updated));
     } catch (error) {
       if (error instanceof AppError) {
@@ -231,16 +214,13 @@ tenantRouter.post(
 );
 
 /**
- * Protected: Updates status of a tenant member (e.g. suspend, revoke).
- * Enforces:
- * 1. User cannot modify their own status.
- * 2. Only agency_owner or agency_admin can modify member status.
+ * Protected: Updates status of a tenant member permanently in Firestore.
  */
 tenantRouter.post(
   "/members/:userId/status",
   requireTenantContext,
   requireRole(["agency_owner", "agency_admin"]),
-  (req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
       const actor = req.membership!;
       const targetUserId = req.params.userId;
@@ -253,7 +233,11 @@ tenantRouter.post(
         return;
       }
 
-      const updated = TenantMembershipService.updateMemberStatus(actor, targetUserId, newStatus);
+      const updated = await TenantMembershipService.updateMemberStatusAsync(
+        actor,
+        targetUserId,
+        newStatus
+      );
       res.json(createSuccessResponse(updated));
     } catch (error) {
       if (error instanceof AppError) {

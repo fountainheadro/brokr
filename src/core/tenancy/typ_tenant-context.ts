@@ -22,6 +22,8 @@ export interface TenantRecord {
   planId: string;
   branding: TenantBrandingInfo;
   enabledModules: string[];
+  /** Additive numeric revocation epoch (default 1 when absent on legacy docs). Bumped on suspension. */
+  authVersion?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -35,6 +37,8 @@ export interface TenantMembershipRecord {
   role: UserRole;
   status: TenantMembershipStatus;
   permissions: string[];
+  /** Additive numeric revocation epoch (default 1 when absent on legacy docs). Bumped on role/status change. */
+  authVersion?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -50,6 +54,8 @@ export interface TenantContext {
   membershipStatus: TenantMembershipStatus;
   role: UserRole;
   permissions: string[];
+  userAuthVersion?: number;
+  tenantAuthVersion?: number;
 }
 
 export interface ResolvedTenantDomain {

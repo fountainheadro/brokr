@@ -169,7 +169,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", damping: 28, stiffness: 280 }}
-            className="fixed inset-y-0 right-0 w-[420px] max-w-full h-full bg-white z-[1000] flex flex-col border-l border-gray-200 shadow-2xl overflow-hidden"
+            className="fixed inset-y-0 right-0 w-[calc(100vw-48px)] md:w-[420px] max-w-full h-full bg-white z-[1000] flex flex-col border-l border-gray-200 shadow-2xl overflow-hidden"
           >
             {/* 1. Drawer Header */}
             <div className="p-4 border-b border-gray-200 bg-white shrink-0">

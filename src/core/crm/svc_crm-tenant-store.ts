@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { PersistentStoreService } from "../database/svc_persistent-store";
 import { TenantResolutionService } from "../tenancy/svc_tenant-resolution";
+import { TenantMembershipService } from "../tenancy/svc_tenant-membership";
 import { ForbiddenError, NotFoundError, AppError } from "../errors/app_error";
 import {
   normalizeCrmDocument,
@@ -14,6 +15,11 @@ import {
   isAgencyLeadId,
   isDailyLeadId,
 } from "../../utils/leadIdUtils";
+import {
+  LEAD_SUMMARY_COLLECTION,
+  projectLeadToSummary,
+  type LeadSummary,
+} from "./svc_lead-projection";
 
 export const CRM_TENANT_COLLECTIONS = [
   "leads",
@@ -164,7 +170,7 @@ export class CrmTenantStoreService {
   }
 
   public static isUsingLiveFirestore(): boolean {
-    if (process.env.NODE_ENV === "production") {
+    if (process.env.NODE_ENV !== "test") {
       return true;
     }
     if (this.forceFirestoreOrigin) {
@@ -207,6 +213,181 @@ export class CrmTenantStoreService {
 
   private static counterStoreKey(tenantId: string): string {
     return `tenants__${tenantId}__counters`;
+  }
+
+  /**
+   * Atomically commits a canonical lead document and its slim `leads_summary` projection in a
+   * single Firestore `:commit` batch (or dual local store write in offline unit tests).
+   *
+   * Security boundary:
+   * - In production / Cloud Run (ADC / Service Account), `:commit` writes both documents
+   *   atomically with zero fallback (errors propagate cleanly).
+   * - In Starter Tier / Preview containers using a user-scoped Firebase ID token where
+   *   `firestore.rules` strictly enforces `allow write: if false;` on `leads_summary`,
+   *   a 403 on the dual-write commit degrades gracefully to writing canonical `leads/{id}` so
+   *   preview agents remain operational without weakening Firestore rules.
+   */
+  private static async commitLeadWithSummary(
+    safeTenant: string,
+    canonicalDoc: Record<string, any>,
+    operation: string
+  ): Promise<LeadSummary> {
+    const summaryDoc = projectLeadToSummary(canonicalDoc, {
+      tenantId: safeTenant,
+      isSharedLead: false,
+      docVersion: canonicalDoc.docVersion,
+    });
+
+    if (this.isUsingLiveFirestore()) {
+      const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
+      const basePrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${safeTenant}`;
+      const isUserToken = PersistentStoreService.isUsingUserScopedToken();
+
+      try {
+        await PersistentStoreService.remoteCommitWrites(
+          [
+            {
+              update: {
+                name: `${basePrefix}/leads/${canonicalDoc.id}`,
+                fields: PersistentStoreService.encodeDocumentFields(canonicalDoc),
+              },
+            },
+            {
+              update: {
+                name: `${basePrefix}/${LEAD_SUMMARY_COLLECTION}/${canonicalDoc.id}`,
+                fields: PersistentStoreService.encodeDocumentFields(summaryDoc),
+              },
+            },
+          ],
+          operation,
+          isUserToken ? { silentOnStatuses: [403] } : undefined
+        );
+      } catch (err: any) {
+        if (isUserToken && err?.statusCode === 403) {
+          // Starter-tier preview user token cannot write read-only leads_summary; persist canonical doc
+          await PersistentStoreService.remoteSetAtPath(
+            this.firestoreDocPath(safeTenant, "leads", canonicalDoc.id),
+            canonicalDoc
+          );
+        } else {
+          throw err;
+        }
+      }
+      return summaryDoc;
+    }
+
+    PersistentStoreService.set(this.storeKey(safeTenant, "leads"), canonicalDoc.id, canonicalDoc);
+    PersistentStoreService.set(
+      this.storeKey(safeTenant, LEAD_SUMMARY_COLLECTION),
+      canonicalDoc.id,
+      summaryDoc
+    );
+    return summaryDoc;
+  }
+
+  private static async deleteLeadWithSummary(
+    safeTenant: string,
+    targetDocId: string
+  ): Promise<boolean> {
+    if (this.isUsingLiveFirestore()) {
+      const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
+      const basePrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${safeTenant}`;
+      const isUserToken = PersistentStoreService.isUsingUserScopedToken();
+      try {
+        await PersistentStoreService.remoteCommitWrites(
+          [
+            { delete: `${basePrefix}/leads/${targetDocId}` },
+            { delete: `${basePrefix}/${LEAD_SUMMARY_COLLECTION}/${targetDocId}` },
+          ],
+          "delete_lead_dual_write",
+          isUserToken ? { silentOnStatuses: [403] } : undefined
+        );
+      } catch (err: any) {
+        if (isUserToken && err?.statusCode === 403) {
+          await PersistentStoreService.remoteDeleteAtPath(
+            this.firestoreDocPath(safeTenant, "leads", targetDocId)
+          );
+        } else {
+          throw err;
+        }
+      }
+      return true;
+    }
+
+    const deletedCanonical = PersistentStoreService.delete(
+      this.storeKey(safeTenant, "leads"),
+      targetDocId
+    );
+    PersistentStoreService.delete(
+      this.storeKey(safeTenant, LEAD_SUMMARY_COLLECTION),
+      targetDocId
+    );
+    return deletedCanonical;
+  }
+
+  /**
+   * Read-only list of slim `leads_summary` projections for a verified tenant.
+   * Never exposes heavy `extractedData` / `images[]` / `notes` / private memos.
+   */
+  public static async listLeadSummaries(
+    tenantId: string,
+    filters?: { propertyId?: string; status?: string; limit?: number }
+  ): Promise<LeadSummary[]> {
+    const safeTenant = assertSafePathSegment(tenantId, "tenantId");
+    const effectiveLimit = Math.min(2000, Math.max(1, filters?.limit ?? 1000));
+    let docs: LeadSummary[] = [];
+
+    if (this.isUsingLiveFirestore()) {
+      const maxPages = Math.max(1, Math.ceil(effectiveLimit / 300));
+      const isUserScoped = PersistentStoreService.isUsingUserScopedToken();
+      const raw = await PersistentStoreService.remoteListAtPath<LeadSummary>(
+        this.firestoreCollectionPath(safeTenant, LEAD_SUMMARY_COLLECTION),
+        Math.min(300, effectiveLimit),
+        maxPages,
+        isUserScoped ? { silentOnStatuses: [403] } : undefined
+      );
+      docs = raw.filter((d) => !d.tenantId || d.tenantId === safeTenant);
+    } else {
+      const allMap = PersistentStoreService.getAll<LeadSummary>(
+        this.storeKey(safeTenant, LEAD_SUMMARY_COLLECTION)
+      );
+      docs = Object.values(allMap).filter((d) => !d.tenantId || d.tenantId === safeTenant);
+    }
+
+    if (filters?.propertyId) {
+      docs = docs.filter((d) => d.propertyId === filters.propertyId);
+    }
+    if (filters?.status) {
+      docs = docs.filter((d) => d.status === filters.status);
+    }
+
+    docs.sort((a, b) => {
+      const ta = Date.parse(String(a.updatedAt || a.createdAt || 0)) || 0;
+      const tb = Date.parse(String(b.updatedAt || b.createdAt || 0)) || 0;
+      return tb - ta;
+    });
+
+    if (filters?.limit && docs.length > filters.limit) {
+      docs = docs.slice(0, filters.limit);
+    }
+    return docs;
+  }
+
+  public static async getLeadSummaryById(
+    tenantId: string,
+    id: string
+  ): Promise<LeadSummary | null> {
+    const safeTenant = assertSafePathSegment(tenantId, "tenantId");
+    const safeId = assertSafePathSegment(id, "id");
+    if (this.isUsingLiveFirestore()) {
+      return PersistentStoreService.remoteGetAtPath<LeadSummary>(
+        this.firestoreDocPath(safeTenant, LEAD_SUMMARY_COLLECTION, safeId)
+      );
+    }
+    return PersistentStoreService.get<LeadSummary>(
+      this.storeKey(safeTenant, LEAD_SUMMARY_COLLECTION),
+      safeId
+    );
   }
 
   private static async computeMaxExistingNumber(
@@ -262,9 +443,11 @@ export class CrmTenantStoreService {
   }
 
   /**
-   * Generates an isolated sequential entity ID strictly within `/tenants/{tenantId}/counters/entities`.
-   * Agency A and Agency B maintain independent P/R/L/C/S/D/A numbering sequences.
-   * For `daily_lead`, generates `YYYY-MM-DD-N` resetting to 1 each day.
+   * Generates an isolated sequential entity ID using per-entity sharded atomic counters at
+   * `/tenants/{tenantId}/counters/{counterKey}` via Firestore `:commit` atomic `increment`.
+   * Eliminates single-document write contention (1 write/sec Firestore limit) when many
+   * concurrent agents create leads, properties, contacts, or activities simultaneously.
+   * Seamlessly preserves numbering from legacy `/tenants/{tenantId}/counters/entities` docs.
    */
   public static async getNextEntityId(tenantId: string, type: CrmEntityType): Promise<string> {
     const safeTenant = assertSafePathSegment(tenantId, "tenantId");
@@ -274,34 +457,61 @@ export class CrmTenantStoreService {
     const prefix = PREFIX_MAP[type] || "X";
 
     const nextNum = await PersistentStoreService.withKeyMutex(
-      `crm_counter::${safeTenant}`,
+      `crm_counter::${safeTenant}::${key}`,
       async () => {
         if (this.isUsingLiveFirestore()) {
-          const counterPath = this.firestoreDocPath(safeTenant, "counters", "entities");
-          let counters = await PersistentStoreService.remoteGetAtPath<Record<string, any>>(
-            counterPath
+          const shardedPath = this.firestoreDocPath(safeTenant, "counters", key);
+          const now = new Date().toISOString();
+
+          // Atomic server-side increment on the sharded per-entity counter doc
+          const incremented = await PersistentStoreService.remoteAtomicIncrement(
+            shardedPath,
+            "value",
+            1,
+            {
+              tenantId: safeTenant,
+              key,
+              updatedAt: now,
+            }
           );
 
-          if (!counters || typeof counters[key] !== "number") {
-            const maxExisting = await this.computeMaxExistingNumber(safeTenant, type, dateKey);
-            counters = {
-              ...(counters || {}),
-              tenantId: safeTenant,
-              [key]: maxExisting,
-            };
+          // If this is a brand-new sharded counter doc (value === 1), check legacy counter/docs once
+          // so existing agencies never reset numbering during migration.
+          if (incremented === 1) {
+            let baseline = 0;
+            try {
+              const legacyCounterPath = this.firestoreDocPath(safeTenant, "counters", "entities");
+              const legacyDoc = await PersistentStoreService.remoteGetAtPath<Record<string, any>>(
+                legacyCounterPath
+              );
+              if (legacyDoc && typeof legacyDoc[key] === "number" && legacyDoc[key] > 0) {
+                baseline = Math.floor(legacyDoc[key]);
+              }
+            } catch {
+              // Legacy doc absent
+            }
+            if (baseline === 0) {
+              try {
+                baseline = await this.computeMaxExistingNumber(safeTenant, type, dateKey);
+              } catch {
+                baseline = 0;
+              }
+            }
+            if (baseline > 0) {
+              return await PersistentStoreService.remoteAtomicIncrement(
+                shardedPath,
+                "value",
+                baseline,
+                {
+                  tenantId: safeTenant,
+                  key,
+                  updatedAt: new Date().toISOString(),
+                }
+              );
+            }
           }
 
-          const newCount = Number(counters[key] || 0) + 1;
-          const updatedCounters = {
-            ...counters,
-            [key]: newCount,
-            tenantId: safeTenant,
-            updatedAt: new Date().toISOString(),
-          };
-          delete (updatedCounters as any).tenant_id;
-          delete (updatedCounters as any).id;
-          await PersistentStoreService.remoteSetAtPath(counterPath, updatedCounters);
-          return newCount;
+          return incremented;
         }
 
         const storeKey = this.counterStoreKey(safeTenant);
@@ -335,11 +545,73 @@ export class CrmTenantStoreService {
 
   private static async readRawCollection(
     safeTenant: string,
-    collectionName: CrmTenantCollection
+    collectionName: CrmTenantCollection,
+    filters?: { propertyId?: string; userId?: string; status?: string; limit?: number }
   ): Promise<Array<Record<string, any>>> {
     if (this.isUsingLiveFirestore()) {
+      const effectiveLimit = Math.min(2000, Math.max(1, filters?.limit ?? 1000));
+      const filterClauses: Array<Record<string, any>> = [];
+      if (filters?.propertyId) {
+        filterClauses.push({
+          fieldFilter: {
+            field: { fieldPath: "propertyId" },
+            op: "EQUAL",
+            value: { stringValue: filters.propertyId },
+          },
+        });
+      }
+      if (filters?.userId) {
+        filterClauses.push({
+          fieldFilter: {
+            field: { fieldPath: "userId" },
+            op: "EQUAL",
+            value: { stringValue: filters.userId },
+          },
+        });
+      }
+      if (filters?.status) {
+        filterClauses.push({
+          fieldFilter: {
+            field: { fieldPath: "status" },
+            op: "EQUAL",
+            value: { stringValue: filters.status },
+          },
+        });
+      }
+
+      // Use server-side indexed :runQuery when single equality filter is present (avoids O(N) scan
+      // and uses Firestore's automatic single-field indexes without requiring custom composite indexes).
+      if (filterClauses.length === 1) {
+        try {
+          const matched = await PersistentStoreService.remoteRunQueryAtPath<Record<string, any>>(
+            `tenants/${safeTenant}`,
+            {
+              from: [{ collectionId: collectionName }],
+              where: filterClauses[0],
+              limit: effectiveLimit,
+            }
+          );
+          return matched
+            .map((m) => m.data)
+            .filter((doc) => {
+              const docTenant = doc.tenantId ?? doc.tenant_id;
+              return !docTenant || docTenant === safeTenant;
+            });
+        } catch {
+          // Graceful fallback to bounded collection list if test mock doesn't implement :runQuery
+        }
+      }
+
+      const maxPages = Math.max(1, Math.ceil(effectiveLimit / 300));
+      const isUserScopedToken =
+        Boolean(PersistentStoreService.getRequestAuth()?.bearerToken) &&
+        !PersistentStoreService.isMetadataAuthEnabled() &&
+        PersistentStoreService.getAuthMethodInfo().method === "none";
       const docs = await PersistentStoreService.remoteListAtPath<Record<string, any>>(
-        this.firestoreCollectionPath(safeTenant, collectionName)
+        this.firestoreCollectionPath(safeTenant, collectionName),
+        Math.min(300, effectiveLimit),
+        maxPages,
+        isUserScopedToken ? { silentOnStatuses: [403] } : undefined
       );
       return docs.filter((doc) => {
         const docTenant = doc.tenantId ?? doc.tenant_id;
@@ -359,16 +631,16 @@ export class CrmTenantStoreService {
   public static async list(
     tenantId: string,
     collectionName: CrmTenantCollection,
-    filters?: { propertyId?: string; userId?: string }
+    filters?: { propertyId?: string; userId?: string; status?: string; limit?: number }
   ): Promise<Array<Record<string, any>>> {
     this.assertValidCollection(collectionName);
     const safeTenant = assertSafePathSegment(tenantId, "tenantId");
 
-    let rawItems = await this.readRawCollection(safeTenant, collectionName);
+    let rawItems = await this.readRawCollection(safeTenant, collectionName, filters);
 
     // Pure read-only fallback when reading canonical "staff" while legacy "personal" records still exist
     if (collectionName === "staff") {
-      const legacyPersonal = await this.readRawCollection(safeTenant, "personal");
+      const legacyPersonal = await this.readRawCollection(safeTenant, "personal", filters);
       if (legacyPersonal.length > 0) {
         const seenIds = new Set(rawItems.map((item) => item.id));
         for (const legacyDoc of legacyPersonal) {
@@ -387,6 +659,9 @@ export class CrmTenantStoreService {
     if (filters?.userId) {
       items = items.filter((d) => d.userId === filters.userId);
     }
+    if (filters?.status) {
+      items = items.filter((d) => d.status === filters.status);
+    }
 
     items.sort((a, b) => {
       const timeA = Date.parse(String(a.updatedAt || a.createdAt || 0)) || 0;
@@ -395,6 +670,10 @@ export class CrmTenantStoreService {
         ? String(a.date || "").localeCompare(String(b.date || ""))
         : timeB - timeA;
     });
+
+    if (filters?.limit && items.length > filters.limit) {
+      items = items.slice(0, filters.limit);
+    }
 
     return items;
   }
@@ -431,6 +710,35 @@ export class CrmTenantStoreService {
     }
 
     if (collectionName === "leads") {
+      // Indexed O(1) lookup by propertyId instead of scanning all agency leads
+      if (this.isUsingLiveFirestore()) {
+        try {
+          const matched = await PersistentStoreService.remoteRunQueryAtPath<Record<string, any>>(
+            `tenants/${safeTenant}`,
+            {
+              from: [{ collectionId: "leads" }],
+              where: {
+                fieldFilter: {
+                  field: { fieldPath: "propertyId" },
+                  op: "EQUAL",
+                  value: { stringValue: safeId },
+                },
+              },
+              limit: 1,
+            }
+          );
+          if (matched.length > 0 && matched[0].data) {
+            const docTenant = matched[0].data.tenantId ?? matched[0].data.tenant_id;
+            if (!docTenant || docTenant === safeTenant) {
+              return normalizeCrmDocument(matched[0].data, "leads");
+            }
+          }
+          return null;
+        } catch {
+          // Fallback to bounded list only if query fails in mock tests
+        }
+      }
+
       const all = await this.list(safeTenant, "leads");
       const found = all.find(
         (d) =>
@@ -495,6 +803,35 @@ export class CrmTenantStoreService {
         doc.propertyId = await this.getNextEntityId(safeTenant, "lead");
       }
       doc.lastMovedAt = doc.lastMovedAt || now;
+      doc.docVersion = 1;
+      doc.deletedAt = doc.status === "Sterse" ? now : null;
+      if (typeof doc.price === "string" && doc.price.trim()) {
+        const syncedPrice = doc.price.trim();
+        if (doc.extractedData && typeof doc.extractedData === "object") {
+          doc.extractedData = { ...doc.extractedData };
+          if (doc.extractedData.crmData && typeof doc.extractedData.crmData === "object") {
+            doc.extractedData.crmData = {
+              ...doc.extractedData.crmData,
+              pret: {
+                ...(doc.extractedData.crmData.pret || {}),
+                detalii: {
+                  ...(doc.extractedData.crmData.pret?.detalii || {}),
+                  pret: syncedPrice,
+                },
+              },
+            };
+          }
+          if (doc.extractedData.presentationSections?.tranzactie) {
+            doc.extractedData.presentationSections = {
+              ...doc.extractedData.presentationSections,
+              tranzactie: {
+                ...doc.extractedData.presentationSections.tranzactie,
+                "Preț": syncedPrice,
+              },
+            };
+          }
+        }
+      }
     } else if (collectionName === "contacts" && !doc.contactId) {
       doc.contactId = await this.getNextEntityId(safeTenant, "client");
     } else if (collectionName === "staff") {
@@ -518,16 +855,6 @@ export class CrmTenantStoreService {
       doc.status = doc.status || "Programată";
     }
 
-    if (this.isUsingLiveFirestore()) {
-      await PersistentStoreService.remoteSetAtPath(
-        this.firestoreDocPath(safeTenant, collectionName, id),
-        doc
-      );
-    } else {
-      PersistentStoreService.set(this.storeKey(safeTenant, collectionName), id, doc);
-    }
-
-    // Dual-write mirrors for activities cleanly inside the SAME tenant
     if (collectionName === "activities") {
       const tourDoc = {
         id: `tour_${id}`,
@@ -564,20 +891,60 @@ export class CrmTenantStoreService {
       };
 
       if (this.isUsingLiveFirestore()) {
-        await Promise.all([
-          PersistentStoreService.remoteSetAtPath(
-            this.firestoreDocPath(safeTenant, "tours", tourDoc.id),
-            tourDoc
-          ),
-          PersistentStoreService.remoteSetAtPath(
-            this.firestoreDocPath(safeTenant, "viewings", viewingDoc.id),
-            viewingDoc
-          ),
-        ]);
+        // Single atomic multi-document Firestore batch commit instead of 3 sequential RPCs
+        const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
+        const basePrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${safeTenant}`;
+        await PersistentStoreService.remoteCommitWrites(
+          [
+            {
+              update: {
+                name: `${basePrefix}/activities/${id}`,
+                fields: PersistentStoreService.encodeDocumentFields(doc),
+              },
+            },
+            {
+              update: {
+                name: `${basePrefix}/tours/${tourDoc.id}`,
+                fields: PersistentStoreService.encodeDocumentFields(tourDoc),
+              },
+            },
+            {
+              update: {
+                name: `${basePrefix}/viewings/${viewingDoc.id}`,
+                fields: PersistentStoreService.encodeDocumentFields(viewingDoc),
+              },
+            },
+          ],
+          "create_activity_batch"
+        );
       } else {
+        PersistentStoreService.set(this.storeKey(safeTenant, collectionName), id, doc);
         PersistentStoreService.set(this.storeKey(safeTenant, "tours"), tourDoc.id, tourDoc);
         PersistentStoreService.set(this.storeKey(safeTenant, "viewings"), viewingDoc.id, viewingDoc);
       }
+    } else if (collectionName === "leads") {
+      await this.commitLeadWithSummary(safeTenant, doc, "create_lead_dual_write");
+    } else if (this.isUsingLiveFirestore()) {
+      await PersistentStoreService.remoteSetAtPath(
+        this.firestoreDocPath(safeTenant, collectionName, id),
+        doc
+      );
+    } else {
+      PersistentStoreService.set(this.storeKey(safeTenant, collectionName), id, doc);
+    }
+
+    // Automatically sync agency staff email into /tenants/{tenantId}/invites/{email}
+    // so added agents/managers/admins immediately have permanent Firestore access on sign-in.
+    if ((collectionName === "staff" || collectionName === "personal") && doc.email) {
+      const isInactive =
+        String(doc.status || "").toLowerCase() === "inactiv" ||
+        String(doc.status || "").toLowerCase() === "inactive";
+      await TenantMembershipService.upsertInviteForStaffEmailAsync(safeTenant, {
+        email: String(doc.email),
+        name: String(doc.name || ""),
+        role: String(doc.role || "agent"),
+        active: !isInactive,
+      });
     }
 
     return normalizeCrmDocument(doc, collectionName);
@@ -641,6 +1008,43 @@ export class CrmTenantStoreService {
     if (collectionName === "leads" && typeof updated.status === "string") {
       updated.status = toDisplayLeadStatus(updated.status) || updated.status;
     }
+    if (collectionName === "leads") {
+      const patchedTopPrice =
+        sanitized.price !== undefined && sanitized.price !== null ? String(sanitized.price).trim() : null;
+      const patchedCrmDotPrice =
+        sanitized["extractedData.crmData.pret.detalii.pret"] !== undefined &&
+        sanitized["extractedData.crmData.pret.detalii.pret"] !== null
+          ? String(sanitized["extractedData.crmData.pret.detalii.pret"]).trim()
+          : null;
+      const syncedPrice = patchedTopPrice || patchedCrmDotPrice;
+      if (syncedPrice) {
+        updated.price = syncedPrice;
+        if (updated.extractedData && typeof updated.extractedData === "object") {
+          updated.extractedData = { ...updated.extractedData };
+          if (updated.extractedData.crmData && typeof updated.extractedData.crmData === "object") {
+            updated.extractedData.crmData = {
+              ...updated.extractedData.crmData,
+              pret: {
+                ...(updated.extractedData.crmData.pret || {}),
+                detalii: {
+                  ...(updated.extractedData.crmData.pret?.detalii || {}),
+                  pret: syncedPrice,
+                },
+              },
+            };
+          }
+          if (updated.extractedData.presentationSections?.tranzactie) {
+            updated.extractedData.presentationSections = {
+              ...updated.extractedData.presentationSections,
+              tranzactie: {
+                ...updated.extractedData.presentationSections.tranzactie,
+                "Preț": syncedPrice,
+              },
+            };
+          }
+        }
+      }
+    }
     if (collectionName === "staff" && updated.status !== undefined) {
       updated.status = toDisplayStaffStatus(updated.status);
     }
@@ -693,7 +1097,12 @@ export class CrmTenantStoreService {
       }
     }
 
-    if (this.isUsingLiveFirestore()) {
+    if (collectionName === "leads") {
+      const prevVersion = Number(existing.docVersion);
+      updated.docVersion = Number.isFinite(prevVersion) && prevVersion >= 1 ? Math.floor(prevVersion) + 1 : 2;
+      updated.deletedAt = updated.status === "Sterse" ? existing.deletedAt || now : null;
+      await this.commitLeadWithSummary(safeTenant, updated, "update_lead_dual_write");
+    } else if (this.isUsingLiveFirestore()) {
       await PersistentStoreService.remoteSetAtPath(
         this.firestoreDocPath(safeTenant, writeCollection, targetDocId),
         updated
@@ -701,6 +1110,19 @@ export class CrmTenantStoreService {
     } else {
       PersistentStoreService.set(this.storeKey(safeTenant, writeCollection), targetDocId, updated);
     }
+
+    if ((collectionName === "staff" || collectionName === "personal") && updated.email) {
+      const isInactive =
+        String(updated.status || "").toLowerCase() === "inactiv" ||
+        String(updated.status || "").toLowerCase() === "inactive";
+      await TenantMembershipService.upsertInviteForStaffEmailAsync(safeTenant, {
+        email: String(updated.email),
+        name: String(updated.name || ""),
+        role: String(updated.role || "agent"),
+        active: !isInactive,
+      });
+    }
+
     return normalizeCrmDocument(updated, collectionName);
   }
 
@@ -723,6 +1145,9 @@ export class CrmTenantStoreService {
     }
 
     const targetDocId = existing.id || safeId;
+    if (collectionName === "leads") {
+      return await this.deleteLeadWithSummary(safeTenant, targetDocId);
+    }
     if (this.isUsingLiveFirestore()) {
       await PersistentStoreService.remoteDeleteAtPath(
         this.firestoreDocPath(safeTenant, collectionName, targetDocId)
@@ -757,7 +1182,41 @@ export class CrmTenantStoreService {
       if (existingDocs.length === 0) return;
 
       const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
-      const baseDocPrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${safeTenant}/${collectionName}`;
+      const tenantPrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${safeTenant}`;
+      const isUserToken = PersistentStoreService.isUsingUserScopedToken();
+
+      if (collectionName === "leads") {
+        // 200 leads * 2 writes (canonical + summary) = 400 writes <= 500 Firestore batch limit
+        for (let i = 0; i < existingDocs.length; i += 200) {
+          const chunk = existingDocs.slice(i, i + 200).filter((d) => Boolean(d.id));
+          const dualWrites = chunk.flatMap((d) => [
+            { delete: `${tenantPrefix}/leads/${d.id}` },
+            { delete: `${tenantPrefix}/${LEAD_SUMMARY_COLLECTION}/${d.id}` },
+          ]);
+          try {
+            await PersistentStoreService.remoteCommitWrites(
+              dualWrites,
+              `clearTenantCollection(leads+leads_summary)`,
+              isUserToken ? { silentOnStatuses: [403] } : undefined
+            );
+          } catch (err: any) {
+            if (isUserToken && err?.statusCode === 403) {
+              const canonicalOnly = chunk.map((d) => ({
+                delete: `${tenantPrefix}/leads/${d.id}`,
+              }));
+              await PersistentStoreService.remoteCommitWrites(
+                canonicalOnly,
+                `clearTenantCollection(leads)`
+              );
+            } else {
+              throw err;
+            }
+          }
+        }
+        return;
+      }
+
+      const baseDocPrefix = `${tenantPrefix}/${collectionName}`;
       for (let i = 0; i < existingDocs.length; i += 400) {
         const chunk = existingDocs.slice(i, i + 400);
         const writes = chunk
@@ -774,6 +1233,9 @@ export class CrmTenantStoreService {
     }
 
     PersistentStoreService.clearCollection(this.storeKey(safeTenant, collectionName));
+    if (collectionName === "leads") {
+      PersistentStoreService.clearCollection(this.storeKey(safeTenant, LEAD_SUMMARY_COLLECTION));
+    }
   }
 
   public static async upsertFcmToken(params: {
@@ -868,18 +1330,21 @@ export class CrmTenantStoreService {
       : allTenants;
 
     for (const t of orderedTenants) {
-      const direct = await this.getById(t.id, "leads", cleanId);
-      if (direct) {
-        return direct;
-      }
+      try {
+        const direct = await this.getById(t.id, "leads", cleanId);
+        if (direct) {
+          return direct;
+        }
 
-      const items = await this.list(t.id, "leads");
-      const byCode = items.find((item) => {
-        const propCode = String(item.propertyId || "").trim().toUpperCase();
-        return propCode && candidateCodes.has(propCode);
-      });
-      if (byCode) {
-        return byCode;
+        for (const code of candidateCodes) {
+          if (code === cleanId) continue;
+          const byAltCode = await this.getById(t.id, "leads", code);
+          if (byAltCode) {
+            return byAltCode;
+          }
+        }
+      } catch {
+        // Skip tenants inaccessible under current credentials
       }
     }
     return null;

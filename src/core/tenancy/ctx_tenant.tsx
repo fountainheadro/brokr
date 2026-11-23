@@ -1,8 +1,12 @@
-import React, { createContext, useContext, useEffect, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { doc, onSnapshot } from "firebase/firestore";
+import { db } from "../../lib/firebase";
 import { useAuth } from "../auth/ctx_auth";
 import { TenantRecord, TenantMembershipRecord, TenantContext, UserRole, DEFAULT_DEV_TENANT } from "./typ_tenant-context";
 import { DEFAULT_PLATFORM_ROOT_DOMAIN, extractRootDomainFromHost } from "./svc_tenant-resolution";
 import { setShareDomainContext } from "../../utils/shareUtils";
+import { setActiveCrmTenantContext } from "../crm/svc_crm-client";
+import { clientDataHub } from "../crm/svc_client-data-hub";
 
 export interface ActivePreviewInfo {
   token: string;
@@ -353,6 +357,68 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
       agencySubdomain: previewSession?.subdomain || tenant?.subdomain || null,
     });
   }, [platformRootDomain, tenant?.subdomain, previewSession?.subdomain]);
+
+  useEffect(() => {
+    setActiveCrmTenantContext(
+      tenantContext?.tenantId || null,
+      Boolean(previewSession)
+    );
+  }, [tenantContext?.tenantId, previewSession, user?.uid]);
+
+  // Lightweight live listener on the authenticated user's single membership doc
+  // (/tenants/{tid}/users/{uid}) to propagate revocations, suspensions, or authVersion bumps immediately.
+  const lastObservedAuthVersionRef = useRef<number | null>(null);
+  useEffect(() => {
+    const activeTenantId = tenantContext?.tenantId;
+    if (!user?.uid || !activeTenantId || previewSession || isPlatformAdminHost) {
+      lastObservedAuthVersionRef.current = null;
+      return;
+    }
+
+    lastObservedAuthVersionRef.current = tenantContext?.userAuthVersion ?? 1;
+    const memberDocRef = doc(db, "tenants", activeTenantId, "users", user.uid);
+    const unsub = onSnapshot(
+      memberDocRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data() as Partial<TenantMembershipRecord>;
+        const nextStatus = data.status;
+        if (nextStatus === "suspended" || nextStatus === "revoked") {
+          clientDataHub.purgeAllCaches();
+          setTenantContext(null);
+          setIsAccessDenied(true);
+          setAccessDeniedReason(
+            nextStatus === "revoked"
+              ? "Accesul dumneavoastră în această agenție a fost revocat."
+              : "Contul dumneavoastră de utilizator în această agenție a fost suspendat."
+          );
+          return;
+        }
+
+        const nextAuthVersion = typeof data.authVersion === "number" ? data.authVersion : 1;
+        const roleChanged = Boolean(data.role && tenantContext?.role && data.role !== tenantContext.role);
+        if (
+          (lastObservedAuthVersionRef.current !== null && nextAuthVersion > lastObservedAuthVersionRef.current) ||
+          roleChanged
+        ) {
+          lastObservedAuthVersionRef.current = nextAuthVersion;
+          void user
+            .getIdToken(true)
+            .catch(() => {})
+            .finally(() => {
+              void resolveTenant();
+            });
+        }
+      },
+      () => {
+        // Ignore transient permission errors before membership doc is provisioned
+      }
+    );
+
+    return () => {
+      unsub();
+    };
+  }, [user, tenantContext?.tenantId, tenantContext?.role, tenantContext?.userAuthVersion, previewSession, isPlatformAdminHost, resolveTenant]);
 
   const value = useMemo<TenantContextState>(
     () => ({

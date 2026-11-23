@@ -3,6 +3,7 @@ import {
   getPlatformRootDomain,
   getPlatformAdminSubdomain,
   setPlatformRootDomain,
+  setPlatformAdminSubdomain,
 } from "../tenancy/svc_tenant-resolution";
 import { PersistentStoreService } from "../database/svc_persistent-store";
 
@@ -40,9 +41,33 @@ export class PlatformSettingsService {
     const current = getOrSeedSettings();
     return {
       ...current,
-      configuredRootDomain: getPlatformRootDomain(),
-      adminSubdomain: getPlatformAdminSubdomain(),
+      configuredRootDomain: current.configuredRootDomain ?? getPlatformRootDomain(),
+      adminSubdomain: current.adminSubdomain || getPlatformAdminSubdomain(),
     };
+  }
+
+  public static async getSettingsAsync(): Promise<PlatformSettingsRecord> {
+    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        const remote = await PersistentStoreService.remoteGet<PlatformSettingsRecord>(
+          COL_PLATFORM_SETTINGS,
+          SETTINGS_DOC_ID
+        );
+        if (remote) {
+          PersistentStoreService.setCacheOnly(COL_PLATFORM_SETTINGS, SETTINGS_DOC_ID, remote);
+          if (remote.configuredRootDomain !== undefined) {
+            setPlatformRootDomain(remote.configuredRootDomain);
+          }
+          if (remote.adminSubdomain) {
+            setPlatformAdminSubdomain(remote.adminSubdomain);
+          }
+          return remote;
+        }
+      } catch {
+        // Fallback to cached default if absent
+      }
+    }
+    return this.getSettings();
   }
 
   public static updateSettings(
@@ -51,6 +76,9 @@ export class PlatformSettingsService {
   ): PlatformSettingsRecord {
     if (updates.configuredRootDomain !== undefined) {
       setPlatformRootDomain(updates.configuredRootDomain);
+    }
+    if (updates.adminSubdomain) {
+      setPlatformAdminSubdomain(updates.adminSubdomain);
     }
 
     const current = getOrSeedSettings();
@@ -63,5 +91,29 @@ export class PlatformSettingsService {
 
     PersistentStoreService.set(COL_PLATFORM_SETTINGS, SETTINGS_DOC_ID, updated);
     return this.getSettings();
+  }
+
+  public static async updateSettingsAsync(
+    updates: Partial<Omit<PlatformSettingsRecord, "id" | "updatedAt">>,
+    actorUserId: string
+  ): Promise<PlatformSettingsRecord> {
+    if (updates.configuredRootDomain !== undefined) {
+      setPlatformRootDomain(updates.configuredRootDomain);
+    }
+    if (updates.adminSubdomain) {
+      setPlatformAdminSubdomain(updates.adminSubdomain);
+    }
+
+    const current = await this.getSettingsAsync();
+    const updated: PlatformSettingsRecord = {
+      ...current,
+      ...updates,
+      id: SETTINGS_DOC_ID,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actorUserId,
+    };
+
+    await PersistentStoreService.setAsync(COL_PLATFORM_SETTINGS, SETTINGS_DOC_ID, updated);
+    return updated;
   }
 }
