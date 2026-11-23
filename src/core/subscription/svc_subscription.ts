@@ -247,4 +247,183 @@ export class SubscriptionService {
 
     return saved;
   }
+
+  public static async changePlanAsync(
+    tenantId: string,
+    newPlanId: string,
+    billingInterval: BillingInterval,
+    actorEmail: string
+  ): Promise<AgencySubscriptionRecord> {
+    const newPlan = PlanService.getPlanById(newPlanId);
+    const existing = await SubscriptionRepository.findByTenantIdAsync(tenantId);
+    const downgradeCheck = QuotaService.verifyDowngradeImpact(tenantId, newPlanId);
+
+    const now = new Date();
+    const currentPeriodStart = now.toISOString();
+    const periodEnd = new Date(now);
+    if (billingInterval === "year") {
+      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+    } else {
+      periodEnd.setMonth(periodEnd.getMonth() + 1);
+    }
+
+    const updated: AgencySubscriptionRecord = {
+      id: existing ? existing.id : `sub_${tenantId}_${Date.now()}`,
+      tenantId,
+      planId: newPlan.id,
+      status: "active",
+      billingInterval,
+      currentPeriodStart,
+      currentPeriodEnd: periodEnd.toISOString(),
+      trialEnd: null,
+      cancelAtPeriodEnd: false,
+      cancelledAt: null,
+      suspendedAt: null,
+      suspendedReason: null,
+      gracePeriodEnd: null,
+      activeAddons: existing?.activeAddons || [],
+      provider: existing?.provider || "mock",
+      providerSubscriptionId: existing?.providerSubscriptionId || `sub_mock_${Date.now()}`,
+      providerCustomerId: existing?.providerCustomerId || `cus_mock_${tenantId}`,
+      createdAt: existing ? existing.createdAt : currentPeriodStart,
+      updatedAt: currentPeriodStart,
+    };
+
+    const saved = await SubscriptionRepository.saveAsync(updated);
+
+    await PlatformAuditLogRepository.record({
+      action: "agency_plan_changed",
+      actorId: actorEmail,
+      actorEmail,
+      targetType: "agency",
+      targetId: tenantId,
+      tenantId,
+      details: {
+        previousPlanId: existing?.planId,
+        newPlanId: newPlan.id,
+        billingInterval,
+        downgradeImpact: downgradeCheck.exceededResources,
+      },
+    });
+
+    return saved;
+  }
+
+  public static async updateStatusAsync(
+    tenantId: string,
+    newStatus: SubscriptionStatus,
+    reason: string,
+    actorEmail: string
+  ): Promise<AgencySubscriptionRecord> {
+    const existing = await SubscriptionRepository.findByTenantIdAsync(tenantId);
+    if (!existing) {
+      throw new NotFoundError("Abonamentul agenției", tenantId);
+    }
+    const sub: AgencySubscriptionRecord = { ...existing };
+    const prevStatus = sub.status;
+    const now = new Date().toISOString();
+
+    sub.status = newStatus;
+    if (newStatus === "suspended") {
+      sub.suspendedAt = now;
+      sub.suspendedReason = reason;
+    } else if (newStatus === "active") {
+      sub.suspendedAt = null;
+      sub.suspendedReason = null;
+      sub.gracePeriodEnd = null;
+    } else if (newStatus === "past_due") {
+      const grace = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      sub.gracePeriodEnd = grace.toISOString();
+    } else if (newStatus === "cancelled") {
+      sub.cancelledAt = now;
+    }
+
+    const saved = await SubscriptionRepository.saveAsync(sub);
+
+    await PlatformAuditLogRepository.record({
+      action: "agency_subscription_status_updated",
+      actorId: actorEmail,
+      actorEmail,
+      targetType: "agency",
+      targetId: tenantId,
+      tenantId,
+      details: { previousStatus: prevStatus, newStatus, reason },
+    });
+
+    return saved;
+  }
+
+  public static async addAddonAsync(
+    tenantId: string,
+    addonId: string,
+    quantity = 1,
+    actorEmail: string
+  ): Promise<AgencySubscriptionRecord> {
+    const addon = ModuleCatalogService.getAddonById(addonId);
+    if (!addon) {
+      throw new NotFoundError("Pachetul add-on", addonId);
+    }
+
+    const existing = await SubscriptionRepository.findByTenantIdAsync(tenantId);
+    if (!existing) {
+      throw new NotFoundError("Abonamentul agenției", tenantId);
+    }
+
+    const activeAddons = existing.activeAddons.map((a) => ({ ...a }));
+    const existingIndex = activeAddons.findIndex((a) => a.addonId === addonId);
+    if (existingIndex >= 0) {
+      activeAddons[existingIndex].quantity += quantity;
+    } else {
+      activeAddons.push({
+        addonId,
+        quantity,
+        activatedAt: new Date().toISOString(),
+      });
+    }
+
+    const saved = await SubscriptionRepository.saveAsync({
+      ...existing,
+      activeAddons,
+    });
+
+    await PlatformAuditLogRepository.record({
+      action: "agency_addon_added",
+      actorId: actorEmail,
+      actorEmail,
+      targetType: "agency",
+      targetId: tenantId,
+      tenantId,
+      details: { addonId, quantity, addonName: addon.name },
+    });
+
+    return saved;
+  }
+
+  public static async removeAddonAsync(
+    tenantId: string,
+    addonId: string,
+    actorEmail: string
+  ): Promise<AgencySubscriptionRecord> {
+    const existing = await SubscriptionRepository.findByTenantIdAsync(tenantId);
+    if (!existing) {
+      throw new NotFoundError("Abonamentul agenției", tenantId);
+    }
+
+    const saved = await SubscriptionRepository.saveAsync({
+      ...existing,
+      activeAddons: existing.activeAddons.filter((a) => a.addonId !== addonId),
+    });
+
+    await PlatformAuditLogRepository.record({
+      action: "agency_addon_removed",
+      actorId: actorEmail,
+      actorEmail,
+      targetType: "agency",
+      targetId: tenantId,
+      tenantId,
+      details: { addonId },
+    });
+
+    return saved;
+  }
 }

@@ -323,6 +323,27 @@ export class QuotaService {
   }
 
   /**
+   * Hydrates a tenant's subscription, plan catalogue, module catalogue, and metered usage
+   * from Cloud Firestore so cold restarts never reset plan limits or accrued quota usage.
+   */
+  public static async hydrateTenantStateAsync(tenantId: string): Promise<void> {
+    if (!tenantId || !PersistentStoreService.isRemoteFirestoreConfigured()) return;
+
+    await Promise.all([
+      SubscriptionRepository.findByTenantIdAsync(tenantId).catch(() => null),
+      PersistentStoreService.hydrateCollectionOnce("subscription_plans").catch(() => {}),
+      ModuleCatalogService.hydrateFromFirestore().catch(() => {}),
+      PersistentStoreService.remoteGet<TenantUsageState>(COL_TENANT_USAGE, tenantId)
+        .then((remote) => {
+          if (remote) {
+            PersistentStoreService.setCacheOnly(COL_TENANT_USAGE, tenantId, remote);
+          }
+        })
+        .catch(() => {}),
+    ]);
+  }
+
+  /**
    * Consumes quota atomically. Throws QuotaExceededError if limit is reached.
    */
   public static consumeQuota(tenantId: string, resource: QuotaResourceType, amount = 1): void {
@@ -340,6 +361,29 @@ export class QuotaService {
       const { agents: _agents, ...persisted } = usage;
       addUsageValue(persisted, resource, amount);
       PersistentStoreService.set(COL_TENANT_USAGE, tenantId, persisted);
+    }
+  }
+
+  public static async consumeQuotaAsync(
+    tenantId: string,
+    resource: QuotaResourceType,
+    amount = 1
+  ): Promise<void> {
+    await this.hydrateTenantStateAsync(tenantId);
+    const check = this.checkQuota(tenantId, resource, amount);
+    if (!check.allowed) {
+      throw new QuotaExceededError(
+        check.reason || `Limita resursei ${resource} a fost depășită.`,
+        { current: check.current, max: check.limit, metric: resource },
+        tenantId
+      );
+    }
+
+    if (resource !== "agents") {
+      const usage = this.getUsage(tenantId);
+      const { agents: _agents, ...persisted } = usage;
+      addUsageValue(persisted, resource, amount);
+      await PersistentStoreService.setAsync(COL_TENANT_USAGE, tenantId, persisted);
     }
   }
 
@@ -371,14 +415,21 @@ export class QuotaService {
     const reservationId = `res_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString(); // 5 min TTL
 
-    PersistentStoreService.set(COL_AI_RESERVATIONS, reservationId, {
+    const record: AiQuotaReservation = {
       id: reservationId,
       tenantId,
       estimatedTokens,
       status: "reserved",
       createdAt: new Date().toISOString(),
       expiresAt,
-    } satisfies AiQuotaReservation);
+    };
+
+    if (PersistentStoreService.isUsingUserScopedToken()) {
+      // Transient 5-minute reservation; ai_reservations is platform-admin-only in firestore.rules
+      PersistentStoreService.setCacheOnly(COL_AI_RESERVATIONS, reservationId, record);
+    } else {
+      PersistentStoreService.set(COL_AI_RESERVATIONS, reservationId, record);
+    }
 
     return reservationId;
   }
@@ -400,7 +451,11 @@ export class QuotaService {
     }
 
     reservation.status = "committed";
-    PersistentStoreService.set(COL_AI_RESERVATIONS, reservationId, reservation);
+    if (PersistentStoreService.isUsingUserScopedToken()) {
+      PersistentStoreService.setCacheOnly(COL_AI_RESERVATIONS, reservationId, reservation);
+    } else {
+      PersistentStoreService.set(COL_AI_RESERVATIONS, reservationId, reservation);
+    }
 
     // Consume the actual tokens used
     const usage = this.getUsage(reservation.tenantId);
@@ -408,6 +463,33 @@ export class QuotaService {
     usage.aiRequests += 1;
     const { agents: _agents, ...persisted } = usage;
     PersistentStoreService.set(COL_TENANT_USAGE, reservation.tenantId, persisted);
+  }
+
+  public static async commitAiQuotaAsync(
+    reservationId: string,
+    actualTokens: number
+  ): Promise<void> {
+    const reservation = PersistentStoreService.get<AiQuotaReservation>(
+      COL_AI_RESERVATIONS,
+      reservationId
+    );
+    if (!reservation || reservation.status !== "reserved") {
+      return;
+    }
+
+    reservation.status = "committed";
+    if (PersistentStoreService.isUsingUserScopedToken()) {
+      PersistentStoreService.setCacheOnly(COL_AI_RESERVATIONS, reservationId, reservation);
+    } else {
+      await PersistentStoreService.setAsync(COL_AI_RESERVATIONS, reservationId, reservation);
+    }
+
+    await this.hydrateTenantStateAsync(reservation.tenantId);
+    const usage = this.getUsage(reservation.tenantId);
+    usage.aiTokens += actualTokens;
+    usage.aiRequests += 1;
+    const { agents: _agents, ...persisted } = usage;
+    await PersistentStoreService.setAsync(COL_TENANT_USAGE, reservation.tenantId, persisted);
   }
 
   /**
@@ -422,7 +504,11 @@ export class QuotaService {
 
     if (reservation.status === "reserved") {
       reservation.status = "refunded";
-      PersistentStoreService.set(COL_AI_RESERVATIONS, reservationId, reservation);
+      if (PersistentStoreService.isUsingUserScopedToken()) {
+        PersistentStoreService.setCacheOnly(COL_AI_RESERVATIONS, reservationId, reservation);
+      } else {
+        PersistentStoreService.set(COL_AI_RESERVATIONS, reservationId, reservation);
+      }
     }
   }
 

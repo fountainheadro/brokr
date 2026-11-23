@@ -15,7 +15,7 @@ export class PlanService {
     return plan;
   }
 
-  public static createPlan(data: Partial<SubscriptionPlanRecord>): SubscriptionPlanRecord {
+  private static buildNewPlan(data: Partial<SubscriptionPlanRecord>): SubscriptionPlanRecord {
     if (!data.id || !data.displayName) {
       throw new ValidationError("ID-ul și denumirea publică a planului sunt obligatorii.");
     }
@@ -24,7 +24,7 @@ export class PlanService {
       throw new ValidationError("Prețul lunar trebuie să fie mai mare sau egal cu 0.");
     }
 
-    const newPlan: SubscriptionPlanRecord = {
+    return {
       id: data.id.trim().toLowerCase(),
       name: data.name || data.displayName,
       displayName: data.displayName.trim(),
@@ -51,8 +51,18 @@ export class PlanService {
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
+  }
 
+  public static createPlan(data: Partial<SubscriptionPlanRecord>): SubscriptionPlanRecord {
+    const newPlan = this.buildNewPlan(data);
     return PlanRepository.create(newPlan);
+  }
+
+  public static async createPlanAsync(
+    data: Partial<SubscriptionPlanRecord>
+  ): Promise<SubscriptionPlanRecord> {
+    const newPlan = this.buildNewPlan(data);
+    return PlanRepository.createAsync(newPlan);
   }
 
   public static updatePlan(id: string, updates: Partial<SubscriptionPlanRecord>): SubscriptionPlanRecord {
@@ -60,7 +70,23 @@ export class PlanService {
     return PlanRepository.update(id, updates);
   }
 
+  public static async updatePlanAsync(
+    id: string,
+    updates: Partial<SubscriptionPlanRecord>
+  ): Promise<SubscriptionPlanRecord> {
+    await PlanRepository.hydrateAsync();
+    this.getPlanById(id);
+    return PlanRepository.updateAsync(id, updates);
+  }
+
   public static setPlanStatus(id: string, status: "active" | "inactive" | "archived"): SubscriptionPlanRecord {
     return this.updatePlan(id, { status });
+  }
+
+  public static async setPlanStatusAsync(
+    id: string,
+    status: "active" | "inactive" | "archived"
+  ): Promise<SubscriptionPlanRecord> {
+    return this.updatePlanAsync(id, { status });
   }
 }

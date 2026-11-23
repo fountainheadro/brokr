@@ -37,9 +37,10 @@ platformRouter.use(mwAuthentication, mwPlatformAuthorization);
 // Lazily hydrate core platform collections from Cloud Firestore on Super Admin requests
 platformRouter.use(async (_req, _res, next) => {
   try {
-    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
       await Promise.all([
         TenantResolutionService.hydrateFromFirestore(),
+        ModuleCatalogService.hydrateFromFirestore(),
         PersistentStoreService.hydrateCollectionOnce("subscription_plans"),
         PersistentStoreService.hydrateCollectionOnce("subscriptions"),
         PersistentStoreService.hydrateCollectionOnce("tenant_usage"),
@@ -558,11 +559,11 @@ platformRouter.get("/plans", (req: Request, res: Response) => {
 
 /**
  * POST /api/platform/plans
- * Creates a new subscription plan.
+ * Creates a new subscription plan permanently in Cloud Firestore.
  */
 platformRouter.post("/plans", async (req: Request, res: Response) => {
   try {
-    const created = PlanService.createPlan(req.body);
+    const created = await PlanService.createPlanAsync(req.body);
 
     await PlatformAuditLogRepository.record({
       actorUserId: req.authUser!.uid,
@@ -597,11 +598,11 @@ platformRouter.get("/plans/:id", (req: Request, res: Response) => {
 
 /**
  * PUT /api/platform/plans/:id
- * Updates an existing subscription plan.
+ * Updates an existing subscription plan permanently in Cloud Firestore.
  */
 platformRouter.put("/plans/:id", async (req: Request, res: Response) => {
   try {
-    const updated = PlanService.updatePlan(req.params.id, req.body);
+    const updated = await PlanService.updatePlanAsync(req.params.id, req.body);
 
     await PlatformAuditLogRepository.record({
       actorUserId: req.authUser!.uid,
@@ -623,7 +624,7 @@ platformRouter.put("/plans/:id", async (req: Request, res: Response) => {
 
 /**
  * PATCH /api/platform/plans/:id/status
- * Updates plan status (active, inactive, archived).
+ * Updates plan status (active, inactive, archived) permanently in Cloud Firestore.
  */
 platformRouter.patch("/plans/:id/status", async (req: Request, res: Response) => {
   try {
@@ -633,7 +634,7 @@ platformRouter.patch("/plans/:id/status", async (req: Request, res: Response) =>
       return;
     }
 
-    const updated = PlanService.setPlanStatus(req.params.id, status);
+    const updated = await PlanService.setPlanStatusAsync(req.params.id, status);
 
     await PlatformAuditLogRepository.record({
       actorUserId: req.authUser!.uid,
@@ -696,7 +697,7 @@ platformRouter.get("/subscriptions/:tenantId", (req: Request, res: Response) => 
 
 /**
  * PATCH /api/platform/subscriptions/:tenantId/plan
- * Super Admin administrative plan change for an agency.
+ * Super Admin administrative plan change for an agency (persisted durably in Cloud Firestore).
  */
 platformRouter.patch("/subscriptions/:tenantId/plan", async (req: Request, res: Response) => {
   try {
@@ -706,7 +707,7 @@ platformRouter.patch("/subscriptions/:tenantId/plan", async (req: Request, res: 
       return;
     }
 
-    const updated = SubscriptionService.changePlan(
+    const updated = await SubscriptionService.changePlanAsync(
       req.params.tenantId,
       planId,
       billingInterval,
@@ -731,7 +732,7 @@ platformRouter.patch("/subscriptions/:tenantId/status", async (req: Request, res
       return;
     }
 
-    const updated = SubscriptionService.updateStatus(
+    const updated = await SubscriptionService.updateStatusAsync(
       req.params.tenantId,
       status,
       reason,
@@ -746,9 +747,9 @@ platformRouter.patch("/subscriptions/:tenantId/status", async (req: Request, res
 
 /**
  * POST /api/platform/subscriptions/:tenantId/addons
- * Super Admin adds an add-on to an agency.
+ * Super Admin adds an add-on to an agency (persisted durably in Cloud Firestore).
  */
-platformRouter.post("/subscriptions/:tenantId/addons", (req: Request, res: Response) => {
+platformRouter.post("/subscriptions/:tenantId/addons", async (req: Request, res: Response) => {
   try {
     const { addonId, quantity = 1 } = req.body;
     if (!addonId) {
@@ -756,7 +757,7 @@ platformRouter.post("/subscriptions/:tenantId/addons", (req: Request, res: Respo
       return;
     }
 
-    const updated = SubscriptionService.addAddon(
+    const updated = await SubscriptionService.addAddonAsync(
       req.params.tenantId,
       addonId,
       Number(quantity),
@@ -771,11 +772,11 @@ platformRouter.post("/subscriptions/:tenantId/addons", (req: Request, res: Respo
 
 /**
  * DELETE /api/platform/subscriptions/:tenantId/addons/:addonId
- * Super Admin removes an add-on from an agency.
+ * Super Admin removes an add-on from an agency (persisted durably in Cloud Firestore).
  */
-platformRouter.delete("/subscriptions/:tenantId/addons/:addonId", (req: Request, res: Response) => {
+platformRouter.delete("/subscriptions/:tenantId/addons/:addonId", async (req: Request, res: Response) => {
   try {
-    const updated = SubscriptionService.removeAddon(
+    const updated = await SubscriptionService.removeAddonAsync(
       req.params.tenantId,
       req.params.addonId,
       req.authUser!.email
@@ -788,9 +789,10 @@ platformRouter.delete("/subscriptions/:tenantId/addons/:addonId", (req: Request,
 
 /**
  * GET /api/platform/modules
- * Lists central module catalogue and available add-ons.
+ * Lists central module catalogue and available add-ons hydrated from Cloud Firestore.
  */
-platformRouter.get("/modules", (req: Request, res: Response) => {
+platformRouter.get("/modules", async (_req: Request, res: Response) => {
+  await ModuleCatalogService.hydrateFromFirestore();
   const modules = ModuleCatalogService.getAllModules();
   const addons = ModuleCatalogService.getAllAddons();
   const plans = PlanService.listPlans();
@@ -811,12 +813,12 @@ platformRouter.get("/modules", (req: Request, res: Response) => {
 
 /**
  * PATCH /api/platform/modules/:id
- * Toggles module active status or add-on eligibility.
+ * Toggles module active status or add-on eligibility permanently in Cloud Firestore.
  */
 platformRouter.patch("/modules/:id", async (req: Request, res: Response) => {
   try {
     const { isActive, canBePurchasedAsAddon } = req.body;
-    const updated = ModuleCatalogService.updateModuleStatus(
+    const updated = await ModuleCatalogService.updateModuleStatusAsync(
       req.params.id as ModuleId,
       Boolean(isActive),
       canBePurchasedAsAddon !== undefined ? Boolean(canBePurchasedAsAddon) : undefined

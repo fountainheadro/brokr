@@ -1,4 +1,14 @@
 import { ModuleDefinition, AddonDefinition, ModuleId } from "./typ_subscription";
+import { PersistentStoreService } from "../database/svc_persistent-store";
+
+const COL_PLATFORM_SETTINGS = "platform_settings";
+const MODULE_CATALOG_DOC_ID = "module_catalogue";
+
+interface PersistedModuleCatalogDoc {
+  id: string;
+  modules: Record<string, { isActive: boolean; canBePurchasedAsAddon: boolean }>;
+  updatedAt: string;
+}
 
 /**
  * Built-in catalogue of application modules matching the existing CRM functionality.
@@ -171,7 +181,50 @@ const ADDON_CATALOGUE = new Map<string, AddonDefinition>([
   ],
 ]);
 
+const DEFAULT_MODULES: ModuleDefinition[] = Array.from(MODULE_CATALOGUE.values()).map((m) => ({
+  ...m,
+}));
+let lastModulesHydratedAt = 0;
+
 export class ModuleCatalogService {
+  public static resetHydrationCache(): void {
+    lastModulesHydratedAt = 0;
+    MODULE_CATALOGUE.clear();
+    for (const m of DEFAULT_MODULES) {
+      MODULE_CATALOGUE.set(m.id, { ...m });
+    }
+  }
+
+  public static async hydrateFromFirestore(ttlMs = 30_000): Promise<void> {
+    if (!PersistentStoreService.isRemoteFirestoreConfigured()) return;
+    if (Date.now() - lastModulesHydratedAt < ttlMs) return;
+
+    try {
+      const remote = await PersistentStoreService.remoteGet<PersistedModuleCatalogDoc>(
+        COL_PLATFORM_SETTINGS,
+        MODULE_CATALOG_DOC_ID
+      );
+      if (remote && remote.modules && typeof remote.modules === "object") {
+        for (const [id, override] of Object.entries(remote.modules)) {
+          const existing = MODULE_CATALOGUE.get(id as ModuleId);
+          if (existing && override && typeof override === "object") {
+            MODULE_CATALOGUE.set(id as ModuleId, {
+              ...existing,
+              isActive: typeof override.isActive === "boolean" ? override.isActive : existing.isActive,
+              canBePurchasedAsAddon:
+                typeof override.canBePurchasedAsAddon === "boolean"
+                  ? override.canBePurchasedAsAddon
+                  : existing.canBePurchasedAsAddon,
+            });
+          }
+        }
+      }
+      lastModulesHydratedAt = Date.now();
+    } catch {
+      // Non-fatal if doc does not exist yet
+    }
+  }
+
   public static getAllModules(): ModuleDefinition[] {
     return Array.from(MODULE_CATALOGUE.values());
   }
@@ -208,6 +261,38 @@ export class ModuleCatalogService {
     };
 
     MODULE_CATALOGUE.set(id, updated);
+    return updated;
+  }
+
+  public static async updateModuleStatusAsync(
+    id: ModuleId,
+    isActive: boolean,
+    canBePurchasedAsAddon?: boolean
+  ): Promise<ModuleDefinition> {
+    await this.hydrateFromFirestore();
+    const updated = this.updateModuleStatus(id, isActive, canBePurchasedAsAddon);
+
+    const snapshot: Record<string, { isActive: boolean; canBePurchasedAsAddon: boolean }> = {};
+    for (const mod of MODULE_CATALOGUE.values()) {
+      snapshot[mod.id] = {
+        isActive: mod.isActive,
+        canBePurchasedAsAddon: mod.canBePurchasedAsAddon,
+      };
+    }
+
+    if (process.env.NODE_ENV !== "test" || PersistentStoreService.isRemoteFirestoreConfigured()) {
+      await PersistentStoreService.setAsync<PersistedModuleCatalogDoc>(
+        COL_PLATFORM_SETTINGS,
+        MODULE_CATALOG_DOC_ID,
+        {
+          id: MODULE_CATALOG_DOC_ID,
+          modules: snapshot,
+          updatedAt: new Date().toISOString(),
+        }
+      );
+      lastModulesHydratedAt = Date.now();
+    }
+
     return updated;
   }
 }

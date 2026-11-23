@@ -52,10 +52,13 @@ aiRouter.post("/chat", requireModule("mod_ai_extraction"), async (req: Request, 
  * GET /api/tenant/ai/conversations
  * Lists AI conversations strictly scoped to the authenticated tenant and user.
  */
-aiRouter.get("/conversations", (req: Request, res: Response) => {
+aiRouter.get("/conversations", async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
-    const conversations = AiConversationService.listConversations(tenantContext.tenantId, tenantContext.userId);
+    const conversations = await AiConversationService.listConversationsAsync(
+      tenantContext.tenantId,
+      tenantContext.userId
+    );
     res.json(createSuccessResponse(conversations));
   } catch (err: any) {
     res.status(500).json(createErrorResponse("INTERNAL_ERROR", "Eroare la obținerea conversațiilor."));
@@ -64,13 +67,17 @@ aiRouter.get("/conversations", (req: Request, res: Response) => {
 
 /**
  * POST /api/tenant/ai/conversations
- * Creates a new conversation for the user.
+ * Creates a new conversation for the user durably in Cloud Firestore.
  */
-aiRouter.post("/conversations", (req: Request, res: Response) => {
+aiRouter.post("/conversations", async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
     const title = req.body.title || "Conversație nouă";
-    const conv = AiConversationService.createConversation(tenantContext.tenantId, tenantContext.userId, title);
+    const conv = await AiConversationService.createConversationAsync(
+      tenantContext.tenantId,
+      tenantContext.userId,
+      title
+    );
     res.status(201).json(createSuccessResponse(conv));
   } catch (err: any) {
     res.status(500).json(createErrorResponse("INTERNAL_ERROR", "Eroare la crearea conversației."));
@@ -81,11 +88,11 @@ aiRouter.post("/conversations", (req: Request, res: Response) => {
  * GET /api/tenant/ai/conversations/:id
  * Retrieves conversation history with tenant isolation enforcement.
  */
-aiRouter.get("/conversations/:id", (req: Request, res: Response) => {
+aiRouter.get("/conversations/:id", async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
     const isOwnerOrAdmin = tenantContext.role === "agency_owner" || tenantContext.role === "agency_admin";
-    const conv = AiConversationService.getConversation(
+    const conv = await AiConversationService.getConversationAsync(
       tenantContext.tenantId,
       tenantContext.userId,
       req.params.id,
@@ -103,12 +110,16 @@ aiRouter.get("/conversations/:id", (req: Request, res: Response) => {
 
 /**
  * DELETE /api/tenant/ai/conversations/:id
- * Deletes a conversation.
+ * Deletes a conversation permanently from Cloud Firestore.
  */
-aiRouter.delete("/conversations/:id", (req: Request, res: Response) => {
+aiRouter.delete("/conversations/:id", async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
-    AiConversationService.deleteConversation(tenantContext.tenantId, tenantContext.userId, req.params.id);
+    await AiConversationService.deleteConversationAsync(
+      tenantContext.tenantId,
+      tenantContext.userId,
+      req.params.id
+    );
     res.json(createSuccessResponse({ deleted: true }));
   } catch (err: any) {
     if (err instanceof AppError) {
@@ -121,12 +132,12 @@ aiRouter.delete("/conversations/:id", (req: Request, res: Response) => {
 
 /**
  * GET /api/tenant/ai/config
- * Retrieves agency-specific AI preferences.
+ * Retrieves agency-specific AI preferences hydrated from Cloud Firestore.
  */
-aiRouter.get("/config", (req: Request, res: Response) => {
+aiRouter.get("/config", async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
-    const config = AiConfigService.getTenantConfig(tenantContext.tenantId);
+    const config = await AiConfigService.getTenantConfigAsync(tenantContext.tenantId);
     res.json(createSuccessResponse(config));
   } catch (err: any) {
     res.status(500).json(createErrorResponse("INTERNAL_ERROR", "Eroare la încărcarea configurației AI."));
@@ -135,12 +146,12 @@ aiRouter.get("/config", (req: Request, res: Response) => {
 
 /**
  * PUT /api/tenant/ai/config
- * Updates agency-specific AI preferences (agency_owner or agency_admin only).
+ * Updates agency-specific AI preferences durably in Cloud Firestore (agency_owner or agency_admin only).
  */
-aiRouter.put("/config", requireRole(["agency_owner", "agency_admin"]), (req: Request, res: Response) => {
+aiRouter.put("/config", requireRole(["agency_owner", "agency_admin"]), async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
-    const updated = AiConfigService.updateTenantConfig(
+    const updated = await AiConfigService.updateTenantConfigAsync(
       tenantContext.tenantId,
       req.body,
       tenantContext.userEmail
@@ -157,12 +168,12 @@ aiRouter.put("/config", requireRole(["agency_owner", "agency_admin"]), (req: Req
 
 /**
  * GET /api/tenant/ai/instructions
- * Retrieves versioned AI instructions available to this agency.
+ * Retrieves versioned AI instructions available to this agency hydrated from Cloud Firestore.
  */
-aiRouter.get("/instructions", (req: Request, res: Response) => {
+aiRouter.get("/instructions", async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
-    const instructions = AiInstructionService.listInstructions(tenantContext.tenantId);
+    const instructions = await AiInstructionService.listInstructionsAsync(tenantContext.tenantId);
     res.json(createSuccessResponse(instructions));
   } catch (err: any) {
     res.status(500).json(createErrorResponse("INTERNAL_ERROR", "Eroare la încărcarea instrucțiunilor."));
@@ -171,13 +182,13 @@ aiRouter.get("/instructions", (req: Request, res: Response) => {
 
 /**
  * POST /api/tenant/ai/instructions
- * Creates or updates an agency custom instruction (agency_owner or agency_admin only).
+ * Creates or updates an agency custom instruction durably in Cloud Firestore (agency_owner or agency_admin only).
  */
-aiRouter.post("/instructions", requireRole(["agency_owner", "agency_admin"]), (req: Request, res: Response) => {
+aiRouter.post("/instructions", requireRole(["agency_owner", "agency_admin"]), async (req: Request, res: Response) => {
   try {
     const tenantContext = req.tenantContext!;
     const { id, category, name, content } = req.body;
-    const saved = AiInstructionService.saveInstruction(
+    const saved = await AiInstructionService.saveInstructionAsync(
       {
         id,
         tenantId: tenantContext.tenantId,

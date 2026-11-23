@@ -8,7 +8,7 @@ import { createErrorResponse } from "../../src/core/api/api_response";
  * Middleware enforcing that the active tenant subscription includes the requested module.
  */
 export function requireModule(moduleId: ModuleId) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const tenantContext = req.tenantContext;
     if (!tenantContext || !tenantContext.tenantId) {
       res.status(401).json(createErrorResponse("UNAUTHORIZED", "Context de agenție indisponibil pentru verificare modul."));
@@ -24,6 +24,8 @@ export function requireModule(moduleId: ModuleId) {
       res.status(403).json(createErrorResponse("MEMBERSHIP_INACTIVE", "Accesul utilizatorului în această agenție nu este activ."));
       return;
     }
+
+    await QuotaService.hydrateTenantStateAsync(tenantContext.tenantId);
 
     const { modules } = QuotaService.getEffectiveQuotas(tenantContext.tenantId);
     if (!modules.includes(moduleId)) {
@@ -52,7 +54,7 @@ export function requireModule(moduleId: ModuleId) {
  * Middleware enforcing that the tenant has not exceeded their quota for a resource.
  */
 export function requireQuota(resource: QuotaResourceType, requestedAmount = 1) {
-  return (req: Request, res: Response, next: NextFunction): void => {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const tenantContext = req.tenantContext;
     if (!tenantContext || !tenantContext.tenantId) {
       res.status(401).json(createErrorResponse("UNAUTHORIZED", "Context de agenție indisponibil pentru verificare cote."));
@@ -68,6 +70,8 @@ export function requireQuota(resource: QuotaResourceType, requestedAmount = 1) {
       res.status(403).json(createErrorResponse("MEMBERSHIP_INACTIVE", "Accesul utilizatorului în această agenție nu este activ."));
       return;
     }
+
+    await QuotaService.hydrateTenantStateAsync(tenantContext.tenantId);
 
     const check = QuotaService.checkQuota(tenantContext.tenantId, resource, requestedAmount);
     if (!check.allowed) {

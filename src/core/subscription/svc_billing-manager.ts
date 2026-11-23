@@ -174,7 +174,7 @@ export class BillingManager {
             event.data?.metadata?.billing_interval ||
             "month";
           if (tenantId) {
-            SubscriptionService.changePlan(tenantId, planId, interval, `webhook_${event.provider}`);
+            await SubscriptionService.changePlanAsync(tenantId, planId, interval, `webhook_${event.provider}`);
             actionTaken = `Abonament activat cu succes pentru planul ${planId}.`;
           }
           break;
@@ -182,7 +182,7 @@ export class BillingManager {
 
         case "invoice.payment_succeeded": {
           if (tenantId) {
-            SubscriptionService.updateStatus(tenantId, "active", "Plată recurentă confirmată.", `webhook_${event.provider}`);
+            await SubscriptionService.updateStatusAsync(tenantId, "active", "Plată recurentă confirmată.", `webhook_${event.provider}`);
             actionTaken = "Plată confirmată, abonament menținut activ.";
           }
           break;
@@ -190,7 +190,7 @@ export class BillingManager {
 
         case "invoice.payment_failed": {
           if (tenantId) {
-            SubscriptionService.updateStatus(
+            await SubscriptionService.updateStatusAsync(
               tenantId,
               "past_due",
               "Plata recurentă a eșuat. S-a inițiat perioada de grație de 7 zile.",
@@ -203,7 +203,7 @@ export class BillingManager {
 
         case "customer.subscription.deleted": {
           if (tenantId) {
-            SubscriptionService.updateStatus(
+            await SubscriptionService.updateStatusAsync(
               tenantId,
               "cancelled",
               "Abonamentul a fost anulat la furnizorul de plăți.",

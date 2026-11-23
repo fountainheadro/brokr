@@ -1,22 +1,86 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { CmpAgencyAdminLayout } from "../../ui/agency/cmp_agency-admin-layout";
 import { useTenantContext } from "../../core/tenancy/ctx_tenant";
-import { Building2, Save, Palette, Mail, Phone, Globe, Shield, Check } from "lucide-react";
+import { useAuth } from "../../core/auth/ctx_auth";
+import { Building2, Save, Palette, Mail, Phone, Check, AlertCircle, Loader2 } from "lucide-react";
 
 export const PgAgencyAdminSettings: React.FC = () => {
-  const { tenant } = useTenantContext();
+  const { tenant, refreshTenant } = useTenantContext();
+  const { user } = useAuth();
 
   const [agencyName, setAgencyName] = useState<string>(tenant?.name || "Brokr Real Estate");
   const [contactEmail, setContactEmail] = useState<string>(tenant?.branding?.contactEmail || "contact@brokr.ro");
   const [contactPhone, setContactPhone] = useState<string>(tenant?.branding?.contactPhone || "+40 700 000 000");
   const [primaryColor, setPrimaryColor] = useState<string>(tenant?.branding?.primaryColor || "#051D35");
   const [accentColor, setAccentColor] = useState<string>(tenant?.branding?.accentColor || "#BE9662");
+  const [isSaving, setIsSaving] = useState<boolean>(false);
   const [isSaved, setIsSaved] = useState<boolean>(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
-  const handleSave = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (!tenant) return;
+    setAgencyName(tenant.name || "Brokr Real Estate");
+    setContactEmail(tenant.branding?.contactEmail || "");
+    setContactPhone(tenant.branding?.contactPhone || "");
+    setPrimaryColor(tenant.branding?.primaryColor || "#051D35");
+    setAccentColor(tenant.branding?.accentColor || "#BE9662");
+  }, [
+    tenant?.id,
+    tenant?.name,
+    tenant?.branding?.contactEmail,
+    tenant?.branding?.contactPhone,
+    tenant?.branding?.primaryColor,
+    tenant?.branding?.accentColor,
+  ]);
+
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsSaved(true);
-    setTimeout(() => setIsSaved(false), 3000);
+    setSaveError(null);
+    setIsSaved(false);
+    setIsSaving(true);
+
+    try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (user) {
+        const token = await user.getIdToken();
+        headers.Authorization = `Bearer ${token}`;
+      }
+      const previewToken =
+        typeof window !== "undefined" ? localStorage.getItem("brokr_preview_token") : null;
+      if (previewToken) {
+        headers["x-preview-token"] = previewToken;
+      }
+
+      const res = await fetch("/api/tenant/settings", {
+        method: "PUT",
+        headers,
+        body: JSON.stringify({
+          name: agencyName.trim(),
+          branding: {
+            agencyName: agencyName.trim(),
+            contactEmail: contactEmail.trim(),
+            contactPhone: contactPhone.trim(),
+            primaryColor,
+            accentColor,
+          },
+        }),
+      });
+
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.success) {
+        throw new Error(json?.error?.message || "Nu s-au putut salva setările agenției în baza de date.");
+      }
+
+      await refreshTenant();
+      setIsSaved(true);
+      setTimeout(() => setIsSaved(false), 3500);
+    } catch (err: any) {
+      setSaveError(err?.message || "Eroare la salvarea setărilor agenției.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -33,10 +97,17 @@ export const PgAgencyAdminSettings: React.FC = () => {
             {isSaved && (
               <span className="flex items-center gap-1 text-xs font-normal text-emerald-600 bg-emerald-50 px-3 py-1 rounded border border-emerald-200">
                 <Check size={13} />
-                <span>Modificări salvate!</span>
+                <span>Modificări salvate permanent!</span>
               </span>
             )}
           </div>
+
+          {saveError && (
+            <div className="flex items-center gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <AlertCircle size={14} className="shrink-0" />
+              <span>{saveError}</span>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
             <div className="space-y-2">
@@ -45,6 +116,7 @@ export const PgAgencyAdminSettings: React.FC = () => {
                 <Building2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
+                  required
                   value={agencyName}
                   onChange={(e) => setAgencyName(e.target.value)}
                   className="w-full h-9 pl-9 pr-3 bg-gray-50 border border-gray-200 rounded-lg text-xs font-normal focus:bg-white focus:outline-none focus:border-[#BE9662]"
@@ -127,10 +199,11 @@ export const PgAgencyAdminSettings: React.FC = () => {
           <div className="pt-4 flex justify-end">
             <button
               type="submit"
-              className="px-4 py-2 bg-[#051D35] hover:bg-[#051D35]/90 text-white rounded font-semibold text-xs flex items-center gap-2 shadow-2xs transition-colors cursor-pointer"
+              disabled={isSaving}
+              className="px-4 py-2 bg-[#051D35] hover:bg-[#051D35]/90 disabled:opacity-60 text-white rounded font-semibold text-xs flex items-center gap-2 shadow-2xs transition-colors cursor-pointer"
             >
-              <Save size={13} />
-              <span>Salvează Setările</span>
+              {isSaving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />}
+              <span>{isSaving ? "Se salvează..." : "Salvează Setările"}</span>
             </button>
           </div>
         </form>

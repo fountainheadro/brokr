@@ -47,7 +47,7 @@ export class PlatformSettingsService {
   }
 
   public static async getSettingsAsync(): Promise<PlatformSettingsRecord> {
-    if (process.env.NODE_ENV !== "test" && PersistentStoreService.isRemoteFirestoreConfigured()) {
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
       try {
         const remote = await PersistentStoreService.remoteGet<PlatformSettingsRecord>(
           COL_PLATFORM_SETTINGS,

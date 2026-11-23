@@ -4,40 +4,7 @@ import { AI_REAL_ESTATE_RULES } from "../../../ai/instructions/ins_real-estate-r
 import { ValidationError } from "../errors/app_error";
 
 export class AiConfigService {
-  /**
-   * Retrieves effective AI preferences for a tenant, falling back to platform defaults.
-   */
-  public static getTenantConfig(tenantId: string): AgencyAiConfigRecord {
-    const existing = AiConfigRepository.getByTenantId(tenantId);
-    if (existing) {
-      return existing;
-    }
-
-    // Default configuration for tenant
-    const newConfig: AgencyAiConfigRecord = {
-      id: `aiconf_${tenantId}`,
-      tenantId,
-      preferences: { ...DEFAULT_PLATFORM_AI_PREFERENCES },
-      version: 1,
-      updatedBy: "system_default",
-      updatedAt: new Date().toISOString(),
-    };
-
-    return AiConfigRepository.save(newConfig);
-  }
-
-  /**
-   * Updates agency AI preferences with safety validation.
-   * Agency rules CANNOT override platform security or tenant isolation.
-   */
-  public static updateTenantConfig(
-    tenantId: string,
-    updates: Partial<AgencyAiPreferences>,
-    actorEmail: string
-  ): AgencyAiConfigRecord {
-    const current = this.getTenantConfig(tenantId);
-
-    // Sanitize and validate custom agency rules
+  private static validatePreferences(updates: Partial<AgencyAiPreferences>): void {
     if (updates.customAgencyRules) {
       for (const rule of updates.customAgencyRules) {
         if (rule.length > 500) {
@@ -60,6 +27,54 @@ export class AiConfigService {
         }
       }
     }
+  }
+
+  /**
+   * Retrieves effective AI preferences for a tenant, falling back to platform defaults.
+   */
+  public static getTenantConfig(tenantId: string): AgencyAiConfigRecord {
+    const existing = AiConfigRepository.getByTenantId(tenantId);
+    if (existing) {
+      return existing;
+    }
+
+    return {
+      id: `aiconf_${tenantId}`,
+      tenantId,
+      preferences: { ...DEFAULT_PLATFORM_AI_PREFERENCES },
+      version: 1,
+      updatedBy: "system_default",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  public static async getTenantConfigAsync(tenantId: string): Promise<AgencyAiConfigRecord> {
+    const existing = await AiConfigRepository.getByTenantIdAsync(tenantId);
+    if (existing) {
+      return existing;
+    }
+
+    return {
+      id: `aiconf_${tenantId}`,
+      tenantId,
+      preferences: { ...DEFAULT_PLATFORM_AI_PREFERENCES },
+      version: 1,
+      updatedBy: "system_default",
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Updates agency AI preferences with safety validation.
+   * Agency rules CANNOT override platform security or tenant isolation.
+   */
+  public static updateTenantConfig(
+    tenantId: string,
+    updates: Partial<AgencyAiPreferences>,
+    actorEmail: string
+  ): AgencyAiConfigRecord {
+    const current = this.getTenantConfig(tenantId);
+    this.validatePreferences(updates);
 
     const updatedConfig: AgencyAiConfigRecord = {
       ...current,
@@ -73,6 +88,28 @@ export class AiConfigService {
     };
 
     return AiConfigRepository.save(updatedConfig);
+  }
+
+  public static async updateTenantConfigAsync(
+    tenantId: string,
+    updates: Partial<AgencyAiPreferences>,
+    actorEmail: string
+  ): Promise<AgencyAiConfigRecord> {
+    const current = await this.getTenantConfigAsync(tenantId);
+    this.validatePreferences(updates);
+
+    const updatedConfig: AgencyAiConfigRecord = {
+      ...current,
+      preferences: {
+        ...current.preferences,
+        ...updates,
+      },
+      version: current.version + 1,
+      updatedBy: actorEmail,
+      updatedAt: new Date().toISOString(),
+    };
+
+    return AiConfigRepository.saveAsync(updatedConfig);
   }
 
   /**

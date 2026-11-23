@@ -430,6 +430,13 @@ export class TenantResolutionService {
     return PlatformAdminService.isPlatformAdmin(reqAuth.uid, reqAuth.email);
   }
 
+  public static resetHydrationCache(): void {
+    this.lastHydratedAt = 0;
+    this.lastHydrateFailureAt = 0;
+    this.singleTenantHydratedAt.clear();
+    this.ensuredTenants.clear();
+  }
+
   /**
    * O(1) single-tenant hydration (`/tenants/{tenantId}`) for agency-scoped requests.
    * Avoids scanning the global `/tenants` collection (which requires Platform Admin privileges).
@@ -439,9 +446,6 @@ export class TenantResolutionService {
     ttlMs = 60_000
   ): Promise<TenantRecord | null> {
     if (!tenantId) return null;
-    if (process.env.NODE_ENV === "test") {
-      return this.getTenantById(tenantId);
-    }
     if (!PersistentStoreService.isRemoteFirestoreConfigured()) {
       return this.getTenantById(tenantId);
     }
@@ -486,9 +490,6 @@ export class TenantResolutionService {
    * Strictly gated to Platform Admin or Server ADC contexts to prevent 403 log storms.
    */
   public static async hydrateFromFirestore(ttlMs = 30_000): Promise<TenantRecord[]> {
-    if (process.env.NODE_ENV === "test") {
-      return this.getAllTenants();
-    }
     if (!PersistentStoreService.isRemoteFirestoreConfigured()) {
       return this.getAllTenants();
     }
@@ -566,6 +567,69 @@ export class TenantResolutionService {
       this.singleTenantHydratedAt.set(normalized.id, Date.now());
     }
     return normalized;
+  }
+
+  /**
+   * Persists agency branding & general settings (`name`, `branding`) to `/tenants/{tenantId}`
+   * while strictly preserving immutable/privileged fields (`id`, `status`, `planId`, `authVersion`)
+   * so `firestore.rules` `isTenantAdmin(tenantId)` allows agency owners/admins to save safely.
+   */
+  public static async updateTenantSettingsAsync(
+    tenantId: string,
+    updates: {
+      name?: string;
+      branding?: Partial<TenantRecord["branding"]>;
+    }
+  ): Promise<TenantRecord> {
+    let base: TenantRecord | null = null;
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        base = await PersistentStoreService.remoteGetAtPath<TenantRecord>(`tenants/${tenantId}`, {
+          silentOnStatuses: [403],
+        });
+      } catch {
+        base = null;
+      }
+    }
+    if (!base) {
+      base = KNOWN_TENANTS.get(tenantId) || null;
+    }
+    if (!base) {
+      throw new TenantError(`Agenția "${tenantId}" nu a fost găsită.`, "TENANT_NOT_FOUND");
+    }
+
+    const nextName =
+      typeof updates.name === "string" && updates.name.trim()
+        ? updates.name.trim().slice(0, 120)
+        : base.name;
+
+    const nextBranding: TenantRecord["branding"] = {
+      ...base.branding,
+      ...(updates.branding || {}),
+      agencyName:
+        typeof updates.branding?.agencyName === "string" && updates.branding.agencyName.trim()
+          ? updates.branding.agencyName.trim().slice(0, 120)
+          : nextName,
+    };
+
+    const updated: TenantRecord = {
+      ...base,
+      name: nextName,
+      branding: nextBranding,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (process.env.NODE_ENV !== "test" || PersistentStoreService.isRemoteFirestoreConfigured()) {
+      await PersistentStoreService.remoteSetAtPath(`tenants/${tenantId}`, updated);
+      this.ensuredTenants.add(tenantId);
+      this.singleTenantHydratedAt.set(tenantId, Date.now());
+    }
+
+    KNOWN_TENANTS.set(tenantId, updated);
+    if (updated.customDomain) {
+      CUSTOM_DOMAINS.set(this.normalizeHost(updated.customDomain), updated.id);
+    }
+    return updated;
   }
 
   /**

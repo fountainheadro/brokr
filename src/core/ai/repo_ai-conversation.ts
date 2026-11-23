@@ -39,6 +39,24 @@ export class AiConversationRepository {
     return PersistentStoreService.get<AiConversationRecord>(COL_AI_CONVERSATIONS, id);
   }
 
+  public static async findByIdAsync(id: string): Promise<AiConversationRecord | null> {
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        const remote = await PersistentStoreService.remoteGet<AiConversationRecord>(
+          COL_AI_CONVERSATIONS,
+          id
+        );
+        if (remote) {
+          PersistentStoreService.setCacheOnly(COL_AI_CONVERSATIONS, id, remote);
+          return remote;
+        }
+      } catch {
+        // Not found remotely
+      }
+    }
+    return this.findById(id);
+  }
+
   public static listByTenantAndUser(tenantId: string, userId?: string): AiConversationRecord[] {
     const all = ensureSeeded();
     const list: AiConversationRecord[] = [];
@@ -52,6 +70,48 @@ export class AiConversationRepository {
     return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 
+  public static async listByTenantAndUserAsync(
+    tenantId: string,
+    userId?: string
+  ): Promise<AiConversationRecord[]> {
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        const remoteDocs = await PersistentStoreService.remoteRunQueryAtPath<AiConversationRecord>(
+          "",
+          {
+            from: [{ collectionId: COL_AI_CONVERSATIONS }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: "tenantId" },
+                op: "EQUAL",
+                value: { stringValue: tenantId },
+              },
+            },
+            limit: 100,
+          }
+        );
+        const list: AiConversationRecord[] = [];
+        for (const entry of remoteDocs) {
+          const conv = entry?.data;
+          if (conv && conv.id) {
+            PersistentStoreService.setCacheOnly(COL_AI_CONVERSATIONS, conv.id, conv);
+            if (conv.tenantId === tenantId && conv.status !== "deleted") {
+              if (!userId || conv.userId === userId) {
+                list.push({ ...conv });
+              }
+            }
+          }
+        }
+        return list.sort(
+          (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+        );
+      } catch {
+        // Fallback to local cache on query error
+      }
+    }
+    return this.listByTenantAndUser(tenantId, userId);
+  }
+
   public static save(conv: AiConversationRecord): AiConversationRecord {
     ensureSeeded();
     const updated: AiConversationRecord = {
@@ -62,11 +122,33 @@ export class AiConversationRepository {
     return updated;
   }
 
+  public static async saveAsync(conv: AiConversationRecord): Promise<AiConversationRecord> {
+    ensureSeeded();
+    const updated: AiConversationRecord = {
+      ...conv,
+      updatedAt: new Date().toISOString(),
+    };
+    await PersistentStoreService.setAsync(COL_AI_CONVERSATIONS, conv.id, updated);
+    return updated;
+  }
+
   public static delete(id: string): void {
     const conv = this.findById(id);
     if (conv) {
       conv.status = "deleted";
       PersistentStoreService.set(COL_AI_CONVERSATIONS, id, conv);
+    }
+  }
+
+  public static async deleteAsync(id: string): Promise<void> {
+    const conv = await this.findByIdAsync(id);
+    if (conv) {
+      const deletedConv: AiConversationRecord = {
+        ...conv,
+        status: "deleted",
+        updatedAt: new Date().toISOString(),
+      };
+      await PersistentStoreService.setAsync(COL_AI_CONVERSATIONS, id, deletedConv);
     }
   }
 

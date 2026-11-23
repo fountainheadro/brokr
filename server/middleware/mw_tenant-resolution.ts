@@ -18,7 +18,7 @@ declare global {
  * Determines the tenant strictly based on the request hostname and server-side domain mapping.
  * Never trusts frontend body or query tenant_id for identity.
  */
-export function mwTenantResolution(req: Request, res: Response, next: NextFunction): void {
+export async function mwTenantResolution(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const rawHost =
       (req.headers["x-forwarded-host"] as string) ||
@@ -32,11 +32,19 @@ export function mwTenantResolution(req: Request, res: Response, next: NextFuncti
       (req.query.simulate_tenant as string) ||
       null;
 
-    const resolved = TenantResolutionService.resolveDomain(
-      rawHost,
-      devOverride,
-      process.env.NODE_ENV === "production"
-    );
+    const isProd = process.env.NODE_ENV === "production";
+    let resolved: ResolvedTenantDomain;
+    try {
+      resolved = TenantResolutionService.resolveDomain(rawHost, devOverride, isProd);
+    } catch (err) {
+      if (err instanceof AppError && err.code === "TENANT_NOT_FOUND") {
+        // Cold-start recovery: hydrate tenants list from Firestore once and retry domain lookup
+        await TenantResolutionService.hydrateFromFirestore();
+        resolved = TenantResolutionService.resolveDomain(rawHost, devOverride, isProd);
+      } else {
+        throw err;
+      }
+    }
 
     req.resolvedDomain = resolved;
 
@@ -48,7 +56,10 @@ export function mwTenantResolution(req: Request, res: Response, next: NextFuncti
         return;
       }
 
-      const tenant = TenantResolutionService.getTenantById(resolved.tenantId);
+      const tenant =
+        (await TenantResolutionService.hydrateSingleTenantFromFirestore(resolved.tenantId)) ||
+        TenantResolutionService.getTenantById(resolved.tenantId);
+
       if (!tenant) {
         res
           .status(404)

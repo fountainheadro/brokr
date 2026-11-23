@@ -145,6 +145,12 @@ function ensureSeeded(): Record<string, SubscriptionPlanRecord> {
 }
 
 export class PlanRepository {
+  public static async hydrateAsync(): Promise<void> {
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+      await PersistentStoreService.hydrateCollectionOnce(COL_PLANS);
+    }
+  }
+
   public static list(statusFilter?: string): SubscriptionPlanRecord[] {
     const all = Object.values(ensureSeeded()).sort((a, b) => a.displayOrder - b.displayOrder);
     if (!statusFilter || statusFilter === "all") {
@@ -167,6 +173,16 @@ export class PlanRepository {
     return plan;
   }
 
+  public static async createAsync(plan: SubscriptionPlanRecord): Promise<SubscriptionPlanRecord> {
+    await this.hydrateAsync();
+    ensureSeeded();
+    if (PersistentStoreService.get<SubscriptionPlanRecord>(COL_PLANS, plan.id)) {
+      throw new Error(`Planul cu ID-ul ${plan.id} există deja.`);
+    }
+    await PersistentStoreService.setAsync(COL_PLANS, plan.id, { ...plan });
+    return plan;
+  }
+
   public static update(id: string, updates: Partial<SubscriptionPlanRecord>): SubscriptionPlanRecord {
     ensureSeeded();
     const existing = PersistentStoreService.get<SubscriptionPlanRecord>(COL_PLANS, id);
@@ -182,6 +198,28 @@ export class PlanRepository {
     };
 
     PersistentStoreService.set(COL_PLANS, id, updated);
+    return updated;
+  }
+
+  public static async updateAsync(
+    id: string,
+    updates: Partial<SubscriptionPlanRecord>
+  ): Promise<SubscriptionPlanRecord> {
+    await this.hydrateAsync();
+    ensureSeeded();
+    const existing = PersistentStoreService.get<SubscriptionPlanRecord>(COL_PLANS, id);
+    if (!existing) {
+      throw new Error(`Planul cu ID-ul ${id} nu a fost găsit.`);
+    }
+
+    const updated: SubscriptionPlanRecord = {
+      ...existing,
+      ...updates,
+      id: existing.id, // ID is immutable
+      updatedAt: new Date().toISOString(),
+    };
+
+    await PersistentStoreService.setAsync(COL_PLANS, id, updated);
     return updated;
   }
 

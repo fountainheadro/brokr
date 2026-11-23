@@ -39,10 +39,17 @@ export class AiOrchestrator {
     activeAiRequestsByTenant.set(tenantId, activeCount + 1);
 
     try {
-      const tenant = TenantResolutionService.getTenantById(tenantId);
+      const tenant =
+        (await TenantResolutionService.hydrateSingleTenantFromFirestore(tenantId)) ||
+        TenantResolutionService.getTenantById(tenantId);
       if (!tenant) {
         throw new ForbiddenError(`Agenția cu ID ${tenantId} nu este înregistrată.`);
       }
+
+      await Promise.all([
+        QuotaService.hydrateTenantStateAsync(tenantId),
+        AiConfigService.getTenantConfigAsync(tenantId),
+      ]);
 
       // Check module entitlement based on operation
       const requiredModule =
@@ -60,11 +67,11 @@ export class AiOrchestrator {
       const reservationId = QuotaService.reserveAiQuota(tenantId, estimatedTokens);
 
       const conversation = request.conversationId
-        ? AiConversationService.getConversation(tenantId, userId, request.conversationId)
-        : AiConversationService.createConversation(tenantId, userId, prompt.slice(0, 40) + "...");
+        ? await AiConversationService.getConversationAsync(tenantId, userId, request.conversationId)
+        : await AiConversationService.createConversationAsync(tenantId, userId, prompt.slice(0, 40) + "...");
 
-      // Record user message
-      AiConversationService.addMessage(tenantId, conversation.id, {
+      // Record user message durably in Cloud Firestore
+      await AiConversationService.addMessageAsync(tenantId, conversation.id, {
         role: "user",
         content: prompt,
         tokenCount: GeminiProvider.estimateTokens(prompt),
@@ -137,15 +144,15 @@ export class AiOrchestrator {
 
         const responseText = geminiResult.text;
 
-        // 6. Record Assistant Message in Conversation
-        AiConversationService.addMessage(tenantId, conversation.id, {
+        // 6. Record Assistant Message in Conversation durably
+        await AiConversationService.addMessageAsync(tenantId, conversation.id, {
           role: "assistant",
           content: responseText,
           tokenCount: geminiResult.outputTokens,
         });
 
-        // 7. Commit Actual AI Quota Consumption
-        QuotaService.commitAiQuota(reservationId, geminiResult.totalTokens);
+        // 7. Commit Actual AI Quota Consumption durably
+        await QuotaService.commitAiQuotaAsync(reservationId, geminiResult.totalTokens);
 
         // 8. Create Usage Audit Record
         const costEstimate = AiQuotaTracker.calculate_cost_eur(

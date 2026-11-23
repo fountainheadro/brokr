@@ -211,7 +211,11 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
           } else {
             const meJson = await meRes.json();
             if (meJson.success && meJson.data) {
-              setTenantContext(meJson.data);
+              const { tenant: hydratedTenant, ...verifiedContext } = meJson.data;
+              setTenantContext(verifiedContext);
+              if (hydratedTenant && typeof hydratedTenant === "object" && hydratedTenant.id) {
+                setTenant(hydratedTenant);
+              }
             }
           }
         } catch (authErr) {

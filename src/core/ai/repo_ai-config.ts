@@ -85,10 +85,35 @@ export class AiConfigRepository {
     return PersistentStoreService.get<AgencyAiConfigRecord>(COL_AI_CONFIGS, tenantId);
   }
 
+  public static async getByTenantIdAsync(tenantId: string): Promise<AgencyAiConfigRecord | null> {
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        const remote = await PersistentStoreService.remoteGet<AgencyAiConfigRecord>(
+          COL_AI_CONFIGS,
+          tenantId
+        );
+        if (remote) {
+          PersistentStoreService.setCacheOnly(COL_AI_CONFIGS, tenantId, remote);
+          return remote;
+        }
+      } catch {
+        // Fallback to cached/default if document doesn't exist yet
+      }
+    }
+    return this.getByTenantId(tenantId);
+  }
+
   public static save(config: AgencyAiConfigRecord): AgencyAiConfigRecord {
     ensureConfigsSeeded();
     const copy = { ...config };
     PersistentStoreService.set(COL_AI_CONFIGS, config.tenantId, copy);
+    return copy;
+  }
+
+  public static async saveAsync(config: AgencyAiConfigRecord): Promise<AgencyAiConfigRecord> {
+    ensureConfigsSeeded();
+    const copy = { ...config };
+    await PersistentStoreService.setAsync(COL_AI_CONFIGS, config.tenantId, copy);
     return copy;
   }
 

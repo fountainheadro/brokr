@@ -25,7 +25,7 @@ export const tenantRouter = Router();
  * Public endpoint to resolve public tenant branding for the requesting domain.
  * Does not expose private keys or sensitive tenant information.
  */
-tenantRouter.get("/resolve", (req: Request, res: Response) => {
+tenantRouter.get("/resolve", async (req: Request, res: Response) => {
   try {
     const rawHost =
       (req.headers["x-forwarded-host"] as string) ||
@@ -39,15 +39,24 @@ tenantRouter.get("/resolve", (req: Request, res: Response) => {
       null;
 
     const platformRootDomain = resolveEffectiveRootDomain(rawHost);
+    const isProd = process.env.NODE_ENV === "production";
 
-    const resolved = TenantResolutionService.resolveDomain(
-      rawHost,
-      devOverride,
-      process.env.NODE_ENV === "production"
-    );
+    let resolved;
+    try {
+      resolved = TenantResolutionService.resolveDomain(rawHost, devOverride, isProd);
+    } catch (err) {
+      if (err instanceof AppError && err.code === "TENANT_NOT_FOUND") {
+        await TenantResolutionService.hydrateFromFirestore();
+        resolved = TenantResolutionService.resolveDomain(rawHost, devOverride, isProd);
+      } else {
+        throw err;
+      }
+    }
 
     if (resolved.type === "agency_crm" && resolved.tenantId) {
-      const tenant = TenantResolutionService.getTenantById(resolved.tenantId);
+      const tenant =
+        (await TenantResolutionService.hydrateSingleTenantFromFirestore(resolved.tenantId)) ||
+        TenantResolutionService.getTenantById(resolved.tenantId);
       if (tenant) {
         res.json(
           createSuccessResponse({
@@ -78,11 +87,119 @@ tenantRouter.get("/resolve", (req: Request, res: Response) => {
 });
 
 /**
- * Protected: Returns the verified TenantContext of the authenticated user.
+ * Protected: Returns the verified TenantContext of the authenticated user along with
+ * the freshly Cloud Firestore-hydrated TenantRecord (name, branding, status).
  */
 tenantRouter.get("/me", requireTenantContext, (req: Request, res: Response) => {
-  res.json(createSuccessResponse(req.tenantContext!));
+  const tenant = req.resolvedTenant || TenantResolutionService.getTenantById(req.tenantContext!.tenantId) || null;
+  res.json(
+    createSuccessResponse({
+      ...req.tenantContext!,
+      tenant,
+    })
+  );
 });
+
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+/**
+ * Protected: Persists agency general settings & brand identity permanently in Cloud Firestore
+ * (`/tenants/{tenantId}`). Restricted strictly to agency_owner or agency_admin.
+ */
+tenantRouter.put(
+  "/settings",
+  requireTenantContext,
+  requireRole(["agency_owner", "agency_admin"]),
+  async (req: Request, res: Response) => {
+    try {
+      const tenantId = req.tenantContext!.tenantId;
+      const body = req.body || {};
+
+      const rawName = typeof body.name === "string" ? body.name.trim() : "";
+      if (!rawName || rawName.length > 120) {
+        res
+          .status(400)
+          .json(
+            createErrorResponse(
+              "VALIDATION_ERROR",
+              "Numele agenției este obligatoriu (maxim 120 caractere)."
+            )
+          );
+        return;
+      }
+
+      const rawBranding = body.branding && typeof body.branding === "object" ? body.branding : {};
+      const contactEmail =
+        typeof rawBranding.contactEmail === "string" ? rawBranding.contactEmail.trim() : undefined;
+      if (contactEmail && (contactEmail.length > 160 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail))) {
+        res
+          .status(400)
+          .json(createErrorResponse("VALIDATION_ERROR", "Adresa de email de contact este invalidă."));
+        return;
+      }
+
+      const contactPhone =
+        typeof rawBranding.contactPhone === "string" ? rawBranding.contactPhone.trim().slice(0, 40) : undefined;
+
+      const primaryColor =
+        typeof rawBranding.primaryColor === "string" ? rawBranding.primaryColor.trim() : undefined;
+      if (primaryColor && !HEX_COLOR_RE.test(primaryColor)) {
+        res
+          .status(400)
+          .json(createErrorResponse("VALIDATION_ERROR", "Culoarea primară trebuie să fie în format hex (#RRGGBB)."));
+        return;
+      }
+
+      const accentColor =
+        typeof rawBranding.accentColor === "string" ? rawBranding.accentColor.trim() : undefined;
+      if (accentColor && !HEX_COLOR_RE.test(accentColor)) {
+        res
+          .status(400)
+          .json(createErrorResponse("VALIDATION_ERROR", "Culoarea de accent trebuie să fie în format hex (#RRGGBB)."));
+        return;
+      }
+
+      let logoUrl: string | undefined = undefined;
+      if (typeof rawBranding.logoUrl === "string" && rawBranding.logoUrl.trim()) {
+        const candidate = rawBranding.logoUrl.trim();
+        if (!/^https?:\/\//i.test(candidate) || candidate.length > 500) {
+          res
+            .status(400)
+            .json(createErrorResponse("VALIDATION_ERROR", "URL-ul logo-ului trebuie să înceapă cu http:// sau https://."));
+          return;
+        }
+        logoUrl = candidate;
+      }
+
+      const updated = await TenantResolutionService.updateTenantSettingsAsync(tenantId, {
+        name: rawName,
+        branding: {
+          agencyName: rawName,
+          ...(contactEmail !== undefined ? { contactEmail } : {}),
+          ...(contactPhone !== undefined ? { contactPhone } : {}),
+          ...(primaryColor !== undefined ? { primaryColor } : {}),
+          ...(accentColor !== undefined ? { accentColor } : {}),
+          ...(logoUrl !== undefined ? { logoUrl } : {}),
+        },
+      });
+
+      res.json(createSuccessResponse(updated));
+    } catch (error: any) {
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json(createErrorResponse(error.code, error.message));
+        return;
+      }
+      res
+        .status(500)
+        .json(
+          createErrorResponse(
+            "INTERNAL_ERROR",
+            error?.message || "Eroare la salvarea setărilor agenției în baza de date."
+          )
+        );
+    }
+  }
+);
 
 /**
  * Protected: Lists members of the authenticated user's agency directly from Firestore.
@@ -265,8 +382,8 @@ tenantRouter.post(
         userId
       );
 
-      // Increment quota usage atomically
-      QuotaService.consumeQuota(tenantId, "leads", 1);
+      // Increment quota usage durably in Cloud Firestore
+      await QuotaService.consumeQuotaAsync(tenantId, "leads", 1);
 
       res.status(201).json(createSuccessResponse(created, { tenantId }));
     } catch (err: any) {
@@ -368,9 +485,10 @@ tenantRouter.post(
  * Protected: Retrieves the subscription and entitlement details strictly for the authenticated agency.
  * Cross-tenant access is architecturally impossible because tenantId is sourced from verified TenantContext.
  */
-tenantRouter.get("/subscription", requireTenantContext, (req: Request, res: Response) => {
+tenantRouter.get("/subscription", requireTenantContext, async (req: Request, res: Response) => {
   try {
     const tenantId = req.tenantContext!.tenantId;
+    await QuotaService.hydrateTenantStateAsync(tenantId);
     const entitlements = QuotaService.getTenantEntitlements(tenantId);
     res.json(createSuccessResponse(entitlements));
   } catch (err: any) {

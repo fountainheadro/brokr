@@ -123,6 +123,26 @@ export class SubscriptionRepository {
     return PersistentStoreService.get<AgencySubscriptionRecord>(COL_SUBSCRIPTIONS, tenantId);
   }
 
+  public static async findByTenantIdAsync(
+    tenantId: string
+  ): Promise<AgencySubscriptionRecord | null> {
+    if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+      try {
+        const remote = await PersistentStoreService.remoteGet<AgencySubscriptionRecord>(
+          COL_SUBSCRIPTIONS,
+          tenantId
+        );
+        if (remote) {
+          PersistentStoreService.setCacheOnly(COL_SUBSCRIPTIONS, tenantId, remote);
+          return remote;
+        }
+      } catch {
+        // Fallback to cached/default if absent
+      }
+    }
+    return this.findByTenantId(tenantId);
+  }
+
   public static findById(id: string): AgencySubscriptionRecord | null {
     const all = Object.values(ensureSeeded());
     for (const sub of all) {
@@ -138,6 +158,18 @@ export class SubscriptionRepository {
       updatedAt: new Date().toISOString(),
     };
     PersistentStoreService.set(COL_SUBSCRIPTIONS, subscription.tenantId, updated);
+    return updated;
+  }
+
+  public static async saveAsync(
+    subscription: AgencySubscriptionRecord
+  ): Promise<AgencySubscriptionRecord> {
+    ensureSeeded();
+    const updated: AgencySubscriptionRecord = {
+      ...subscription,
+      updatedAt: new Date().toISOString(),
+    };
+    await PersistentStoreService.setAsync(COL_SUBSCRIPTIONS, subscription.tenantId, updated);
     return updated;
   }
 
