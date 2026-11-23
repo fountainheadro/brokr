@@ -72,6 +72,18 @@ const SEED_MEMBERSHIPS: TenantMembershipRecord[] = [
     updatedAt: "2026-01-01T00:00:00.000Z",
   },
   {
+    id: "mem_usr_petru_buliga",
+    tenantId: "ten_brokr_default",
+    userId: "usr_petru_buliga",
+    email: "officepimob@gmail.com",
+    name: "Petru Buliga",
+    role: "agency_admin",
+    status: "active",
+    permissions: ["*"],
+    createdAt: "2026-11-23T00:00:00.000Z",
+    updatedAt: "2026-11-23T00:00:00.000Z",
+  },
+  {
     id: "mem_usr_suspended_brokr",
     tenantId: "ten_brokr_default",
     userId: "usr_suspended_1",
@@ -224,7 +236,106 @@ function assertMembershipStatusAllowed(membership: TenantMembershipRecord): void
   }
 }
 
+const PROVISIONED_SEED_INVITES: Array<{
+  tenantId: string;
+  email: string;
+  name: string;
+  role: UserRole;
+  staffDocId: string;
+}> = [
+  {
+    tenantId: "ten_brokr_default",
+    email: "officepimob@gmail.com",
+    name: "Petru Buliga",
+    role: "agency_admin",
+    staffDocId: "stf_petru_buliga",
+  },
+];
+
 export class TenantMembershipService {
+  private static syncedSeedInvites = new Set<string>();
+
+  /**
+   * Idempotently ensures provisioned seed invites (and matching staff cards) exist in Cloud
+   * Firestore for the given tenant when an authenticated agency admin/owner accesses it.
+   */
+  public static async ensureSeedInvitesSyncedAsync(tenantId: string): Promise<void> {
+    if (process.env.NODE_ENV === "test") return;
+    if (this.syncedSeedInvites.has(tenantId)) return;
+    if (!PersistentStoreService.isRemoteFirestoreConfigured()) return;
+
+    const entries = PROVISIONED_SEED_INVITES.filter((e) => e.tenantId === tenantId);
+    if (entries.length === 0) {
+      this.syncedSeedInvites.add(tenantId);
+      return;
+    }
+
+    let allSynced = true;
+    for (const entry of entries) {
+      const normalizedEmail = entry.email.toLowerCase().trim();
+      const now = new Date().toISOString();
+      try {
+        const existingInvite = await PersistentStoreService.remoteGetAtPath<TenantMembershipRecord>(
+          `tenants/${tenantId}/invites/${normalizedEmail}`,
+          { silentOnStatuses: [403] }
+        );
+        if (!existingInvite) {
+          const inviteRecord: TenantMembershipRecord = {
+            id: normalizedEmail,
+            tenantId,
+            userId: normalizedEmail,
+            email: normalizedEmail,
+            name: entry.name,
+            role: entry.role,
+            status: "active",
+            authVersion: 1,
+            permissions: defaultPermissionsForRole(entry.role),
+            createdAt: now,
+            updatedAt: now,
+          };
+          await PersistentStoreService.remoteSetAtPath(
+            `tenants/${tenantId}/invites/${normalizedEmail}`,
+            inviteRecord
+          );
+        }
+
+        const existingStaff = await PersistentStoreService.remoteListAtPath<Record<string, any>>(
+          `tenants/${tenantId}/staff`,
+          200,
+          5,
+          { silentOnStatuses: [403] }
+        );
+        const alreadyInStaff = existingStaff.some(
+          (s) => String(s?.email || "").toLowerCase().trim() === normalizedEmail
+        );
+        if (!alreadyInStaff) {
+          await PersistentStoreService.remoteSetAtPath(
+            `tenants/${tenantId}/staff/${entry.staffDocId}`,
+            {
+              id: entry.staffDocId,
+              staffId: entry.staffDocId,
+              personalId: entry.staffDocId,
+              tenantId,
+              tenant_id: tenantId,
+              name: entry.name,
+              role: entry.role,
+              phone: "",
+              email: normalizedEmail,
+              status: "Activ",
+              createdAt: now,
+              updatedAt: now,
+            }
+          );
+        }
+      } catch {
+        allSynced = false;
+      }
+    }
+
+    if (allSynced) {
+      this.syncedSeedInvites.add(tenantId);
+    }
+  }
   /**
    * Fail-closed authVersion verification against optional compact Firebase custom claims.
    * Backward-compatible: if custom claims are not minted yet, passes cleanly;
@@ -338,6 +449,15 @@ export class TenantMembershipService {
             membership
           );
           assertMembershipStatusAllowed(membership);
+          if (membership.role === "agency_owner" || membership.role === "agency_admin") {
+            const reqAuth = PersistentStoreService.getRequestAuth();
+            const syncPromise = reqAuth
+              ? PersistentStoreService.runWithRequestAuth(reqAuth, () =>
+                  this.ensureSeedInvitesSyncedAsync(tenantId)
+                )
+              : this.ensureSeedInvitesSyncedAsync(tenantId);
+            void syncPromise.catch(() => {});
+          }
           return membership;
         }
       } catch (err: any) {
@@ -442,6 +562,15 @@ export class TenantMembershipService {
             getMembershipKey(tenantId, userId),
             boundRecord
           );
+          if (boundRecord.role === "agency_owner" || boundRecord.role === "agency_admin") {
+            const reqAuth = PersistentStoreService.getRequestAuth();
+            const syncPromise = reqAuth
+              ? PersistentStoreService.runWithRequestAuth(reqAuth, () =>
+                  this.ensureSeedInvitesSyncedAsync(tenantId)
+                )
+              : this.ensureSeedInvitesSyncedAsync(tenantId);
+            void syncPromise.catch(() => {});
+          }
           return boundRecord;
         }
       }
