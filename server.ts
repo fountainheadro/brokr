@@ -17,6 +17,7 @@ import { mwPlatformAuthorization } from "./server/middleware/mw_platform-authori
 import { requireTenantContext } from "./server/middleware/mw_tenant-context";
 import { requireQuota } from "./server/middleware/mw_entitlement";
 import { requireWorkerOidc } from "./server/middleware/mw_worker-oidc";
+import { internalWorkersRouter, workerAdminRouter } from "./server/workers/rtr_internal-workers";
 import { safeAxiosGet, safeFetchExternal, validateSafeExternalUrl, DEFAULT_MAX_EXTERNAL_BYTES } from "./server/security/sec_url-validator";
 import { createRateLimiter } from "./server/middleware/mw_rate-limiter";
 import { mwObservability } from "./server/middleware/mw_observability";
@@ -34,8 +35,12 @@ import {
   verifyPublicImageToken,
   resolveInlinePublicDataUrl,
   applyPublicImageProtections,
-  getCachedProtectedPublicImage,
+  getPersistedProtectedPublicImage,
 } from "./server/security/sec_public-media";
+import {
+  CACHE_CONTROL_PUBLIC_IMMUTABLE,
+  MediaPipelineService,
+} from "./server/media/svc_media-pipeline";
 import { detectImageMagicBytes } from "./server/security/sec_image-validator";
 import { detectLogoBoxes, inpaintLogoBox } from "./server/security/sec_logo-inpainter";
 import {
@@ -790,8 +795,10 @@ async function startServer() {
     maxRequests: 120,
   });
 
+  // Legacy read-only /uploads path (Phase 5: never create local upload folders in production;
+  // all new uploads persist exclusively to Cloud Storage via MediaPipelineService)
   const uploadsDir = path.resolve("./public/uploads");
-  if (!fs.existsSync(uploadsDir)) {
+  if (!isProduction && !fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
 
@@ -905,24 +912,23 @@ async function startServer() {
       QuotaService.consumeQuota(verifiedTenantId, "storage_mb", requiredMb);
       consumedStorageMb = requiredMb;
 
-      const meta = await CloudStorageService.uploadObject({
+      const stored = await MediaPipelineService.storePropertyPhotoWithVariants({
         tenantId: verifiedTenantId,
-        entityType: "properties",
-        entityId,
-        fileName: safeName,
+        propertyId: entityId,
         buffer: finalBuffer,
-        declaredMimeType: finalDetected.mime,
-        visibility: "public_listing",
+        mimeType: finalDetected.mime,
+        ext: finalDetected.ext,
+        originalFileName: safeName,
         uploadedByUserId: req.authUser?.uid || req.tenantContext?.userId || "authenticated_user",
-        isImageOnly: true,
       });
 
-      const publicUrl = meta.publicUrl || `/api/storage/media/${meta.objectKey}`;
       res.json({
         success: true,
-        url: publicUrl,
-        storageKey: meta.objectKey,
-        backend: meta.backend,
+        url: stored.url,
+        storageKey: stored.metadata.objectKey,
+        backend: stored.metadata.backend,
+        variants: stored.variants,
+        cacheControl: stored.cacheControl,
       });
     } catch (err: any) {
       if (consumedStorageMb > 0) {
@@ -988,6 +994,12 @@ async function startServer() {
 
   // Phase 4 liveness (/api/healthz), readiness (/api/readyz), and backward-compatible /api/health probes
   registerHealthRoutes(app, lifecycle);
+
+  // Phase 6 OIDC-protected internal workers (Cloud Scheduler & Cloud Tasks)
+  app.use("/internal/workers", internalWorkersRouter);
+
+  // Phase 6 Super Admin & Agency Admin worker status / outbox DLQ replay routes
+  app.use("/api/workers", workerAdminRouter);
 
   // Internal worker OIDC verification probe (Cloud Tasks / Cloud Scheduler SA authentication)
   app.post("/api/internal/workers/ping", requireWorkerOidc(), (req, res) => {
@@ -1760,12 +1772,13 @@ Returnează un JSON strict cu următoarele chei:
     const targetWidth = parseThumbnailWidth(req.query.w);
     const preferWebp = shouldServeWebp(req.headers.accept, req.query.format);
 
-    // Fast path: serve from protected image cache without hitting upstream CDN/storage
-    const cachedProtected = getCachedProtectedPublicImage(
-      verified.payload.u,
-      targetWidth,
-      preferWebp
-    );
+    // Fast path: serve from RAM or persistent Cloud Storage without hitting upstream CDN or running transforms
+    const cachedProtected = await getPersistedProtectedPublicImage({
+      cacheKey: verified.payload.u,
+      propertyCode: verified.payload.p || "BROKR",
+      maxWidth: targetWidth,
+      preferWebp,
+    });
     if (cachedProtected) {
       res.setHeader("Content-Type", cachedProtected.mimeType);
       res.setHeader("Content-Length", String(cachedProtected.buffer.length));
@@ -1775,6 +1788,7 @@ Returnează un JSON strict cu următoarele chei:
       res.setHeader("X-Robots-Tag", "noindex, noimageindex");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+      res.setHeader("X-Media-Storage-Hit", cachedProtected.fromStorage ? "HIT" : "MEM");
       return res.send(cachedProtected.buffer);
     }
 
@@ -1928,9 +1942,8 @@ Returnează un JSON strict cu următoarele chei:
     return { path: rootIndexPath, isDist: false };
   }
 
-  // In-memory cache for OpenGraph preview thumbnails (baseline sRGB 1200x630 JPEG, strictly < 260KB for WhatsApp/iMessage/Telegram)
-  const ogImageMemoryCache = new Map<string, { buffer: Buffer; mimeType: string; timestamp: number }>();
-  const pendingOgImageBuilds = new Map<string, Promise<Buffer | null>>();
+  // Short-lived property lookup cache for OpenGraph metadata assembly (OG JPEGs themselves
+  // are persisted in Cloud Storage via MediaPipelineService across cold restarts)
   const ogPropertyShortCache = new Map<string, { property: any; timestamp: number }>();
 
   async function fetchPropertyByIdCached(
@@ -2105,119 +2118,40 @@ Returnează un JSON strict cu următoarele chei:
     return null;
   }
 
-  async function encodeBaselineOgJpeg(rawBuffer: Buffer): Promise<Buffer> {
-    // WhatsApp, iMessage, Telegram, and Messenger reliably render Baseline sRGB JPEGs (< 260KB).
-    // Avoid `-interlace Plane` (progressive JPEG), which intermittently fails to render in chat previews.
-    const ogBaseArgs = [
-      "-",
-      "-auto-orient",
-      "-colorspace",
-      "sRGB",
-      "-background",
-      "#0f172a",
-      "-flatten",
-      "-resize",
-      "1200x630^",
-      "-gravity",
-      "center",
-      "-extent",
-      "1200x630",
-      "-strip",
-      "-interlace",
-      "None",
-      "-sampling-factor",
-      "4:2:0",
-    ];
-
-    try {
-      let converted = await execConvert([...ogBaseArgs, "-quality", "82", "jpg:-"], rawBuffer);
-      if (converted.length > 260_000) {
-        converted = await execConvert([...ogBaseArgs, "-quality", "68", "jpg:-"], rawBuffer);
-      }
-      if (converted.length > 260_000) {
-        converted = await execConvert([...ogBaseArgs, "-quality", "54", "jpg:-"], rawBuffer);
-      }
-      if (converted.length > 0) {
-        return converted;
-      }
-    } catch (imErr: any) {
-      console.warn(`[OG Image] ImageMagick fallback to Jimp:`, imErr?.message);
-    }
-
-    try {
-      const img = await Jimp.read(rawBuffer);
-      img.cover({ w: 1200, h: 630 });
-      let out = await img.getBuffer("image/jpeg" as any);
-      if (out.length > 260_000) {
-        img.scaleToFit({ w: 800, h: 420 });
-        out = await img.getBuffer("image/jpeg" as any);
-      }
-      return out;
-    } catch {
-      return rawBuffer;
-    }
-  }
-
   async function getOrBuildOgImageBuffer(params: {
     id: string;
     preferredTenantId: string | null;
     versionKey: string;
     property?: any;
-  }): Promise<Buffer | null> {
+  }): Promise<{ buffer: Buffer; fromStorage: boolean; objectKey: string } | null> {
     const { id, preferredTenantId, versionKey } = params;
-    const ogCacheKey = `${preferredTenantId || "global"}:${id}:${versionKey}`;
-
-    const cached = ogImageMemoryCache.get(ogCacheKey);
-    if (cached && Date.now() - cached.timestamp < 1000 * 60 * 60 * 24) {
-      return cached.buffer;
-    }
-
-    const inFlight = pendingOgImageBuilds.get(ogCacheKey);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const buildPromise = (async (): Promise<Buffer | null> => {
-      try {
-        const property =
-          params.property !== undefined
-            ? params.property
-            : await fetchPropertyByIdCached(id, preferredTenantId);
-        const candidateUrls = extractOrderedPublicImageUrls(property);
-        if (candidateUrls.length === 0) {
-          return null;
-        }
-
-        // Try up to the first 5 candidate images in strict display order (first image always first)
-        for (const rawUrl of candidateUrls.slice(0, 5)) {
-          const fetched = await fetchRawOgCandidateBuffer(rawUrl);
-          if (!fetched?.buffer || fetched.buffer.length === 0) continue;
-
-          const encoded = await encodeBaselineOgJpeg(fetched.buffer);
-          if (encoded && encoded.length > 0) {
-            if (ogImageMemoryCache.size >= 200) {
-              const oldestKey = ogImageMemoryCache.keys().next().value;
-              if (oldestKey !== undefined) ogImageMemoryCache.delete(oldestKey);
+    try {
+      return await MediaPipelineService.getOrBuildPersistedOgImage({
+        shareCode: id,
+        versionKey,
+        preferredTenantId,
+        loadCandidateBuffers: async () => {
+          const property =
+            params.property !== undefined
+              ? params.property
+              : await fetchPropertyByIdCached(id, preferredTenantId);
+          const candidateUrls = extractOrderedPublicImageUrls(property);
+          const buffers: Buffer[] = [];
+          for (const rawUrl of candidateUrls.slice(0, 5)) {
+            const fetched = await fetchRawOgCandidateBuffer(rawUrl);
+            if (fetched?.buffer && fetched.buffer.length > 0) {
+              buffers.push(fetched.buffer);
+              // Stop after collecting the first valid candidate buffer
+              break;
             }
-            ogImageMemoryCache.set(ogCacheKey, {
-              buffer: encoded,
-              mimeType: "image/jpeg",
-              timestamp: Date.now(),
-            });
-            return encoded;
           }
-        }
-        return null;
-      } catch (err: any) {
-        console.warn(`[OG Image] Error building preview image for ${id}:`, err?.message);
-        return null;
-      } finally {
-        pendingOgImageBuilds.delete(ogCacheKey);
-      }
-    })();
-
-    pendingOgImageBuilds.set(ogCacheKey, buildPromise);
-    return buildPromise;
+          return buffers;
+        },
+      });
+    } catch (err: any) {
+      console.warn(`[OG Image] Error building preview image for ${id}:`, err?.message);
+      return null;
+    }
   }
 
   // Dedicated OpenGraph image endpoint for WhatsApp, Facebook, LinkedIn, Telegram, iMessage, and X/Twitter
@@ -2245,28 +2179,27 @@ Returnează un JSON strict cu următoarele chei:
         .slice(0, 32);
 
       const preferredTenantId = resolvePublicShareTenantId(req);
-      const buffer = await getOrBuildOgImageBuffer({
+      const result = await getOrBuildOgImageBuffer({
         id,
         preferredTenantId,
         versionKey,
       });
 
-      if (!buffer || buffer.length === 0) {
+      if (!result || !result.buffer || result.buffer.length === 0) {
         return serveDefaultOgBanner(res);
       }
 
       res.setHeader("Content-Type", "image/jpeg");
-      res.setHeader("Content-Length", String(buffer.length));
+      res.setHeader("Content-Length", String(result.buffer.length));
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("X-OG-Storage-Cache", result.fromStorage ? "HIT" : "MISS");
       res.setHeader(
         "Cache-Control",
-        versionKey
-          ? "public, max-age=86400, s-maxage=86400, immutable"
-          : "public, max-age=3600, s-maxage=3600"
+        versionKey ? CACHE_CONTROL_PUBLIC_IMMUTABLE : "public, max-age=3600, s-maxage=3600"
       );
-      return res.send(buffer);
+      return res.send(result.buffer);
     }
   );
 
@@ -3596,7 +3529,13 @@ Returnează un JSON strict cu următoarele chei:
         // open the page in headless Chromium, click `button[data-cy="ad-contact-phone"]`,
         // wait for the button text to be replaced by the real phone number, and copy the new text.
         if (isOLX && !extractValidRoPhone(sellerPhone)) {
-          const revealedByClick = await revealOlxPhoneByClick(url, numericId, { timeoutMs: 20000 });
+          const scrapeTenantId =
+            (req as any)?.tenantContext?.tenantId ||
+            (typeof req.headers?.["x-tenant-id"] === "string" ? req.headers["x-tenant-id"] : undefined);
+          const revealedByClick = await revealOlxPhoneByClick(url, numericId, {
+            timeoutMs: 20000,
+            tenantId: scrapeTenantId,
+          });
           if (revealedByClick) {
             sellerPhone = revealedByClick;
           }

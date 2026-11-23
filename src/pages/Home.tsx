@@ -110,8 +110,6 @@ import {
   matchesLeadAgentFilter,
   resolveCurrentAgentIdentity,
 } from "../utils/leadAgentFilterUtils";
-import { platformAutoCrawlService } from "../services/platformAutoCrawlService";
-import { agencyMarketService } from "../services/agencyMarketService";
 
 const TABS: LeadStatus[] = [
   "Noi",
@@ -1406,83 +1404,8 @@ export const Home: React.FC = () => {
     }
   }, [user]);
 
-  // Background auto-match scheduler for Agency Admins configured in Piața Imobiliară
-  const leadsForAutoMatchRef = useRef<Lead[]>(leads);
-  leadsForAutoMatchRef.current = leads;
-  const currentAgentForAutoMatchRef = useRef(currentAgentIdentity);
-  currentAgentForAutoMatchRef.current = currentAgentIdentity;
-
-  useEffect(() => {
-    const role = tenantContext?.role;
-    const isAgencyAdmin = role === "agency_owner" || role === "agency_admin";
-    const tenantId = tenant?.id;
-    if (!user || !tenantId || !isAgencyAdmin) return;
-
-    let cancelled = false;
-    let isRunning = false;
-
-    const tick = async () => {
-      if (cancelled || isRunning) return;
-      try {
-        const cfg = await agencyMarketService.loadConfig(tenantId);
-        if (cancelled || cfg.matchIntervalMinutes <= 0) return;
-        const elapsedMs = Date.now() - (cfg.lastRunAt || 0);
-        if (elapsedMs < cfg.matchIntervalMinutes * 60 * 1000) return;
-
-        isRunning = true;
-        const sharedSnapshot = await new Promise<Lead[]>((resolve) => {
-          let settled = false;
-          const unsub = platformAutoCrawlService.subscribeToSharedLeads((items) => {
-            if (!settled) {
-              settled = true;
-              window.setTimeout(() => unsub(), 0);
-              resolve(items);
-            }
-          });
-          window.setTimeout(() => {
-            if (!settled) {
-              settled = true;
-              unsub();
-              resolve([]);
-            }
-          }, 5000);
-        });
-
-        if (cancelled) return;
-        const result = await agencyMarketService.runAutoMatchImport({
-          sharedLeads: sharedSnapshot,
-          agencyLeads: leadsForAutoMatchRef.current,
-          config: cfg,
-          actor: currentAgentForAutoMatchRef.current,
-        });
-
-        await agencyMarketService.saveConfig(tenantId, {
-          ...cfg,
-          lastRunAt: Date.now(),
-          lastNotice: result.notice,
-        });
-
-        if (result.copiedCount > 0) {
-          toast.success(
-            `Piața Imobiliară: ${result.copiedCount} ${result.copiedCount === 1 ? "anunț potrivit copiat" : "anunțuri potrivite copiate"} automat în Lead-uri → Noi.`
-          );
-        }
-      } catch (err) {
-        console.warn("[Home] Background agency market auto-match check failed:", err);
-      } finally {
-        isRunning = false;
-      }
-    };
-
-    const timerId = window.setInterval(() => {
-      void tick();
-    }, 60_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timerId);
-    };
-  }, [user?.uid, tenant?.id, tenantContext?.role]);
+  // Phase 6: Background agency market auto-matching is executed exclusively by the backend
+  // Cloud Scheduler worker (/internal/workers/agency-market-auto-import) with fenced leases.
 
   const selectedLeadIdRef = useRef<string | undefined>(selectedLead?.id);
   selectedLeadIdRef.current = selectedLead?.id;

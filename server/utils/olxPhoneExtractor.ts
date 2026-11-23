@@ -44,6 +44,7 @@
 import * as cheerio from "cheerio";
 import { safeFetchExternal, validateSafeExternalUrl } from "../security/sec_url-validator";
 import { logger } from "../../src/core/logger/logger";
+import { ScrapeWorkerService } from "../scraping/svc_scrape-worker";
 
 export const OLX_PHONE_BUTTON_SELECTORS = [
   'button[data-cy="ad-contact-phone"]',
@@ -747,7 +748,7 @@ async function revealOlxPhoneViaSessionFallback(
 export async function revealOlxPhoneByClick(
   adUrl: string,
   olxAdId?: string | number | null,
-  options?: { timeoutMs?: number }
+  options?: { timeoutMs?: number; tenantId?: string }
 ): Promise<string | null> {
   if (!adUrl || typeof adUrl !== "string") return null;
 
@@ -763,34 +764,48 @@ export async function revealOlxPhoneByClick(
     return null;
   }
 
-  // Primary strategy: Real headless browser click on the visible `button[data-cy="ad-contact-phone"]`
-  await acquirePageSlot();
-  let page: any = null;
-  try {
-    const browser = await getSharedBrowser();
-    if (browser) {
-      page = await browser.newPage();
-      const clickedPhone = await clickAndCopyOlxPhoneFromPage(page, parsedUrl.toString(), {
-        timeoutMs: options?.timeoutMs ?? 20_000,
-        expectedOfferId: olxAdId,
-      });
-      if (clickedPhone) {
-        return clickedPhone;
-      }
-    }
-  } catch (err: any) {
-    logger.warn(`OLX phone click reveal warning for ${adUrl}: ${err?.message || err}`, {
-      module: "olx-phone-extractor",
-    });
-  } finally {
-    if (page) {
+  // Primary strategy: Real headless browser click on the visible `button[data-cy="ad-contact-phone"]`,
+  // bounded by the Phase 6 global browser concurrency + per-tenant fairness cap.
+  const browserResult = await ScrapeWorkerService.withScrapeSlot(
+    {
+      tenantId: options?.tenantId || "platform",
+      operation: "olx_phone_reveal",
+    },
+    async () => {
+      await acquirePageSlot();
+      let page: any = null;
       try {
-        await page.close();
-      } catch {
-        // ignore close errors
+        const browser = await getSharedBrowser();
+        if (browser) {
+          page = await browser.newPage();
+          const clickedPhone = await clickAndCopyOlxPhoneFromPage(page, parsedUrl.toString(), {
+            timeoutMs: options?.timeoutMs ?? 20_000,
+            expectedOfferId: olxAdId,
+          });
+          if (clickedPhone) {
+            return clickedPhone;
+          }
+        }
+      } catch (err: any) {
+        logger.warn(`OLX phone click reveal warning for ${adUrl}: ${err?.message || err}`, {
+          module: "olx-phone-extractor",
+        });
+      } finally {
+        if (page) {
+          try {
+            await page.close();
+          } catch {
+            // ignore close errors
+          }
+        }
+        releasePageSlot();
       }
+      return null;
     }
-    releasePageSlot();
+  );
+
+  if (browserResult) {
+    return browserResult;
   }
 
   // Secondary strategy: Session-cookie page fetch + offer-ID phone API replay

@@ -13,6 +13,7 @@ export type ErrorCode =
   | "QUOTA_EXCEEDED"
   | "MODULE_DISABLED"
   | "RATE_LIMIT_EXCEEDED"
+  | "CONFLICT"
   | "INTERNAL_ERROR";
 
 export class AppError extends Error {

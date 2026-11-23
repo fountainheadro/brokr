@@ -145,3 +145,22 @@ variable "monthly_budget_usd" {
   type        = number
   default     = 100
 }
+
+variable "enable_worker_schedulers" {
+  description = "Provision Phase 6 OIDC Cloud Scheduler worker jobs (viewing-reminders + automation-dispatch, keeping total <= 3 free jobs)"
+  type        = bool
+  default     = true
+}
+
+variable "scrape_max_concurrent_browsers" {
+  description = "Global max concurrent headless Chromium scraping slots per Cloud Run instance"
+  type        = number
+  default     = 2
+}
+
+variable "scrape_max_concurrent_per_tenant" {
+  description = "Per-tenant fairness cap for concurrent headless scraping slots"
+  type        = number
+  default     = 1
+}
+

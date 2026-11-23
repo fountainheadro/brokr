@@ -324,6 +324,27 @@ service cloud.firestore {
           isPlatformAdmin() || (isActiveTenantMember(tenantId) && resource.data.userId == request.auth.uid)
         );
       }
+
+      // Phase 6 Durable AI Voice Call Sessions & Ordered Transcript Events (Backend-written only)
+      match /call_sessions/{callSid} {
+        allow get: if isValidId(tenantId) && isValidId(callSid) && (
+          isPlatformAdmin() ||
+          isTenantAdmin(tenantId) ||
+          (isActiveTenantMember(tenantId) && resource.data.ownerUid == request.auth.uid)
+        );
+        allow list: if isValidId(tenantId) && (isPlatformAdmin() || isTenantAdmin(tenantId));
+        allow write: if false;
+
+        match /events/{eventId} {
+          allow get: if isValidId(tenantId) && isValidId(callSid) && isValidId(eventId) && (
+            isPlatformAdmin() || isTenantAdmin(tenantId)
+          );
+          allow list: if isValidId(tenantId) && isValidId(callSid) && (
+            isPlatformAdmin() || isTenantAdmin(tenantId)
+          );
+          allow write: if false;
+        }
+      }
     }
 
     // --- Platform Global Auto-Crawl, Shared Leads & Public Shares ---
@@ -519,6 +540,27 @@ service cloud.firestore {
     match /file_migration_reports/{reportId} {
       allow get, list, create, update: if isPlatformAdmin() && isValidId(reportId);
       allow delete: if false;
+    }
+
+    // --- Phase 6 Backend-Owned Scheduling, Leases, Transactional Outbox & Job Runs ---
+    match /worker_leases/{lockKey} {
+      allow get, list: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /outbox_events/{eventId} {
+      allow get, list: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /job_runs/{runId} {
+      allow get, list: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /notification_dispatches/{dispatchId} {
+      allow get, list: if isPlatformAdmin();
+      allow write: if false;
     }
   }
 }

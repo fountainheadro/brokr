@@ -180,15 +180,9 @@ export const PgPlatformAutoCrawl: React.FC = () => {
     [persistConfig, user]
   );
 
-  // Automatic periodic scan timer while Super Admin Auto Crawl is active
-  useEffect(() => {
-    if (config.scanIntervalMinutes <= 0 || !user) return;
-    const intervalMs = config.scanIntervalMinutes * 60 * 1000;
-    const timerId = window.setInterval(() => {
-      void runScan(false);
-    }, intervalMs);
-    return () => window.clearInterval(timerId);
-  }, [config.scanIntervalMinutes, runScan, user]);
+  // Phase 6: Scheduled periodic scanning is owned exclusively by the backend Cloud Scheduler
+  // worker (/internal/workers/platform-auto-crawl) using a fenced Firestore lease so scans run
+  // reliably even when all browser tabs are closed. Manual "Scanează acum" invokes runScan(true).
 
   // Dual-knob Ad Age slider math (strict invariant: 0 <= minStepIndex < maxStepIndex <= lastIdx)
   const lastIdx = OLX_MAX_AGE_STEPS.length - 1;

@@ -46,6 +46,11 @@ export class StorageMetadataRepository {
     );
   }
 
+  public static listAllActive(): StorageObjectMetadata[] {
+    const all = PersistentStoreService.getAll<StorageObjectMetadata>(COL_STORAGE_OBJECTS);
+    return Object.values(all).filter((item) => !item.deletedAt);
+  }
+
   public static markDeleted(tenantId: string, objectKey: string): boolean {
     const meta = this.getByObjectKeyForTenant(tenantId, objectKey);
     if (!meta) return false;

@@ -19,9 +19,33 @@ export interface StorageObjectMetadata {
   bucketName: string;
   backend: StorageBackendKind;
   publicUrl?: string;
+  variantKeys?: string[];
+  cacheControl?: string;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string | null;
+}
+
+export interface OrphanMediaItem {
+  objectKey: string;
+  tenantId: string;
+  entityType: StorageEntityType;
+  entityId: string;
+  sizeBytes: number;
+  visibility: StorageVisibility;
+  createdAt: string;
+  reason: "unreferenced_storage_object";
+}
+
+export interface OrphanMediaReport {
+  generatedAt: string;
+  tenantId: string | "all";
+  dryRun: true;
+  totalActiveObjects: number;
+  referencedCount: number;
+  orphanCount: number;
+  orphanTotalBytes: number;
+  orphans: OrphanMediaItem[];
 }
 
 export interface UploadStorageObjectInput {

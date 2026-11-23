@@ -8,6 +8,7 @@ import { createJimp } from "@jimp/core";
 import webp from "@jimp/wasm-webp";
 import { createThumbnail } from "../utils/img_thumbnail";
 import { detectImageMagicBytes } from "./sec_image-validator";
+import { MediaPipelineService } from "../media/svc_media-pipeline";
 
 const execFileAsync = promisify(execFile);
 
@@ -107,6 +108,51 @@ export function getCachedProtectedPublicImage(
     return { buffer: cached.buffer, mimeType: cached.mimeType };
   }
   return null;
+}
+
+/**
+ * Checks bounded RAM cache first, then persistent Cloud Storage under
+ * `public/shares/{propertyCode}/gallery/{hash}_w{width}.{webp|jpg}` so cold server
+ * restarts serve already-generated public gallery images with 0 transforms and 0 upstream fetches.
+ */
+export async function getPersistedProtectedPublicImage(params: {
+  cacheKey: string;
+  propertyCode: string;
+  maxWidth?: number | null;
+  preferWebp?: boolean;
+}): Promise<{ buffer: Buffer; mimeType: string; fromStorage: boolean } | null> {
+  const capWidth = Math.min(1600, Math.max(100, params.maxWidth || 1200));
+  const preferWebp = params.preferWebp ?? false;
+  const fullCacheKey = buildProtectedImageCacheKey(params.cacheKey, capWidth, preferWebp);
+
+  const mem = protectedImageCache.get(fullCacheKey);
+  if (mem && Date.now() - mem.ts < PROTECTED_CACHE_TTL_MS) {
+    return { buffer: mem.buffer, mimeType: mem.mimeType, fromStorage: false };
+  }
+
+  const persisted = await MediaPipelineService.getPersistedPublicShareVariant({
+    shareCode: params.propertyCode || "BROKR",
+    sourceKey: params.cacheKey,
+    width: capWidth,
+    preferWebp,
+  });
+  if (!persisted) return null;
+
+  if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
+    const oldestKey = protectedImageCache.keys().next().value;
+    if (oldestKey) protectedImageCache.delete(oldestKey);
+  }
+  protectedImageCache.set(fullCacheKey, {
+    buffer: persisted.buffer,
+    mimeType: persisted.mimeType,
+    ts: Date.now(),
+  });
+  return { buffer: persisted.buffer, mimeType: persisted.mimeType, fromStorage: true };
+}
+
+export function clearProtectedMemoryCacheForTests(): void {
+  protectedImageCache.clear();
+  pendingProtectedBuilds.clear();
 }
 
 function pruneTokenCounts() {
@@ -370,10 +416,31 @@ export async function applyPublicImageProtections(
       return { buffer: cachedInside.buffer, mimeType: cachedInside.mimeType };
     }
 
+    // Check persistent Cloud Storage before running ImageMagick/Jimp (survives cold restarts)
+    const persisted = await MediaPipelineService.getPersistedPublicShareVariant({
+      shareCode: options.propertyCode || "BROKR",
+      sourceKey: options.cacheKey,
+      width: capWidth,
+      preferWebp,
+    });
+    if (persisted && persisted.buffer.length > 0) {
+      if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
+        const oldestKey = protectedImageCache.keys().next().value;
+        if (oldestKey) protectedImageCache.delete(oldestKey);
+      }
+      protectedImageCache.set(fullCacheKey, {
+        buffer: persisted.buffer,
+        mimeType: persisted.mimeType,
+        ts: Date.now(),
+      });
+      return { buffer: persisted.buffer, mimeType: persisted.mimeType };
+    }
+
     let outBuffer: Buffer;
     let outMime: string;
 
     const detectedMime = detectImageMagicBytes(rawBuffer)?.mime || "image/jpeg";
+    MediaPipelineService.recordPublicShareTransform();
     try {
       const resized = await createThumbnail({
         buffer: rawBuffer,
@@ -399,6 +466,15 @@ export async function applyPublicImageProtections(
         outMime = detectedMime;
       }
     }
+
+    // Persist generated variant to Cloud Storage so cold restarts execute 0 transforms
+    await MediaPipelineService.persistPublicShareVariant({
+      shareCode: options.propertyCode || "BROKR",
+      sourceKey: options.cacheKey,
+      width: capWidth,
+      buffer: outBuffer,
+      mimeType: outMime,
+    });
 
     if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
       const oldestKey = protectedImageCache.keys().next().value;

@@ -9,6 +9,32 @@ function appendQueryParam(urlStr: string, key: string, value: string): string {
   return hash ? `${next}#${hash}` : next;
 }
 
+function getClientMediaCdnBase(): string {
+  try {
+    const raw = (import.meta as any)?.env?.VITE_MEDIA_CDN_BASE_URL;
+    if (typeof raw === "string") {
+      const trimmed = raw.trim().replace(/\/+$/, "");
+      if (/^https?:\/\//i.test(trimmed)) return trimmed;
+    }
+  } catch {
+    // Non-Vite runtime
+  }
+  return "";
+}
+
+export function buildClientMediaUrl(relativePath: string): string {
+  const cleanPath = relativePath.startsWith("/") ? relativePath : `/${relativePath}`;
+  const cdnBase = getClientMediaCdnBase();
+  if (!cdnBase) return cleanPath;
+  if (
+    cleanPath.startsWith("/api/storage/media/") ||
+    cleanPath.startsWith("/api/storage/public-shares/")
+  ) {
+    return `${cdnBase}${cleanPath}`;
+  }
+  return cleanPath;
+}
+
 export function getCleanDisplayImageUrl(
   url: string | undefined | null,
   width?: number
@@ -24,10 +50,17 @@ export function getCleanDisplayImageUrl(
       : null;
 
   if (
+    trimmed.startsWith("/api/storage/media/") ||
+    trimmed.startsWith("/api/storage/public-shares/")
+  ) {
+    const withWidth = targetW ? appendQueryParam(trimmed, "w", String(targetW)) : trimmed;
+    return buildClientMediaUrl(withWidth);
+  }
+
+  if (
     trimmed.startsWith("/api/proxy-image") ||
     trimmed.includes("/api/proxy-image?url=") ||
     trimmed.startsWith("/api/public-image") ||
-    trimmed.startsWith("/api/storage/media/") ||
     trimmed.startsWith("/uploads/")
   ) {
     return targetW ? appendQueryParam(trimmed, "w", String(targetW)) : trimmed;

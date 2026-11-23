@@ -91,12 +91,41 @@ export class CloudStorageService {
     return raw.replace(/\/+$/, "");
   }
 
+  public static isLocalFallbackAllowed(): boolean {
+    if (
+      process.env.NODE_ENV === "production" &&
+      process.env.ALLOW_LOCAL_STORAGE_IN_PRODUCTION !== "true"
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  public static assertLocalFallbackAllowed(operation: string): void {
+    if (!this.isLocalFallbackAllowed()) {
+      throw new AppError({
+        message: `Stocarea locală pe disc este dezactivată în producție (${operation}). Configurați GCS_BUCKET_NAME și credențialele Google Cloud Storage.`,
+        code: "CONFIGURATION_ERROR",
+        statusCode: 503,
+      });
+    }
+  }
+
   public static getActiveBackendKind(): StorageBackendKind {
     if (this.getEmulatorHost()) return "gcs_emulator";
     if (GcpAuthService.isAnyServerAuthConfigured()) {
       return "gcs";
     }
     return "local_isolated";
+  }
+
+  public static isContentHashedFileName(fileName: string): boolean {
+    const base = path.basename(String(fileName || ""));
+    return (
+      /^prop_[a-f0-9]{16,}\.[a-z0-9]+$/i.test(base) ||
+      /^[a-f0-9]{12,}_w\d+\.(webp|jpg|jpeg)$/i.test(base) ||
+      /^og_[a-zA-Z0-9_-]{8,}\.jpg$/i.test(base)
+    );
   }
 
   public static async getStorageAccessToken(options?: {
@@ -176,6 +205,73 @@ export class CloudStorageService {
     }
 
     return `tenants/${safeTenant}/${params.entityType}/${safeEntityId}/${safeFileName}`;
+  }
+
+  /**
+   * Validates raw media variant / public share object keys so they can never escape
+   * their allowed namespace or reference private tenant documents.
+   * Allowed prefixes:
+   * - tenants/{tenantId}/properties/{entityId}/variants/{fileName}
+   * - public/shares/{shareCode}/{fileName}
+   * - public/shares/{shareCode}/gallery/{fileName}
+   */
+  public static validateRawObjectKey(rawKey: string): string {
+    const key = String(rawKey || "").trim();
+    let decoded = key;
+    try {
+      decoded = decodeURIComponent(key);
+    } catch {
+      // Keep raw
+    }
+
+    if (
+      !key ||
+      key.includes("\0") ||
+      decoded.includes("\0") ||
+      key.includes("..") ||
+      decoded.includes("..") ||
+      key.includes("\\") ||
+      decoded.includes("\\") ||
+      key.startsWith("/")
+    ) {
+      throw new AppError({
+        message: "Cheie media invalidă (tentativă de path traversal respinsă).",
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
+    }
+
+    const parts = key.split("/");
+    const isTenantPropertyVariant =
+      parts.length === 6 &&
+      parts[0] === "tenants" &&
+      parts[2] === "properties" &&
+      parts[4] === "variants";
+    const isPublicShareAsset =
+      parts[0] === "public" &&
+      parts[1] === "shares" &&
+      (parts.length === 4 || (parts.length === 5 && parts[3] === "gallery"));
+
+    if (!isTenantPropertyVariant && !isPublicShareAsset) {
+      throw new AppError({
+        message: "Cheie media în afara prefixelor permise (variants / public shares).",
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
+    }
+
+    const safeParts = parts.map((seg, idx) => this.sanitizePathSegment(seg, `segment_${idx}`));
+    const fileName = safeParts[safeParts.length - 1];
+    const ext = path.extname(fileName).toLowerCase();
+    if (ext && FORBIDDEN_EXTENSIONS.has(ext)) {
+      throw new AppError({
+        message: `Extensia de fișier "${ext}" nu este permisă din motive de securitate.`,
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
+    }
+
+    return safeParts.join("/");
   }
 
   /**
@@ -531,6 +627,7 @@ export class CloudStorageService {
         throw safeErr;
       }
     } else {
+      this.assertLocalFallbackAllowed("uploadObject");
       const localRoot = this.getLocalStorageRoot();
       const targetPath = path.resolve(localRoot, objectKey);
       if (!targetPath.startsWith(localRoot + path.sep)) {
@@ -709,5 +806,208 @@ export class CloudStorageService {
     }
 
     StorageMetadataRepository.markDeleted(params.tenantId, params.objectKey);
+  }
+
+  /**
+   * Persists a derived media variant or public share asset (WebP thumbnail, watermarked
+   * share gallery variant, or 1200x630 baseline OG JPEG) in Cloud Storage so cold
+   * restarts execute 0 repeated Jimp/ImageMagick transforms.
+   */
+  public static async putRawObject(params: {
+    objectKey: string;
+    buffer: Buffer;
+    mimeType: string;
+    cacheControl?: string;
+  }): Promise<{ objectKey: string; bucketName: string; backend: StorageBackendKind; sizeBytes: number }> {
+    const safeKey = this.validateRawObjectKey(params.objectKey);
+    if (!Buffer.isBuffer(params.buffer) || params.buffer.length === 0) {
+      throw new AppError({
+        message: "Buffer media gol la salvare.",
+        code: "VALIDATION_ERROR",
+        statusCode: 400,
+      });
+    }
+
+    const bucketName = this.getBucketName();
+    const backend = this.getActiveBackendKind();
+    const cacheControl = params.cacheControl || "public, max-age=31536000, immutable";
+
+    if (backend === "gcs" || backend === "gcs_emulator") {
+      const token = await this.getStorageAccessToken();
+      if (!token) {
+        throw new AppError({
+          message: "Nu s-a putut obține tokenul OAuth2 pentru Cloud Storage.",
+          code: "INTERNAL_ERROR",
+          statusCode: 500,
+        });
+      }
+
+      const uploadUrl = `${this.getUploadBaseEndpoint()}/b/${encodeURIComponent(
+        bucketName
+      )}/o?uploadType=media&name=${encodeURIComponent(safeKey)}`;
+
+      try {
+        await axios.post(uploadUrl, params.buffer, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": params.mimeType,
+            "Content-Length": String(params.buffer.length),
+            "Cache-Control": cacheControl,
+            ...(backend === "gcs" ? GcpAuthService.getQuotaProjectHeaders() : {}),
+          },
+          maxBodyLength: Infinity,
+          timeout: 20_000,
+        });
+
+        // On live GCS, also persist native object Cache-Control metadata so future CDN/direct reads inherit it
+        if (backend === "gcs") {
+          const patchUrl = `${this.getJsonBaseEndpoint()}/b/${encodeURIComponent(
+            bucketName
+          )}/o/${encodeURIComponent(safeKey)}`;
+          await axios
+            .patch(
+              patchUrl,
+              { cacheControl, contentType: params.mimeType },
+              {
+                headers: {
+                  Authorization: `Bearer ${token}`,
+                  "Content-Type": "application/json",
+                  ...GcpAuthService.getQuotaProjectHeaders(),
+                },
+                timeout: 10_000,
+              }
+            )
+            .catch(() => {
+              // Non-fatal: binary object is already persisted
+            });
+        }
+      } catch (err: unknown) {
+        const safeErr = GcpAuthService.sanitizeGcpHttpError(err, "Cloud Storage", "putRawObject");
+        logger.error("Eroare la salvarea variantei media în Cloud Storage", safeErr, {
+          module: "cloud-storage",
+          statusCode: safeErr.statusCode,
+        });
+        throw safeErr;
+      }
+    } else {
+      this.assertLocalFallbackAllowed("putRawObject");
+      const localRoot = this.getLocalStorageRoot();
+      const targetPath = path.resolve(localRoot, safeKey);
+      if (!targetPath.startsWith(localRoot + path.sep)) {
+        throw new AppError({
+          message: "Cale țintă de stocare invalidă.",
+          code: "VALIDATION_ERROR",
+          statusCode: 400,
+        });
+      }
+      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+      const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+      fs.writeFileSync(tmpPath, params.buffer);
+      fs.renameSync(tmpPath, targetPath);
+    }
+
+    return {
+      objectKey: safeKey,
+      bucketName,
+      backend,
+      sizeBytes: params.buffer.length,
+    };
+  }
+
+  /**
+   * Reads a previously persisted derived media variant or public share asset.
+   * Returns null if not yet generated (never throws on 404).
+   */
+  public static async getRawObject(
+    objectKey: string
+  ): Promise<{ buffer: Buffer; mimeType: string; backend: StorageBackendKind } | null> {
+    const safeKey = this.validateRawObjectKey(objectKey);
+    const bucketName = this.getBucketName();
+    const backend = this.getActiveBackendKind();
+    const ext = path.extname(safeKey).toLowerCase();
+    const fallbackMime =
+      ext === ".webp" ? "image/webp" : ext === ".png" ? "image/png" : "image/jpeg";
+
+    if (backend === "gcs" || backend === "gcs_emulator") {
+      const token = await this.getStorageAccessToken();
+      if (!token) return null;
+      const dlUrl = `${this.getJsonBaseEndpoint()}/b/${encodeURIComponent(
+        bucketName
+      )}/o/${encodeURIComponent(safeKey)}?alt=media`;
+      try {
+        const res = await axios.get(dlUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(backend === "gcs" ? GcpAuthService.getQuotaProjectHeaders() : {}),
+          },
+          responseType: "arraybuffer",
+          timeout: 15_000,
+        });
+        const buf = Buffer.from(res.data);
+        if (!buf.length) return null;
+        const headerMime =
+          typeof res.headers?.["content-type"] === "string" &&
+          res.headers["content-type"].startsWith("image/")
+            ? res.headers["content-type"].split(";")[0].trim()
+            : fallbackMime;
+        return { buffer: buf, mimeType: headerMime, backend };
+      } catch (err: any) {
+        if (err?.response?.status === 404) {
+          return null;
+        }
+        return null;
+      }
+    } else {
+      if (!this.isLocalFallbackAllowed()) {
+        return null;
+      }
+      const localRoot = this.getLocalStorageRoot();
+      const targetPath = path.resolve(localRoot, safeKey);
+      if (!targetPath.startsWith(localRoot + path.sep) || !fs.existsSync(targetPath)) {
+        return null;
+      }
+      const buf = fs.readFileSync(targetPath);
+      if (!buf.length) return null;
+      return { buffer: buf, mimeType: fallbackMime, backend };
+    }
+  }
+
+  /**
+   * Deletes a derived media variant or public share asset (best-effort on 404).
+   */
+  public static async deleteRawObject(objectKey: string): Promise<boolean> {
+    const safeKey = this.validateRawObjectKey(objectKey);
+    const bucketName = this.getBucketName();
+    const backend = this.getActiveBackendKind();
+
+    if (backend === "gcs" || backend === "gcs_emulator") {
+      const token = await this.getStorageAccessToken();
+      if (!token) return false;
+      const delUrl = `${this.getJsonBaseEndpoint()}/b/${encodeURIComponent(
+        bucketName
+      )}/o/${encodeURIComponent(safeKey)}`;
+      try {
+        await axios.delete(delUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(backend === "gcs" ? GcpAuthService.getQuotaProjectHeaders() : {}),
+          },
+          timeout: 10_000,
+        });
+        return true;
+      } catch (err: any) {
+        if (err?.response?.status === 404) return false;
+        return false;
+      }
+    } else {
+      if (!this.isLocalFallbackAllowed()) return false;
+      const localRoot = this.getLocalStorageRoot();
+      const targetPath = path.resolve(localRoot, safeKey);
+      if (targetPath.startsWith(localRoot + path.sep) && fs.existsSync(targetPath)) {
+        fs.unlinkSync(targetPath);
+        return true;
+      }
+      return false;
+    }
   }
 }

@@ -210,15 +210,9 @@ export const PgAgencyAdminPiataImobiliara: React.FC = () => {
     [actor, persistConfig, user]
   );
 
-  // Automatic periodic matching timer while configured on this page
-  useEffect(() => {
-    if (config.matchIntervalMinutes <= 0 || !user) return;
-    const intervalMs = config.matchIntervalMinutes * 60 * 1000;
-    const timerId = window.setInterval(() => {
-      void runAutoMatch(false);
-    }, intervalMs);
-    return () => window.clearInterval(timerId);
-  }, [config.matchIntervalMinutes, runAutoMatch, user]);
+  // Phase 6: Scheduled periodic auto-matching is owned exclusively by the backend Cloud Scheduler
+  // worker (/internal/workers/agency-market-auto-import) under a fenced Firestore lease.
+  // Manual "Rulează acum" and manual copy controls remain available directly on this page.
 
   const handleManualCopy = async (sharedLead: Lead) => {
     const key = sharedLead.id || sharedLead.url || sharedLead.propertyId || "";

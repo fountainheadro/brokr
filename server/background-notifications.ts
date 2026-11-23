@@ -7,6 +7,7 @@ import { logger } from "../src/core/logger/logger";
 import { requireTenantContext } from "./middleware/mw_tenant-context";
 import { CrmTenantStoreService } from "../src/core/crm/svc_crm-tenant-store";
 import { PersistentStoreService } from "../src/core/database/svc_persistent-store";
+import { FirestoreLeaseService } from "../src/core/jobs/svc_firestore-lease";
 
 export const FCM_MESSAGING_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 
@@ -276,10 +277,232 @@ export function registerNotificationRoutes(app: Express) {
   });
 }
 
+export const COL_NOTIFICATION_DISPATCHES = "notification_dispatches";
+
+export interface ViewingReminderSendPayload {
+  projectId: string;
+  tokens: string[];
+  title: string;
+  body: string;
+  urlPath: string;
+  tenantId: string;
+  viewingId: string;
+  thresholdKey: string;
+}
+
+export interface ViewingReminderTickResult {
+  executed: boolean;
+  skippedReason?: string;
+  fencingToken?: number;
+  evaluatedViewings: number;
+  dispatchedCount: number;
+  deduplicatedCount: number;
+}
+
 export function getTenantPartitionedNotificationSnapshot(tenantId: string) {
   const viewings = Object.values(runtimeMirror.viewings).filter((v) => v.tenantId === tenantId);
   const tokens = Object.values(runtimeMirror.tokens).filter((t) => t.tenantId === tenantId);
   return { viewings, tokens };
+}
+
+export function seedNotificationMirrorForTests(params: {
+  viewings?: CachedViewing[];
+  tokens?: CachedToken[];
+}): void {
+  for (const v of params.viewings || []) {
+    runtimeMirror.viewings[`${v.tenantId}::${v.id}`] = v;
+  }
+  for (const t of params.tokens || []) {
+    runtimeMirror.tokens[`${t.tenantId}::${t.token}`] = t;
+  }
+}
+
+export function clearNotificationMirrorForTests(): void {
+  for (const key of Object.keys(runtimeMirror.viewings)) {
+    delete runtimeMirror.viewings[key];
+  }
+  for (const key of Object.keys(runtimeMirror.tokens)) {
+    delete runtimeMirror.tokens[key];
+  }
+  PersistentStoreService.clearCollection(COL_NOTIFICATION_DISPATCHES);
+}
+
+/**
+ * Multi-instance safe viewing reminders worker tick.
+ *
+ * Guarantees:
+ * - Coordinates across 2+ Cloud Run instances using a fenced Firestore lease (`worker:viewing-reminders`).
+ * - Deduplicates every `(tenantId, viewingId, date, hour, threshold)` dispatch durably via
+ *   `PersistentStoreService.createIfAbsentAsync` so zero duplicate FCM pushes are ever delivered,
+ *   even when all browser tabs are closed or multiple replicas overlap.
+ */
+export async function runViewingRemindersTick(options?: {
+  now?: Date;
+  ownerId?: string;
+  projectId?: string;
+  bypassLease?: boolean;
+  sendFn?: (payload: ViewingReminderSendPayload) => Promise<void>;
+}): Promise<ViewingReminderTickResult> {
+  const config = loadFirebaseConfig();
+  const projectId = options?.projectId || config?.projectId || process.env.FIREBASE_PROJECT_ID || "brokr-42038";
+
+  const executeTick = async (fencingToken?: number): Promise<ViewingReminderTickResult> => {
+    const now = options?.now || new Date();
+    const allViewings = Object.values(runtimeMirror.viewings);
+    const allTokens = Object.values(runtimeMirror.tokens);
+
+    if (allViewings.length === 0 || allTokens.length === 0) {
+      return {
+        executed: true,
+        fencingToken,
+        evaluatedViewings: allViewings.length,
+        dispatchedCount: 0,
+        deduplicatedCount: 0,
+      };
+    }
+
+    const fcmAccessToken = options?.sendFn ? null : await getFcmServiceAccessToken();
+    let dispatchedCount = 0;
+    let deduplicatedCount = 0;
+
+    const dispatchOnce = async (
+      viewingTenant: string,
+      viewing: CachedViewing,
+      thresholdKey: string,
+      targetTokens: string[],
+      title: string,
+      body: string
+    ) => {
+      const safeTenant = viewingTenant.replace(/[^A-Za-z0-9_-]/g, "_");
+      const safeViewing = viewing.id.replace(/[^A-Za-z0-9_-]/g, "_");
+      const safeDate = `${viewing.date}_${viewing.hour}`.replace(/[^A-Za-z0-9_-]/g, "_");
+      const dispatchId = `${safeTenant}__${safeViewing}__${safeDate}__${thresholdKey}`;
+
+      const claimed = await PersistentStoreService.createIfAbsentAsync(
+        COL_NOTIFICATION_DISPATCHES,
+        dispatchId,
+        {
+          tenantId: viewingTenant,
+          viewingId: viewing.id,
+          thresholdKey,
+          sentAt: now.toISOString(),
+        }
+      );
+
+      if (!claimed) {
+        deduplicatedCount++;
+        return;
+      }
+
+      if (options?.sendFn) {
+        await options.sendFn({
+          projectId,
+          tokens: targetTokens,
+          title,
+          body,
+          urlPath: "/calendar",
+          tenantId: viewingTenant,
+          viewingId: viewing.id,
+          thresholdKey,
+        });
+      } else {
+        await sendFCMPushNotification(
+          projectId,
+          fcmAccessToken,
+          targetTokens,
+          title,
+          body,
+          "/calendar"
+        );
+      }
+      dispatchedCount++;
+    };
+
+    const thresholds = [
+      { minutes: 180, label: "3 ore" },
+      { minutes: 120, label: "2 ore" },
+      { minutes: 60, label: "1 oră" },
+    ];
+
+    for (const viewing of allViewings) {
+      const viewingId = viewing.id;
+      const viewingTenant = viewing.tenantId || "ten_brokr_default";
+      if (!viewingId || !viewing.date || !viewing.hour) continue;
+
+      const viewingDateTime = new Date(`${viewing.date}T${viewing.hour}:00`);
+      if (isNaN(viewingDateTime.getTime())) continue;
+
+      const diffMs = viewingDateTime.getTime() - now.getTime();
+      const diffMinutes = Math.round(diffMs / (60 * 1000));
+
+      const targetTokens = allTokens
+        .filter(
+          (t) =>
+            (t.tenantId || "ten_brokr_default") === viewingTenant &&
+            (!viewing.agentId || t.userId === viewing.agentId)
+        )
+        .map((t) => t.token);
+
+      if (targetTokens.length === 0) continue;
+
+      for (const threshold of thresholds) {
+        if (diffMinutes <= threshold.minutes && diffMinutes > threshold.minutes - 2) {
+          await dispatchOnce(
+            viewingTenant,
+            viewing,
+            `${threshold.minutes}m`,
+            targetTokens,
+            "Vizionare Programată (Brokr)",
+            `Vizionarea cu ${viewing.contactName || "clientul"} este peste ${threshold.label}.`
+          );
+        }
+      }
+
+      if (diffMinutes <= 0 && diffMinutes > -5) {
+        await dispatchOnce(
+          viewingTenant,
+          viewing,
+          "now",
+          targetTokens,
+          "Vizionare Programată (Brokr)",
+          `Vizionarea cu ${viewing.contactName || "clientul"} începe ACUM!`
+        );
+      }
+    }
+
+    return {
+      executed: true,
+      fencingToken,
+      evaluatedViewings: allViewings.length,
+      dispatchedCount,
+      deduplicatedCount,
+    };
+  };
+
+  if (options?.bypassLease) {
+    return executeTick(undefined);
+  }
+
+  const leaseRes = await FirestoreLeaseService.withLease(
+    {
+      lockKey: "worker:viewing-reminders",
+      ownerId: options?.ownerId,
+      ttlMs: 45_000,
+    },
+    (lease) => executeTick(lease.fencingToken)
+  );
+
+  if (!leaseRes.executed) {
+    return {
+      executed: false,
+      skippedReason: leaseRes.reason,
+      evaluatedViewings: 0,
+      dispatchedCount: 0,
+      deduplicatedCount: 0,
+    };
+  }
+
+  return leaseRes.result;
 }
 
 export function setupBackgroundNotifications() {
@@ -291,100 +514,39 @@ export function setupBackgroundNotifications() {
     return;
   }
 
+  // In production (Cloud Run), Cloud Scheduler triggers POST /internal/workers/viewing-reminders
+  // directly with OIDC authentication so multi-instance replicas never run uncoordinated timers.
+  const inProcessDisabled =
+    process.env.ENABLE_IN_PROCESS_SCHEDULERS === "false" ||
+    (process.env.NODE_ENV === "production" && process.env.ENABLE_IN_PROCESS_SCHEDULERS !== "true");
+
+  if (inProcessDisabled) {
+    logger.info(
+      "In-process notification setInterval disabled (Cloud Scheduler owns /internal/workers/viewing-reminders).",
+      {
+        module: "background-notifications",
+      }
+    );
+    return () => {};
+  }
+
   const { projectId } = config;
-  logger.info(`Initializing tenant-partitioned background listener for Project: ${projectId}`, {
+  logger.info(`Initializing lease-protected local dev notification tick for Project: ${projectId}`, {
     module: "background-notifications",
   });
 
-  const sentNotifications = new Set<string>();
-
-  const runCheckTick = async () => {
-    try {
-      const now = new Date();
-      const allViewings = Object.values(runtimeMirror.viewings);
-      const allTokens = Object.values(runtimeMirror.tokens);
-
-      if (allViewings.length === 0 || allTokens.length === 0) {
-        return;
-      }
-
-      if (now.getHours() === 0 && now.getMinutes() === 0) {
-        sentNotifications.clear();
-      }
-
-      const fcmAccessToken = await getFcmServiceAccessToken();
-
-      allViewings.forEach((viewing) => {
-        const viewingId = viewing.id;
-        const viewingTenant = viewing.tenantId || "ten_brokr_default";
-        if (!viewingId || !viewing.date || !viewing.hour) return;
-
-        const viewingDateTime = new Date(`${viewing.date}T${viewing.hour}:00`);
-        if (isNaN(viewingDateTime.getTime())) return;
-
-        const diffMs = viewingDateTime.getTime() - now.getTime();
-        const diffMinutes = Math.round(diffMs / (60 * 1000));
-
-        const targetTokens = allTokens
-          .filter(
-            (t) =>
-              (t.tenantId || "ten_brokr_default") === viewingTenant &&
-              (!viewing.agentId || t.userId === viewing.agentId)
-          )
-          .map((t) => t.token);
-
-        if (targetTokens.length === 0) return;
-
-        const thresholds = [
-          { minutes: 180, label: "3 ore" },
-          { minutes: 120, label: "2 ore" },
-          { minutes: 60, label: "1 oră" },
-        ];
-
-        thresholds.forEach((threshold) => {
-          const notificationKey = `${viewingTenant}::${viewingId}-${threshold.minutes}`;
-
-          if (diffMinutes <= threshold.minutes && diffMinutes > threshold.minutes - 2) {
-            if (!sentNotifications.has(notificationKey)) {
-              void sendFCMPushNotification(
-                projectId,
-                fcmAccessToken,
-                targetTokens,
-                "Vizionare Programată (Brokr)",
-                `Vizionarea cu ${viewing.contactName || "clientul"} este peste ${threshold.label}.`,
-                "/calendar"
-              );
-              sentNotifications.add(notificationKey);
-            }
-          }
+  const runTick = () => {
+    void runViewingRemindersTick({ ownerId: `dev-in-process-${process.pid}`, projectId }).catch(
+      (err) => {
+        logger.error("Error in background notification tick loop", err, {
+          module: "background-notifications",
         });
-
-        const nowKey = `${viewingTenant}::${viewingId}-now`;
-        if (diffMinutes <= 0 && diffMinutes > -5) {
-          if (!sentNotifications.has(nowKey)) {
-            void sendFCMPushNotification(
-              projectId,
-              fcmAccessToken,
-              targetTokens,
-              "Vizionare Programată (Brokr)",
-              `Vizionarea cu ${viewing.contactName || "clientul"} începe ACUM!`,
-              "/calendar"
-            );
-            sentNotifications.add(nowKey);
-          }
-        }
-      });
-    } catch (err: any) {
-      logger.error("Error in background notification tick loop", err, {
-        module: "background-notifications",
-      });
-    }
+      }
+    );
   };
 
-  void runCheckTick();
-  const intervalId = setInterval(() => {
-    void runCheckTick();
-  }, 45000);
+  runTick();
+  const intervalId = setInterval(runTick, 45000);
 
   return () => {
     clearInterval(intervalId);
@@ -393,3 +555,4 @@ export function setupBackgroundNotifications() {
     });
   };
 }
+

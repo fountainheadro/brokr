@@ -1,17 +1,15 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect } from 'react';
 import { X, Bell } from 'lucide-react';
 import { toast, Toaster, ToastBar } from 'react-hot-toast';
-import { viewingsService, Viewing } from '../services/viewingsService';
-import { parseISO, differenceInMinutes, isAfter } from 'date-fns';
-import { nativeNotificationService } from '../services/nativeNotificationService';
-import { auth } from '../lib/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
 import { useNotifications } from './NotificationProvider';
 
+/**
+ * Renders the application toast host and prompts users to enable native OS push notifications.
+ * Phase 6: Scheduled viewing reminders are dispatched exclusively by the backend Cloud Scheduler
+ * worker (/internal/workers/viewing-reminders) via FCM push with Firestore-fenced deduplication,
+ * so reminders deliver reliably even when all browser tabs are closed and never duplicate.
+ */
 export const NotificationManager: React.FC = () => {
-  const sentNotifications = useRef<Set<string>>(new Set());
-  const viewingsRef = useRef<Viewing[]>([]);
-  const isInitialLoad = useRef(true);
   const { permission, requestSystemPermission } = useNotifications();
 
   // Prompt the user to grant native system alerts if permission is set to 'default'
@@ -62,123 +60,6 @@ export const NotificationManager: React.FC = () => {
       return () => clearTimeout(timer);
     }
   }, [permission, requestSystemPermission]);
-
-  useEffect(() => {
-    let unsubFirestore: (() => void) | null = null;
-
-    // Subscribe only when authenticated
-    const unsubAuth = onAuthStateChanged(auth, (user) => {
-      if (user) {
-        if (!unsubFirestore) {
-          unsubFirestore = viewingsService.subscribeToAllViewings((v) => {
-            viewingsRef.current = v;
-          });
-        }
-      } else {
-        if (unsubFirestore) {
-          unsubFirestore();
-          unsubFirestore = null;
-        }
-        viewingsRef.current = [];
-        isInitialLoad.current = true;
-      }
-    });
-
-    // Check interval
-    const interval = setInterval(() => {
-      // If not authenticated or viewings not loaded yet, skip check
-      if (viewingsRef.current.length === 0) return;
-
-      const now = new Date();
-      
-      // Clear very old sent notifications from the set to save memory
-      if (now.getHours() === 0 && now.getMinutes() === 0) {
-          sentNotifications.current.clear();
-      }
-
-      viewingsRef.current.forEach(viewing => {
-        const viewingDateTime = parseISO(`${viewing.date}T${viewing.hour}:00`);
-        
-        // Skip if viewing was more than 30 minutes ago
-        if (differenceInMinutes(now, viewingDateTime) > 30) return;
-
-        const diffMinutes = differenceInMinutes(viewingDateTime, now);
-
-        const thresholds = [
-          { minutes: 180, label: '3 ore' },
-          { minutes: 120, label: '2 ore' },
-          { minutes: 60, label: '1 oră' }
-        ];
-
-        thresholds.forEach(threshold => {
-          const notificationKey = `${viewing.id}-${threshold.minutes}`;
-          
-          // Trigger if we are at or slightly below the threshold (within 2 minutes of it)
-          if (diffMinutes <= threshold.minutes && diffMinutes > threshold.minutes - 2) {
-            if (isInitialLoad.current) {
-               // On first run, mark as "already triggered" so we don't alert for existing past-threshold states
-               sentNotifications.current.add(notificationKey);
-            } else if (!sentNotifications.current.has(notificationKey)) {
-              sendNotification(viewing, threshold.label);
-              sentNotifications.current.add(notificationKey);
-            }
-          }
-        });
-
-        // Special check for "Acum" (0 minutes or very slightly in the past but we just noticed it)
-        const nowKey = `${viewing.id}-now`;
-        if (diffMinutes <= 0 && diffMinutes > -5) {
-          if (isInitialLoad.current) {
-            sentNotifications.current.add(nowKey);
-          } else if (!sentNotifications.current.has(nowKey)) {
-            sendNotification(viewing, 'acum');
-            sentNotifications.current.add(nowKey);
-          }
-        }
-      });
-
-      // After first loop, we allow notifications
-      if (isInitialLoad.current && viewingsRef.current.length > 0) {
-        isInitialLoad.current = false;
-      }
-    }, 10000); // Check every 10 seconds for better responsiveness
-
-    return () => {
-      unsubAuth();
-      if (unsubFirestore) {
-        unsubFirestore();
-      }
-      clearInterval(interval);
-    };
-  }, []);
-
-  const sendNotification = (viewing: Viewing, timeLabel: string) => {
-    // Check preferences first before alerting
-    const prefs = nativeNotificationService.getPreferences();
-    if (!prefs.viewings) {
-      console.log('[NotificationManager] System viewings alerts are disabled by user preferences.');
-      return;
-    }
-
-    const title = 'Vizionare Programată (Brokr)';
-    const body = `Vizionarea cu ${viewing.contactName} este peste ${timeLabel}.`;
-    
-    // Fallback/In-app visual alert
-    if (timeLabel === 'acum') {
-        toast.success(`Vizionarea cu ${viewing.contactName} începe ACUM!`, {
-            duration: 10000,
-            icon: '⏰'
-        });
-    } else {
-        toast(`Vizionare peste ${timeLabel}: ${viewing.contactName}`, {
-            duration: 10000,
-            icon: '📅'
-        });
-    }
-
-    // Centered Native system notification API
-    nativeNotificationService.showNativeOSNotification(title, body, '/calendar');
-  };
 
   return (
     <Toaster 

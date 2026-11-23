@@ -418,6 +418,83 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["shareCode", "entityKind", "title", "isPublicSnapshot", "updatedAt"]
+    },
+    "WorkerLease": {
+      "title": "WorkerLease",
+      "description": "Distributed Firestore worker lease with monotonic fencing token",
+      "type": "object",
+      "properties": {
+        "lockKey": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "fencingToken": { "type": "number" },
+        "acquiredAt": { "type": "string" },
+        "leaseExpiresAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["lockKey", "ownerId", "fencingToken", "acquiredAt", "leaseExpiresAt"]
+    },
+    "OutboxEvent": {
+      "title": "OutboxEvent",
+      "description": "Transactional outbox event with idempotency key, retry state, and DLQ replay metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "eventType": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "idempotencyKey": { "type": "string" },
+        "status": { "type": "string" },
+        "attempts": { "type": "number" },
+        "maxAttempts": { "type": "number" },
+        "nextAttemptAt": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "eventType", "tenantId", "idempotencyKey", "status", "attempts", "nextAttemptAt"]
+    },
+    "JobRun": {
+      "title": "JobRun",
+      "description": "Operational ledger entry for scheduled or dispatched backend worker executions",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "jobName": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "triggeredBy": { "type": "string" },
+        "status": { "type": "string" },
+        "startedAt": { "type": "string" },
+        "completedAt": { "type": "string" }
+      },
+      "required": ["id", "jobName", "triggeredBy", "status", "startedAt"]
+    },
+    "CallSession": {
+      "title": "CallSession",
+      "description": "Durable AI voice call session metadata scoped to a tenant",
+      "type": "object",
+      "properties": {
+        "callSid": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "ownerUid": { "type": "string" },
+        "phoneNumber": { "type": "string" },
+        "status": { "type": "string" },
+        "lastSeq": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["callSid", "tenantId", "status", "lastSeq", "createdAt"]
+    },
+    "CallSessionEvent": {
+      "title": "CallSessionEvent",
+      "description": "Monotonically sequenced transcript event inside an AI voice call session",
+      "type": "object",
+      "properties": {
+        "callSid": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "seq": { "type": "number" },
+        "speaker": { "type": "string" },
+        "text": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["callSid", "tenantId", "seq", "speaker", "text"]
     }
   },
   "firestore": {
@@ -516,6 +593,26 @@
     "tenants/{tenantId}/fcm_tokens/{tokenId}": {
       "schema": { "$ref": "FcmToken" },
       "description": "User-scoped FCM push tokens inside an agency"
+    },
+    "tenants/{tenantId}/call_sessions/{callSid}": {
+      "schema": { "$ref": "CallSession" },
+      "description": "Phase 6 durable AI voice call session metadata (backend-written)"
+    },
+    "tenants/{tenantId}/call_sessions/{callSid}/events/{eventId}": {
+      "schema": { "$ref": "CallSessionEvent" },
+      "description": "Phase 6 ordered AI voice transcript events keyed by zero-padded monotonic seq"
+    },
+    "worker_leases/{lockKey}": {
+      "schema": { "$ref": "WorkerLease" },
+      "description": "Phase 6 distributed Firestore worker leases with monotonic fencing tokens"
+    },
+    "outbox_events/{eventId}": {
+      "schema": { "$ref": "OutboxEvent" },
+      "description": "Phase 6 transactional outbox queue with idempotency keys and DLQ replay"
+    },
+    "job_runs/{runId}": {
+      "schema": { "$ref": "JobRun" },
+      "description": "Phase 6 backend worker execution audit ledger"
     }
   }
 }

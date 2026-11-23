@@ -273,14 +273,43 @@ async function runPhase10StorageTests() {
       validateStatus: () => true,
     });
 
+    const hashedMeta = await CloudStorageService.uploadObject({
+      tenantId: "ten_agency_a",
+      entityType: "properties",
+      entityId: "P5500",
+      fileName: "prop_0123456789abcdef.png",
+      buffer: VALID_PNG,
+      declaredMimeType: "image/png",
+      visibility: "public_listing",
+      uploadedByUserId: "usr_alpha_owner",
+      isImageOnly: true,
+    });
+    const hashedRes = await axios.get(`http://127.0.0.1:${port}${hashedMeta.publicUrl}`, {
+      responseType: "arraybuffer",
+      validateStatus: () => true,
+    });
+    const invalidSignedRes = await axios.get(
+      `http://127.0.0.1:${port}/api/storage/signed?key=${encodeURIComponent(
+        hashedMeta.objectKey
+      )}&tenantId=ten_agency_a&exp=9999999999&sig=invalid`,
+      { validateStatus: () => true }
+    );
+    await CloudStorageService.deleteObject({
+      tenantId: "ten_agency_a",
+      objectKey: hashedMeta.objectKey,
+    });
+
     assert(
       meta.backend === "gcs_emulator" &&
         meta.objectKey === "tenants/ten_agency_a/properties/P5500/living.png" &&
         publicMediaRes.status === 200 &&
         publicMediaRes.headers["x-content-type-options"] === "nosniff" &&
         Buffer.from(publicMediaRes.data).equals(VALID_PNG) &&
-        afterDeleteRes.status === 404,
-      "TEST 3: Protocol GCS JSON (emulator) funcționează complet (upload public listing + livrare /media + ștergere)"
+        afterDeleteRes.status === 404 &&
+        hashedRes.status === 200 &&
+        hashedRes.headers["cache-control"] === "public, max-age=31536000, immutable" &&
+        invalidSignedRes.status === 403,
+      "TEST 3: Protocol GCS JSON (emulator) funcționează complet (upload public listing + livrare /media + Cache-Control immutable + 403 pe signed invalid + ștergere)"
     );
   } catch (err: any) {
     assert(false, `TEST 3 Eșuat: ${err?.message}`);

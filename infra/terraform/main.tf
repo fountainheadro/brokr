@@ -28,6 +28,7 @@ locals {
   required_apis = toset([
     "artifactregistry.googleapis.com",
     "cloudscheduler.googleapis.com",
+    "cloudtasks.googleapis.com",
     "firestore.googleapis.com",
     "iam.googleapis.com",
     "logging.googleapis.com",
@@ -337,6 +338,26 @@ resource "google_cloud_run_v2_service" "core_api" {
         value = var.allow_mock_billing_in_production ? "true" : "false"
       }
       env {
+        name  = "ENABLE_IN_PROCESS_SCHEDULERS"
+        value = "false"
+      }
+      env {
+        name  = "WORKER_OIDC_AUDIENCE"
+        value = var.platform_public_url
+      }
+      env {
+        name  = "WORKER_OIDC_ALLOWED_EMAILS"
+        value = google_service_account.worker_invoker.email
+      }
+      env {
+        name  = "SCRAPE_MAX_CONCURRENT_BROWSERS"
+        value = tostring(var.scrape_max_concurrent_browsers)
+      }
+      env {
+        name  = "SCRAPE_MAX_CONCURRENT_PER_TENANT"
+        value = tostring(var.scrape_max_concurrent_per_tenant)
+      }
+      env {
         name  = "GEMINI_API_KEY"
         value_source {
           secret_key_ref {
@@ -418,6 +439,109 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   name     = google_cloud_run_v2_service.core_api.name
   role     = "roles/run.invoker"
   member   = "allUsers"
+}
+
+# 6b. Phase 6 Backend Worker OIDC Invoker SA, Cloud Tasks Queue & Cloud Scheduler Jobs
+# Stage A Budget Discipline:
+# - Total Cloud Scheduler jobs = 3 (daily_firestore_export + viewing_reminders + automation_dispatch)
+#   staying strictly within GCP's 3 free jobs/month ($0/mo).
+# - 1 Cloud Tasks queue for transactional outbox dispatch (free up to 1M ops/month).
+# - Still 1 Cloud Run service (no premature multi-service split).
+resource "google_service_account" "worker_invoker" {
+  project      = var.project_id
+  account_id   = "brokr-worker-invoker-${var.environment}"
+  display_name = "BROKR Internal Worker OIDC Invoker (${var.environment})"
+  description  = "Dedicated least-privilege OIDC Service Account for Cloud Scheduler and Cloud Tasks worker endpoints"
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_cloud_run_v2_service_iam_member" "worker_invoker_access" {
+  project  = var.project_id
+  location = var.region
+  name     = google_cloud_run_v2_service.core_api.name
+  role     = "roles/run.invoker"
+  member   = "serviceAccount:${google_service_account.worker_invoker.email}"
+}
+
+resource "google_cloud_tasks_queue" "outbox" {
+  project  = var.project_id
+  name     = "brokr-${var.environment}-outbox"
+  location = var.region
+
+  rate_limits {
+    max_dispatches_per_second = 5
+    max_concurrent_dispatches = 2
+  }
+
+  retry_config {
+    max_attempts  = 4
+    min_backoff   = "15s"
+    max_backoff   = "300s"
+    max_doublings = 3
+  }
+
+  depends_on = [google_project_service.required]
+}
+
+resource "google_cloud_scheduler_job" "viewing_reminders" {
+  count            = var.enable_worker_schedulers ? 1 : 0
+  project          = var.project_id
+  region           = var.region
+  name             = "brokr-${var.environment}-viewing-reminders"
+  description      = "Phase 6 OIDC viewing reminders dispatch (2 of 3 free Cloud Scheduler jobs)"
+  schedule         = "*/1 * * * *"
+  time_zone        = var.backup_timezone
+  attempt_deadline = "60s"
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.core_api.uri}/internal/workers/viewing-reminders"
+    headers = {
+      "Content-Type" = "application/json"
+    }
+    body = base64encode(jsonencode({ source = "cloud_scheduler" }))
+
+    oidc_token {
+      service_account_email = google_service_account.worker_invoker.email
+      audience              = var.platform_public_url
+    }
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_cloud_run_v2_service_iam_member.worker_invoker_access,
+  ]
+}
+
+resource "google_cloud_scheduler_job" "automation_dispatch" {
+  count            = var.enable_worker_schedulers ? 1 : 0
+  project          = var.project_id
+  region           = var.region
+  name             = "brokr-${var.environment}-automation-dispatch"
+  description      = "Phase 6 OIDC outbox + auto-crawl + agency auto-import dispatcher (3 of 3 free Cloud Scheduler jobs)"
+  schedule         = "*/5 * * * *"
+  time_zone        = var.backup_timezone
+  attempt_deadline = "180s"
+
+  http_target {
+    http_method = "POST"
+    uri         = "${google_cloud_run_v2_service.core_api.uri}/internal/workers/automation-dispatch"
+    headers = {
+      "Content-Type" = "application/json"
+    }
+    body = base64encode(jsonencode({ source = "cloud_scheduler" }))
+
+    oidc_token {
+      service_account_email = google_service_account.worker_invoker.email
+      audience              = var.platform_public_url
+    }
+  }
+
+  depends_on = [
+    google_project_service.required,
+    google_cloud_run_v2_service_iam_member.worker_invoker_access,
+  ]
 }
 
 # 7. Cloud Monitoring 5xx Error Rate Alert Policy (Included in GCP Free Monitoring Tier)

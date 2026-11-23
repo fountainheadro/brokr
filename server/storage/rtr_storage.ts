@@ -5,10 +5,14 @@ import { CloudStorageService } from "../../src/core/storage/svc_cloud-storage";
 import { StorageMetadataRepository } from "../../src/core/storage/repo_storage-metadata";
 import { createErrorResponse, createSuccessResponse } from "../../src/core/api/api_response";
 import {
-  createThumbnail,
   parseThumbnailWidth,
   shouldServeWebp,
 } from "../utils/img_thumbnail";
+import {
+  CACHE_CONTROL_PRIVATE,
+  CACHE_CONTROL_PUBLIC_IMMUTABLE,
+  MediaPipelineService,
+} from "../media/svc_media-pipeline";
 
 export const storageRouter = Router();
 
@@ -52,30 +56,80 @@ storageRouter.get(
       const targetWidth = parseThumbnailWidth(req.query.w);
       if (targetWidth && metadata.mimeType.startsWith("image/") && !metadata.mimeType.includes("svg")) {
         const preferWebp = shouldServeWebp(req.headers.accept, req.query.format);
-        const thumb = await createThumbnail({
-          buffer,
-          mimeType: metadata.mimeType,
+        const variant = await MediaPipelineService.getOrCreatePropertyVariant({
+          objectKey,
+          metadata,
+          originalBuffer: buffer,
           targetWidth,
           preferWebp,
-          cacheKey: `storage::${objectKey}`,
         });
-        res.setHeader("Content-Type", thumb.mimeType);
+        res.setHeader("Content-Type", variant.mimeType);
         res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
         res.setHeader("Vary", "Accept");
-        res.setHeader("Cache-Control", "public, max-age=86400");
-        res.send(thumb.data);
+        res.setHeader("Cache-Control", variant.cacheControl);
+        res.setHeader("X-Media-Variant-Cache", variant.fromStorage ? "HIT" : "MISS");
+        res.send(variant.buffer);
         return;
       }
 
+      const isImmutableOriginal = CloudStorageService.isContentHashedFileName(metadata.fileName);
       res.setHeader("Content-Type", metadata.mimeType);
       res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Cache-Control", "public, max-age=86400");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader(
+        "Cache-Control",
+        isImmutableOriginal ? CACHE_CONTROL_PUBLIC_IMMUTABLE : "public, max-age=86400"
+      );
       res.send(buffer);
     } catch (err: any) {
       const status = err?.statusCode || 404;
       res
         .status(status)
         .json(createErrorResponse(err?.code || "NOT_FOUND", err?.message || "Fișier negăsit."));
+    }
+  }
+);
+
+/**
+ * GET /api/storage/public-shares/:shareCode/:fileName
+ * GET /api/storage/public-shares/:shareCode/gallery/:fileName
+ * Serves strictly immutable persisted public-share assets (OG thumbnails & public gallery variants)
+ * stored under `public/shares/...` with 1-year immutable Cache-Control.
+ */
+storageRouter.get(
+  [
+    "/public-shares/:shareCode/:fileName",
+    "/public-shares/:shareCode/gallery/:fileName",
+  ],
+  async (req: Request, res: Response) => {
+    try {
+      const { shareCode, fileName } = req.params;
+      const isGallery = req.path.includes("/gallery/");
+      const rawKey = isGallery
+        ? `public/shares/${shareCode}/gallery/${fileName}`
+        : `public/shares/${shareCode}/${fileName}`;
+      const safeKey = CloudStorageService.validateRawObjectKey(rawKey);
+      const found = await CloudStorageService.getRawObject(safeKey);
+      if (!found) {
+        res
+          .status(404)
+          .json(createErrorResponse("NOT_FOUND", "Resursă media publică negăsită."));
+        return;
+      }
+
+      res.setHeader("Content-Type", found.mimeType);
+      res.setHeader("Content-Length", String(found.buffer.length));
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", CACHE_CONTROL_PUBLIC_IMMUTABLE);
+      res.send(found.buffer);
+    } catch (err: any) {
+      const status = err?.statusCode || 400;
+      res
+        .status(status)
+        .json(createErrorResponse(err?.code || "VALIDATION_ERROR", err?.message || "Cerere invalidă."));
     }
   }
 );
@@ -107,7 +161,7 @@ storageRouter.get("/signed", async (req: Request, res: Response) => {
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader(
       "Cache-Control",
-      metadata.visibility === "private" ? "private, no-store" : "public, max-age=3600"
+      metadata.visibility === "private" ? CACHE_CONTROL_PRIVATE : "public, max-age=3600"
     );
     res.send(buffer);
   } catch (err: any) {
@@ -295,5 +349,24 @@ storageRouter.delete(
         .status(status)
         .json(createErrorResponse(err?.code || "FORBIDDEN", err?.message || "Ștergere interzisă."));
     }
+  }
+);
+
+/**
+ * POST /api/storage/orphans/report
+ * Non-destructive dry-run orphan media sweep report for the authenticated tenant.
+ */
+storageRouter.post(
+  "/orphans/report",
+  ...requireTenantContext,
+  (req: Request, res: Response) => {
+    const ctx = req.tenantContext!;
+    const rawRefs = Array.isArray(req.body?.referencedUrls) ? req.body.referencedUrls : [];
+    const referencedUrls = rawRefs.filter((u: unknown): u is string => typeof u === "string");
+    const report = MediaPipelineService.buildOrphanMediaSweepReport({
+      tenantId: ctx.tenantId,
+      referencedUrls,
+    });
+    res.json(createSuccessResponse(report));
   }
 );

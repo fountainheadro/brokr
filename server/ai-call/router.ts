@@ -3,7 +3,15 @@ import crypto from "crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { parse as parseUrl } from "url";
 import { IncomingMessage } from "http";
-import { createSession, activeSessions, appendTranscript, broadcastToFrontend, CallStatus } from "./sessionManager";
+import {
+  createSession,
+  activeSessions,
+  appendTranscript,
+  broadcastToFrontend,
+  loadPersistedCallSession,
+  updateSessionStatus,
+  CallStatus,
+} from "./sessionManager";
 import { ulawToPcm, pcmToUlaw, resample8To16, resample24To8 } from "./g711";
 import { GoogleGenAI, LiveServerMessage, Modality } from "@google/genai";
 import axios from "axios";
@@ -137,9 +145,12 @@ aiCallRouter.post("/dial", mwAuthentication, async (req, res) => {
     const mockCallSid = `CA_mock_${crypto.randomBytes(12).toString("hex")}`;
     log(`⚠️ Twilio credentials missing in environmental variables. Starting SIMULATION session ${mockCallSid} for demo.`);
     
-    // Create actual active session bound to caller UID
-    const session = createSession(mockCallSid, phoneNumber, prompt, req.authUser?.uid);
-    session.status = "calling";
+    // Create actual active session bound to caller UID and tenant
+    const reqTenantId =
+      req.tenantContext?.tenantId ||
+      (typeof req.headers["x-tenant-id"] === "string" ? req.headers["x-tenant-id"] : undefined);
+    const session = createSession(mockCallSid, phoneNumber, prompt, req.authUser?.uid, reqTenantId);
+    updateSessionStatus(session, "calling");
 
     // Simulate real-time Romanian conversation for spectacular demonstration
     let step = 0;
@@ -215,8 +226,11 @@ aiCallRouter.post("/dial", mwAuthentication, async (req, res) => {
     const callSid = response.data.sid;
     log(`Outbound call successfully initiated. CallSid: ${callSid}`);
 
-    // Create persistent call session bound to caller UID
-    createSession(callSid, formattedTo, prompt, req.authUser?.uid);
+    // Create persistent call session bound to caller UID and tenant
+    const reqTenantId =
+      req.tenantContext?.tenantId ||
+      (typeof req.headers["x-tenant-id"] === "string" ? req.headers["x-tenant-id"] : undefined);
+    createSession(callSid, formattedTo, prompt, req.authUser?.uid, reqTenantId);
 
     return res.json({
       success: true,
@@ -246,8 +260,13 @@ aiCallRouter.post("/dial", mwAuthentication, async (req, res) => {
 /**
  * Returns currently active call session or status
  */
-aiCallRouter.get("/session/:callSid", mwAuthentication, (req, res) => {
-  const session = activeSessions.get(req.params.callSid);
+aiCallRouter.get("/session/:callSid", mwAuthentication, async (req, res) => {
+  const reqTenantId =
+    req.tenantContext?.tenantId ||
+    (typeof req.headers["x-tenant-id"] === "string" ? req.headers["x-tenant-id"] : undefined);
+  const session =
+    activeSessions.get(req.params.callSid) ||
+    (await loadPersistedCallSession(req.params.callSid, reqTenantId));
   if (!session) {
     return res.status(404).json({ error: "Sesiunea de apel nu a fost găsită." });
   }
@@ -258,6 +277,7 @@ aiCallRouter.get("/session/:callSid", mwAuthentication, (req, res) => {
     callSid: session.callSid,
     phoneNumber: session.phoneNumber,
     prompt: session.prompt,
+    tenantId: session.tenantId,
     status: session.status,
     transcript: session.transcript,
     notes: session.notes
