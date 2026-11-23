@@ -5,6 +5,10 @@ export interface LogoBox {
   h: number;
 }
 
+export interface DetectLogoOptions {
+  aggressive?: boolean;
+}
+
 interface RoisSpec {
   name: string;
   x0: number;
@@ -26,7 +30,8 @@ interface RoisSpec {
  * do not bridge into letters), groups horizontally with tight dilation (dx=2, dy=0),
  * and strictly verifies dimensions, 2D edge sharpness, stroke complexity, continuity, and halo.
  */
-export function detectLogoBoxes(image: any): LogoBox[] {
+export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBox[] {
+  const aggressive = Boolean(options?.aggressive);
   const origW: number = image?.width ?? image?.bitmap?.width ?? 0;
   const origH: number = image?.height ?? image?.bitmap?.height ?? 0;
   const data: Uint8Array | Buffer | undefined = image?.bitmap?.data;
@@ -100,8 +105,8 @@ export function detectLogoBoxes(image: any): LogoBox[] {
     sat[(y1 + 1) * stride + x0] +
     sat[y0 * stride + x0];
 
-  const cornerW = Math.round(workW * 0.36);
-  const cornerH = Math.round(workH * 0.23);
+  const cornerW = Math.round(workW * (aggressive ? 0.40 : 0.36));
+  const cornerH = Math.round(workH * (aggressive ? 0.26 : 0.23));
   const rois: RoisSpec[] = [
     {
       name: "bottom-left",
@@ -186,6 +191,8 @@ export function detectLogoBoxes(image: any): LogoBox[] {
   const crispDarkMask = new Uint8Array(totalPixels);
   const medLightMask = new Uint8Array(totalPixels);
   const medDarkMask = new Uint8Array(totalPixels);
+  const softTranslucentLightMask = aggressive ? new Uint8Array(totalPixels) : null;
+  const softTranslucentDarkMask = aggressive ? new Uint8Array(totalPixels) : null;
   const computedMask = new Uint8Array(totalPixels);
   const gradXArr = new Float32Array(totalPixels);
   const gradYArr = new Float32Array(totalPixels);
@@ -266,22 +273,28 @@ export function detectLogoBoxes(image: any): LogoBox[] {
         if ((-lumaDiff >= 22 && (grad >= 12 || -lumaDiff >= 34)) || (colorDiff >= 64 && grad >= 14)) {
           medDarkMask[idx] = 1;
         }
+        if (softTranslucentLightMask && luma >= 150 && wideLumaDiff >= 9 && (grad >= 6 || wideLumaDiff >= 14)) {
+          softTranslucentLightMask[idx] = 1;
+        }
+        if (softTranslucentDarkMask && luma <= 120 && -wideLumaDiff >= 11 && (grad >= 6 || -wideLumaDiff >= 16)) {
+          softTranslucentDarkMask[idx] = 1;
+        }
       }
     }
   }
 
-  const minLogoW = Math.max(44, Math.round(workW * 0.06));
-  const maxLogoW = Math.min(380, Math.round(workW * 0.38));
-  const minLogoH = 12;
-  const maxLogoH = Math.min(90, Math.round(workH * 0.14));
-  const maxLogoArea = workW * workH * 0.035;
+  const minLogoW = Math.max(aggressive ? 36 : 44, Math.round(workW * (aggressive ? 0.045 : 0.06)));
+  const maxLogoW = Math.min(aggressive ? 420 : 380, Math.round(workW * (aggressive ? 0.42 : 0.38)));
+  const minLogoH = aggressive ? 10 : 12;
+  const maxLogoH = Math.min(aggressive ? 110 : 90, Math.round(workH * (aggressive ? 0.17 : 0.14)));
+  const maxLogoArea = workW * workH * (aggressive ? 0.045 : 0.035);
 
   const workBoxes: Array<{ minX: number; minY: number; maxX: number; maxY: number }> = [];
 
   const scanRoiWithMask = (
     roi: RoisSpec,
     fgMask: Uint8Array,
-    tier: "whiteCore" | "brightOverlay" | "crisp" | "medium"
+    tier: "whiteCore" | "brightOverlay" | "crisp" | "medium" | "softTranslucent"
   ) => {
     const ex0 = Math.max(0, roi.x0 - roiMargin);
     const ey0 = Math.max(0, roi.y0 - roiMargin);
@@ -293,7 +306,7 @@ export function detectLogoBoxes(image: any): LogoBox[] {
 
     // Horizontal-only glyph grouping joins side-by-side characters/icons without vertical bridges
     const dil = new Uint8Array(rw * rh);
-    const dxPad = tier === "whiteCore" || tier === "brightOverlay" ? 3 : 2;
+    const dxPad = tier === "whiteCore" || tier === "brightOverlay" || tier === "softTranslucent" ? 3 : 2;
     for (let ly = 0; ly < rh; ly++) {
       const gy = ey0 + ly;
       for (let lx = 0; lx < rw; lx++) {
@@ -368,7 +381,8 @@ export function detectLogoBoxes(image: any): LogoBox[] {
           }
         }
 
-        if (fgCount < 95 || maxX < minX || maxY < minY) continue;
+        const minFgCount = tier === "softTranslucent" ? 65 : aggressive ? 75 : 95;
+        if (fgCount < minFgCount || maxX < minX || maxY < minY) continue;
 
         // Reject structures extending beyond the ROI interior edges (walls, radiators, furniture)
         if (roi.innerTop && minY <= ey0 + 2) continue;
@@ -387,40 +401,51 @@ export function detectLogoBoxes(image: any): LogoBox[] {
         if (w < minLogoW || w > maxLogoW || h < minLogoH || h > maxLogoH) continue;
         if (area > maxLogoArea) continue;
         const aspect = w / h;
-        if (aspect < 1.35 || aspect > 12.0) continue;
+        const minAspect = aggressive ? 1.15 : 1.35;
+        const maxAspect = aggressive ? 13.5 : 12.0;
+        if (aspect < minAspect || aspect > maxAspect) continue;
 
         // Watermarks have visual breathing margin; reject tall dark/scene edges flush against frame boundary
         const touchesOuterFrameEdge = minX <= 1 || maxX >= workW - 2 || minY <= 1 || maxY >= workH - 2;
         if (touchesOuterFrameEdge && h > 42) continue;
 
         // Enforce outer margin/corner band placement so interior ceiling fixtures/blinds/railings never false-positive
-        const nearBottomEdge = maxY >= workH - Math.round(workH * 0.14);
+        const nearBottomEdge = maxY >= workH - Math.round(workH * (aggressive ? 0.20 : 0.14));
         const nearTopCorner =
-          minY <= Math.round(workH * 0.12) &&
+          minY <= Math.round(workH * (aggressive ? 0.16 : 0.12)) &&
           (roi.strictZone
-            ? minY <= Math.round(workH * 0.09)
-            : minX <= Math.round(workW * 0.14) || maxX >= workW - Math.round(workW * 0.14));
-        const nearSideEdge = minX <= Math.round(workW * 0.08) || maxX >= workW - Math.round(workW * 0.08);
+            ? minY <= Math.round(workH * (aggressive ? 0.11 : 0.09))
+            : minX <= Math.round(workW * (aggressive ? 0.18 : 0.14)) || maxX >= workW - Math.round(workW * (aggressive ? 0.18 : 0.14)));
+        const nearSideEdge = minX <= Math.round(workW * (aggressive ? 0.12 : 0.08)) || maxX >= workW - Math.round(workW * (aggressive ? 0.12 : 0.08));
         if (!nearBottomEdge && !nearTopCorner && !nearSideEdge) continue;
 
         const fillRatio = fgCount / area;
-        const minFill = tier === "whiteCore" ? 0.11 : tier === "brightOverlay" ? 0.24 : 0.21;
+        const minFill =
+          tier === "whiteCore"
+            ? 0.11
+            : tier === "softTranslucent"
+            ? 0.16
+            : tier === "brightOverlay"
+            ? 0.20
+            : 0.21;
         if (fillRatio < minFill || fillRatio > 0.78) continue;
 
         const meanGrad = (gradXSum + gradYSum) / fgCount;
         const reqGrad = roi.strictZone
-          ? 46
+          ? aggressive ? 38 : 46
+          : tier === "softTranslucent"
+          ? 10
           : tier === "brightOverlay"
-          ? 14
+          ? aggressive ? 11 : 14
           : tier === "whiteCore"
-          ? 40
+          ? aggressive ? 32 : 40
           : tier === "crisp"
-          ? 32
-          : 52;
+          ? aggressive ? 26 : 32
+          : aggressive ? 42 : 52;
         if (meanGrad < reqGrad) continue;
         const minAx = Math.min(gradXSum, gradYSum);
         const maxAx = Math.max(gradXSum, gradYSum);
-        const minAxRatio = tier === "brightOverlay" ? 0.45 : 0.26;
+        const minAxRatio = tier === "brightOverlay" ? 0.38 : tier === "softTranslucent" ? 0.30 : 0.26;
         if (maxAx > 0 && minAx / maxAx < minAxRatio) continue;
 
         let totalRowTransitions = 0;
@@ -460,12 +485,35 @@ export function detectLogoBoxes(image: any): LogoBox[] {
 
         const avgTransitionsPerRow = activeRows > 0 ? totalRowTransitions / activeRows : 0;
         const multiRowRatio = activeRows > 0 ? multiRows / activeRows : 0;
-        const reqMaxT = roi.strictZone || tier === "brightOverlay" ? 6 : 5;
-        const reqAvgT = roi.strictZone ? 3.4 : tier === "brightOverlay" ? 3.8 : 2.8;
-        const reqMrr = roi.strictZone ? 0.70 : tier === "whiteCore" ? 0.44 : tier === "brightOverlay" ? 0.62 : 0.60;
+        const reqMaxT =
+          roi.strictZone
+            ? 6
+            : tier === "softTranslucent"
+            ? 4
+            : tier === "brightOverlay"
+            ? aggressive ? 5 : 6
+            : aggressive ? 4 : 5;
+        const reqAvgT =
+          roi.strictZone
+            ? 3.4
+            : tier === "softTranslucent"
+            ? 2.4
+            : tier === "brightOverlay"
+            ? aggressive ? 3.0 : 3.8
+            : aggressive ? 2.4 : 2.8;
+        const reqMrr =
+          roi.strictZone
+            ? 0.70
+            : tier === "whiteCore"
+            ? 0.44
+            : tier === "softTranslucent"
+            ? 0.45
+            : tier === "brightOverlay"
+            ? aggressive ? 0.52 : 0.62
+            : aggressive ? 0.52 : 0.60;
 
         if (maxRowTransitions < reqMaxT || avgTransitionsPerRow < reqAvgT || multiRowRatio < reqMrr) continue;
-        if (aspect > 1.7 && colClusters < 4) continue;
+        if (aspect > 1.7 && colClusters < (aggressive ? 3 : 4)) continue;
 
         let haloTotal = 0;
         let haloFg = 0;
@@ -485,7 +533,14 @@ export function detectLogoBoxes(image: any): LogoBox[] {
           }
         }
 
-        const maxHalo = roi.strictZone || tier === "brightOverlay" ? 0.05 : tier === "medium" ? 0.04 : 0.08;
+        const maxHalo =
+          roi.strictZone || tier === "brightOverlay"
+            ? 0.05
+            : tier === "softTranslucent"
+            ? 0.06
+            : tier === "medium"
+            ? 0.04
+            : 0.08;
         if (haloTotal > 20 && haloFg / haloTotal > maxHalo) continue;
 
         // If a tight overlapping or horizontally adjacent same-baseline box exists (e.g. icon + wordmark), merge them
@@ -529,6 +584,12 @@ export function detectLogoBoxes(image: any): LogoBox[] {
     if (!roi.strictZone) {
       scanRoiWithMask(roi, medLightMask, "medium");
       scanRoiWithMask(roi, medDarkMask, "medium");
+      if (softTranslucentLightMask) {
+        scanRoiWithMask(roi, softTranslucentLightMask, "softTranslucent");
+      }
+      if (softTranslucentDarkMask) {
+        scanRoiWithMask(roi, softTranslucentDarkMask, "softTranslucent");
+      }
     }
   }
 
@@ -548,16 +609,16 @@ export function detectLogoBoxes(image: any): LogoBox[] {
 
 /**
  * Applies clean local perimeter-interpolated inpainting + smooth local blur
- * strictly inside the detected small logo box (+3px tight margin).
+ * strictly inside the detected small logo box (+3px..+5px tight margin).
  * Zero pixels outside that small region are modified.
  */
-export function inpaintLogoBox(image: any, box: LogoBox): void {
+export function inpaintLogoBox(image: any, box: LogoBox, options?: { pad?: number }): void {
   const width: number = image?.width ?? image?.bitmap?.width ?? 0;
   const height: number = image?.height ?? image?.bitmap?.height ?? 0;
   const data: Uint8Array | Buffer | undefined = image?.bitmap?.data;
   if (!data || width <= 0 || height <= 0) return;
 
-  const pad = 3;
+  const pad = Math.max(2, Math.min(8, Math.round(options?.pad ?? 3)));
   const startX = Math.max(0, box.startX - pad);
   const startY = Math.max(0, box.startY - pad);
   const endX = Math.min(width, box.startX + box.w + pad);

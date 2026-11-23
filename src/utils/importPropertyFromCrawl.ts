@@ -52,7 +52,7 @@ export async function importPropertyFromCrawl({
   onStatus?.(trimmedHtml ? "Procesare pagină capturată..." : "Accesare URL...");
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 45000);
+  const timeoutId = setTimeout(() => controller.abort(), 90000);
 
   let crawlRes: Response;
   try {

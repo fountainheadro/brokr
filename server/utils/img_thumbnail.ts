@@ -108,6 +108,24 @@ function setThumbnailCache(key: string, val: ThumbnailResult) {
   thumbnailCache.set(key, val);
 }
 
+export function clearThumbnailCacheByPrefix(prefix: string): number {
+  if (!prefix) return 0;
+  let removed = 0;
+  for (const key of Array.from(thumbnailCache.keys())) {
+    if (key.startsWith(prefix)) {
+      thumbnailCache.delete(key);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+export function clearAllThumbnailCache(): number {
+  const count = thumbnailCache.size;
+  thumbnailCache.clear();
+  return count;
+}
+
 export async function createThumbnail(params: {
   buffer: Buffer;
   mimeType: string;

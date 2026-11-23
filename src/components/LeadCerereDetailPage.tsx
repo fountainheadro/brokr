@@ -22,7 +22,8 @@ import {
   X,
   Link as LinkIcon,
   Star,
-  Bookmark
+  Bookmark,
+  Wand2
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { contactsService, Contact, ContactType } from "../services/contactsService";
@@ -31,6 +32,7 @@ import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { CATEGORIA_OPTIONS, ZONA_OPTIONS } from "../constants";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
+import { regeneratePropertyImages } from "../utils/regeneratePropertyImages";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { InlineDetailField } from "./InlineDetailField";
 
@@ -237,6 +239,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
 
   const [editingPhotos, setEditingPhotos] = useState(false);
   const [savingPhotos, setSavingPhotos] = useState(false);
+  const [regeneratingImages, setRegeneratingImages] = useState(false);
   const [photosDraft, setPhotosDraft] = useState<string[]>(() => deriveInitialPhotos(lead));
   const [photoUrlInput, setPhotoUrlInput] = useState("");
   const [draggedPhotoIdx, setDraggedPhotoIdx] = useState<number | null>(null);
@@ -777,6 +780,45 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
   const savedPhotos = useMemo(() => deriveInitialPhotos(lead), [lead]);
   const activePhotos = editingPhotos ? photosDraft : savedPhotos;
   const displayImage = lead.coverImage || savedPhotos[0] || null;
+
+  const handleRegenerateImages = async () => {
+    if (!lead.id || regeneratingImages) return;
+    if (activePhotos.length === 0) {
+      toast.error("Nu există fotografii disponibile pentru regenerare.");
+      return;
+    }
+    setRegeneratingImages(true);
+    const loadingToastId = toast.loading(
+      `Se regenerează ${activePhotos.length} ${activePhotos.length === 1 ? "fotografie" : "fotografii"} (ascundere watermark)...`
+    );
+    try {
+      const result = await regeneratePropertyImages({
+        lead,
+        currentImages: activePhotos,
+        tenantId: tenant?.id,
+        onUpdateLead,
+      });
+      setPhotosDraft(result.images);
+      toast.dismiss(loadingToastId);
+      if (result.inpaintedCount > 0) {
+        toast.success(
+          `Au fost procesate ${result.processedCount}/${result.totalCount} fotografii și curățate ${result.inpaintedCount} watermark-uri.`,
+          { duration: 5000 }
+        );
+      } else {
+        toast.success(
+          `Toate cele ${result.processedCount}/${result.totalCount} fotografii au fost regenerate și reîmprospătate.`,
+          { duration: 4000 }
+        );
+      }
+    } catch (err: any) {
+      toast.dismiss(loadingToastId);
+      console.error("[LeadCerereDetailPage] Failed to regenerate images:", err);
+      toast.error(err?.message || "Eroare la regenerarea imaginilor.");
+    } finally {
+      setRegeneratingImages(false);
+    }
+  };
 
   const categoryChoices = CATEGORIA_OPTIONS.includes(categoriaDraft)
     ? CATEGORIA_OPTIONS
@@ -1603,6 +1645,24 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
           </span>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {!isCerere && activePhotos.length > 0 && lead.id && (
+              <button
+                type="button"
+                disabled={regeneratingImages || editingPhotos}
+                onClick={() => void handleRegenerateImages()}
+                className="h-8 px-3 rounded-md border border-[#051D35]/20 bg-[#051D35]/5 hover:bg-[#051D35] text-[#051D35] hover:text-white text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {regeneratingImages ? (
+                  <Loader2 size={12} className="animate-spin text-[#BE9662]" />
+                ) : (
+                  <Wand2 size={12} className="text-[#BE9662]" />
+                )}
+                <span>
+                  {regeneratingImages ? "Se regenerează..." : "Regenerează imagini (ascunde watermark)"}
+                </span>
+              </button>
+            )}
+
             {!isCerere && lead.status !== "ListaMea" && onAddToMyList && lead.id && (
               <button
                 type="button"

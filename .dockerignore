@@ -1,0 +1,25 @@
+# Git & AI Studio internal directories
+.git
+.gitignore
+.aistudio
+.github
+
+# Local secrets & runtime caches (NEVER bake into container images)
+.env
+.env.*
+!.env.example
+.data
+*.log
+npm-debug.log*
+
+# Dependencies & build output (rebuilt inside builder stage)
+node_modules
+dist
+
+# Tests, documentation & IaC not required at runtime
+tests
+docs
+infra
+*.md
+firebase-debug.log
+firestore-debug.log

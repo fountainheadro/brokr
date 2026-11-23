@@ -25,8 +25,10 @@
     "test:hub": "NODE_ENV=test tsx tests/client/tst_client-data-hub.ts",
     "test:phase2": "NODE_ENV=test tsx tests/crm/tst_phase2-slim-projections.ts",
     "test:phase3": "NODE_ENV=test tsx tests/security/tst_phase3-hardening.ts",
+    "test:persistence": "NODE_ENV=test tsx tests/persistence/tst_cold-restart-persistence.ts",
+    "test:phase4": "NODE_ENV=test tsx tests/infra/tst_phase4-infra-and-lifecycle.ts",
     "baseline:phase0": "tsx tests/baseline/run_phase0-baseline.ts",
-    "test": "npm run test:security && npm run test:platform && npm run test:subscription && npm run test:ai && npm run test:phase7 && npm run test:phase8 && npm run test:phase9 && npm run test:phase10 && npm run test:phase11 && npm run test:phase12 && npm run test:adc && npm run test:rules && npm run test:rules:isolation && npm run test:hub && npm run test:phase2 && npm run test:phase3"
+    "test": "npm run test:security && npm run test:platform && npm run test:subscription && npm run test:ai && npm run test:phase7 && npm run test:phase8 && npm run test:phase9 && npm run test:phase10 && npm run test:phase11 && npm run test:phase12 && npm run test:adc && npm run test:rules && npm run test:rules:isolation && npm run test:hub && npm run test:phase2 && npm run test:phase3 && npm run test:persistence && npm run test:phase4"
   },
   "dependencies": {
     "@google/genai": "^3.4.0",

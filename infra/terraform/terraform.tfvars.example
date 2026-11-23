@@ -1,0 +1,38 @@
+# ==============================================================================
+# BROKR Stage A Terraform Example Variables (Copy to staging.tfvars or prod.tfvars)
+# NEVER commit secrets or API keys into .tfvars files!
+# ==============================================================================
+
+project_id            = "brokr-42038"
+region                = "europe-west3"
+environment           = "staging"
+firestore_database_id = "ai-studio-e7371a1e-cd74-432c-b244-a7eb8aa7f434"
+
+# Replace with the pushed image digest from Artifact Registry
+container_image = "europe-west3-docker.pkg.dev/brokr-42038/brokr-apps/brokr-core-api:latest"
+
+platform_root_domain = "highline.ro"
+platform_public_url  = "https://highline.ro"
+
+# Stage A budget-conscious scaling (set min_instances = 1 only if zero cold starts are required)
+min_instances         = 0
+max_instances         = 3
+container_concurrency = 40
+cpu_limit             = "2"
+memory_limit          = "2Gi"
+
+# Set enable_stripe_secrets = true & allow_mock_billing_in_production = false once Stripe secrets are populated
+allow_mock_billing_in_production = true
+enable_stripe_secrets            = false
+
+# Automated daily Firestore backup export (1 of 3 free GCP Cloud Scheduler jobs)
+enable_daily_firestore_backup = true
+backup_bucket_name            = "brokr-42038-firestore-backups"
+backup_bucket_location        = "EU"
+
+# Keep false until existing Firestore database is imported with `terraform import`
+manage_firestore_pitr = false
+
+# Optional: supply your GCP Billing Account ID to enable $25 / $50 / $100 budget alerts
+billing_account_id = ""
+monthly_budget_usd = 100

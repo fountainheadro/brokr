@@ -1,0 +1,167 @@
+name: BROKR Stage A CI/CD Pipeline
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: brokr-cicd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GCP_PROJECT_ID: brokr-42038
+  GCP_REGION: europe-west3
+  AR_REPOSITORY: brokr-apps
+  IMAGE_NAME: brokr-core-api
+  STAGING_SERVICE_NAME: brokr-core-api-staging
+  PROD_SERVICE_NAME: brokr-core-api-prod
+
+jobs:
+  # ============================================================================
+  # 1. Quality, Security Rules & Automated Test Gates (Runs on every PR & push)
+  # ============================================================================
+  verify:
+    name: Lint, Build, Rules & Test Gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies (skip Chromium download in CI)
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "true"
+        run: npm ci
+
+      - name: TypeScript typecheck (lint)
+        run: npm run lint
+
+      - name: Production bundle build (Vite + esbuild)
+        run: npm run build
+
+      - name: Firestore security rules static audit (ESLint)
+        run: npx eslint firestore.rules
+
+      - name: Run full security, platform, AI, CRM, persistence & Phase 4 suites
+        run: npm test
+
+      - name: Validate Docker container build
+        run: docker build --tag brokr-ci-check:${{ github.sha }} .
+
+  # ============================================================================
+  # 2. Build & Push Immutable Image + Deploy to Staging (main branch only)
+  # ============================================================================
+  deploy-staging:
+    name: Build Image & Deploy to Staging
+    needs: [verify]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_WIF_PROVIDER != '' && vars.GCP_DEPLOY_SA_EMAIL != ''
+    runs-on: ubuntu-latest
+    environment: staging
+    outputs:
+      image_uri: ${{ steps.image.outputs.uri }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud via Workload Identity Federation
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Artifact Registry Docker auth
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build and push immutable container image
+        id: image
+        run: |
+          IMAGE_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${AR_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA}"
+          docker build -t "${IMAGE_URI}" .
+          docker push "${IMAGE_URI}"
+          DIGEST=$(gcloud artifacts docker images describe "${IMAGE_URI}" --format='value(image_summary.digest)')
+          PINNED_URI="${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${AR_REPOSITORY}/${IMAGE_NAME}@${DIGEST}"
+          echo "uri=${PINNED_URI}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy pinned image digest to Cloud Run Staging
+        run: |
+          gcloud run deploy "${STAGING_SERVICE_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --image="${{ steps.image.outputs.uri }}" \
+            --quiet
+
+      - name: Smoke test Staging /api/healthz and /api/readyz
+        run: |
+          STAGING_URL=$(gcloud run services describe "${STAGING_SERVICE_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --format='value(status.url)')
+          curl -fsS "${STAGING_URL}/api/healthz"
+          curl -fsS "${STAGING_URL}/api/readyz"
+
+  # ============================================================================
+  # 3. Manual-Approval Production Rollout (Exact Same Tested Image Digest)
+  # ============================================================================
+  deploy-production:
+    name: Deploy to Production (Manual Approval Gate)
+    needs: [deploy-staging]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Authenticate to Google Cloud via Workload Identity Federation
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA_EMAIL }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Capture current live revision for instant < 2 min rollback
+        id: prev
+        run: |
+          PREV_REV=$(gcloud run services describe "${PROD_SERVICE_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --format='value(status.latestReadyRevisionName)' || true)
+          echo "previous_revision=${PREV_REV}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy verified image digest to Cloud Run Production
+        run: |
+          gcloud run deploy "${PROD_SERVICE_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --image="${{ needs.deploy-staging.outputs.image_uri }}" \
+            --quiet
+
+      - name: Smoke test Production /api/healthz and /api/readyz
+        run: |
+          PROD_URL=$(gcloud run services describe "${PROD_SERVICE_NAME}" \
+            --project="${GCP_PROJECT_ID}" \
+            --region="${GCP_REGION}" \
+            --format='value(status.url)')
+          curl -fsS "${PROD_URL}/api/healthz"
+          curl -fsS "${PROD_URL}/api/readyz"
+
+      - name: Print instant rollback command
+        if: always()
+        run: |
+          echo "Previous Production Revision: ${{ steps.prev.outputs.previous_revision }}"
+          echo "Instant Rollback Command:"
+          echo "gcloud run services update-traffic ${PROD_SERVICE_NAME} --project=${GCP_PROJECT_ID} --region=${GCP_REGION} --to-revisions=${{ steps.prev.outputs.previous_revision }}=100"

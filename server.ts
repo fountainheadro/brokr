@@ -42,7 +42,12 @@ import {
   createThumbnail,
   parseThumbnailWidth,
   shouldServeWebp,
+  clearThumbnailCacheByPrefix,
 } from "./server/utils/img_thumbnail";
+import {
+  extractNextAdDataFromParsed,
+  extractStoriaNextDataAndPhotos,
+} from "./server/utils/storiaPhotoExtractor";
 import {
   extractPhoneFromOlxHtml,
   extractPhoneFromVisibleText,
@@ -50,6 +55,11 @@ import {
   revealOlxPhoneByClick,
 } from "./server/utils/olxPhoneExtractor";
 import { assertProductionEnvironment } from "./src/core/env/svc_production-config";
+import {
+  ServerLifecycleController,
+  registerHealthRoutes,
+  attachGracefulShutdown,
+} from "./src/core/runtime/svc_server-lifecycle";
 import { PersistentStoreService } from "./src/core/database/svc_persistent-store";
 import { tenantRouter } from "./server/tenant/rtr_tenant";
 import { aiRouter } from "./server/ai/rtr_ai";
@@ -138,18 +148,45 @@ const ai = new GoogleGenAI({
 interface CleanedImageCacheEntry {
   mimeType: string;
   data: Buffer;
+  inpaintedBoxes?: number;
 }
 const imageCleanCache = new Map<string, CleanedImageCacheEntry>();
 const pendingImageCleans = new Map<string, Promise<CleanedImageCacheEntry | null>>();
 
-function addToImageCache(url: string, entry: CleanedImageCacheEntry) {
-  if (imageCleanCache.size > 500) {
+function isAggressiveWatermarkSource(urlStr: string): boolean {
+  const lower = String(urlStr || "").toLowerCase();
+  return (
+    lower.includes("storia.ro") ||
+    lower.includes("olxcdn.com") ||
+    lower.includes("akamaized.net") ||
+    lower.includes("roamcdn.net") ||
+    lower.includes("imobiliare.ro") ||
+    lower.includes("publi24") ||
+    lower.includes("pstatic") ||
+    lower.includes("pcdnh")
+  );
+}
+
+function getImageCacheKey(cleanUrl: string, aggressive: boolean): string {
+  return aggressive ? `${cleanUrl}::aggressive` : cleanUrl;
+}
+
+function evictImageCachesForUrl(cleanUrl: string): void {
+  imageCleanCache.delete(cleanUrl);
+  imageCleanCache.delete(`${cleanUrl}::aggressive`);
+  pendingImageCleans.delete(cleanUrl);
+  pendingImageCleans.delete(`${cleanUrl}::aggressive`);
+  clearThumbnailCacheByPrefix(`proxy::${cleanUrl}`);
+}
+
+function addToImageCache(cacheKey: string, entry: CleanedImageCacheEntry) {
+  if (imageCleanCache.size > 600) {
     const keys = Array.from(imageCleanCache.keys());
-    for (let idx = 0; idx < 100; idx++) {
+    for (let idx = 0; idx < 120; idx++) {
       imageCleanCache.delete(keys[idx]);
     }
   }
-  imageCleanCache.set(url, entry);
+  imageCleanCache.set(cacheKey, entry);
 }
 
 async function execConvert(args: string[], inputBuffer: Buffer): Promise<Buffer> {
@@ -289,14 +326,28 @@ function isBotChallengePage(html: string): boolean {
   return false;
 }
 
-async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: string): Promise<Buffer> {
+async function cleanImageWatermarksDetailed(
+  buffer: Buffer,
+  mimeType: string,
+  imageUrl: string,
+  options: { aggressive?: boolean } = {}
+): Promise<{ buffer: Buffer; mimeType: string; inpaintedBoxes: number }> {
   if (!mimeType.startsWith("image/") || mimeType.includes("svg")) {
-    return buffer;
+    return { buffer, mimeType, inpaintedBoxes: 0 };
   }
 
+  const aggressive = Boolean(options.aggressive);
+  const inpaintPad = aggressive ? 5 : 3;
+
   try {
-    const isWebP = mimeType.includes("webp") || 
-      (buffer.length > 12 && buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 && buffer.toString("ascii", 8, 12) === "WEBP");
+    const isWebP =
+      mimeType.includes("webp") ||
+      (buffer.length > 12 &&
+        buffer[0] === 0x52 &&
+        buffer[1] === 0x49 &&
+        buffer[2] === 0x46 &&
+        buffer[3] === 0x46 &&
+        buffer.toString("ascii", 8, 12) === "WEBP");
     const isAvif = mimeType.includes("avif");
 
     let workBuffer = buffer;
@@ -311,14 +362,13 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
     let image: any;
     try {
       image = await Jimp.read(workBuffer);
-    } catch (jimpReadErr: any) {
-      // If Jimp fails on raw buffer, convert to standard PNG via ImageMagick
+    } catch {
       try {
         const fallbackPng = await execConvert(["-", "png:-"], buffer);
         image = await Jimp.read(fallbackPng);
       } catch (imErr: any) {
         console.warn("[Watermark Remover] Fallback conversion failed:", imErr?.message);
-        return buffer;
+        return { buffer, mimeType, inpaintedBoxes: 0 };
       }
     }
 
@@ -326,26 +376,33 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
 
     // Skip tiny images
     if (width < 200 || height < 200) {
-      return buffer;
+      return { buffer, mimeType, inpaintedBoxes: 0 };
     }
 
     // Detect overlaid logos strictly without AI; if no logo is present, return original image untouched
-    const logoBoxes = detectLogoBoxes(image);
+    const logoBoxes = detectLogoBoxes(image, { aggressive });
     if (logoBoxes.length === 0) {
-      return buffer;
+      return { buffer, mimeType, inpaintedBoxes: 0 };
     }
 
+    let totalInpainted = 0;
     for (const box of logoBoxes) {
-      console.log(`[Logo Inpainter] Inpainting detected logo area (${imageUrl}): x=${box.startX}, y=${box.startY}, w=${box.w}, h=${box.h}`);
-      inpaintLogoBox(image, box);
+      console.log(
+        `[Logo Inpainter] Inpainting detected logo area (${imageUrl}${aggressive ? ", aggressive" : ""}): x=${box.startX}, y=${box.startY}, w=${box.w}, h=${box.h}`
+      );
+      inpaintLogoBox(image, box, { pad: inpaintPad });
+      totalInpainted++;
     }
 
     // Verification pass: ensure no secondary/adjacent watermark fragment remains after first pass
-    const residualBoxes = detectLogoBoxes(image);
+    const residualBoxes = detectLogoBoxes(image, { aggressive });
     if (residualBoxes.length > 0) {
       for (const box of residualBoxes) {
-        console.log(`[Logo Inpainter] Second-pass inpainting residual area (${imageUrl}): x=${box.startX}, y=${box.startY}, w=${box.w}, h=${box.h}`);
-        inpaintLogoBox(image, box);
+        console.log(
+          `[Logo Inpainter] Second-pass inpainting residual area (${imageUrl}): x=${box.startX}, y=${box.startY}, w=${box.w}, h=${box.h}`
+        );
+        inpaintLogoBox(image, box, { pad: inpaintPad });
+        totalInpainted++;
       }
     }
 
@@ -353,20 +410,31 @@ async function cleanImageWatermarks(buffer: Buffer, mimeType: string, imageUrl: 
     if (isWebP) {
       try {
         const cleanedWebp = await execConvert(["png:-", "-quality", "92", "webp:-"], cleanedPngBuffer);
-        return cleanedWebp;
-      } catch (convErr: any) {
-        return cleanedPngBuffer;
+        return { buffer: cleanedWebp, mimeType: "image/webp", inpaintedBoxes: totalInpainted };
+      } catch {
+        return { buffer: cleanedPngBuffer, mimeType: "image/png", inpaintedBoxes: totalInpainted };
       }
     }
 
     if (mimeType.includes("jpeg") || mimeType.includes("jpg")) {
-      return await image.getBuffer("image/jpeg" as any);
+      const cleanedJpeg = await image.getBuffer("image/jpeg" as any);
+      return { buffer: cleanedJpeg, mimeType: "image/jpeg", inpaintedBoxes: totalInpainted };
     }
-    return cleanedPngBuffer;
+    return { buffer: cleanedPngBuffer, mimeType: "image/png", inpaintedBoxes: totalInpainted };
   } catch (err: any) {
     console.warn(`[Watermark Remover] Fallback serving original:`, err?.message);
-    return buffer;
+    return { buffer, mimeType, inpaintedBoxes: 0 };
   }
+}
+
+async function cleanImageWatermarks(
+  buffer: Buffer,
+  mimeType: string,
+  imageUrl: string,
+  options: { aggressive?: boolean } = {}
+): Promise<Buffer> {
+  const result = await cleanImageWatermarksDetailed(buffer, mimeType, imageUrl, options);
+  return result.buffer;
 }
 
 function normalizeCleanImageUrl(rawUrl: string): string {
@@ -400,17 +468,30 @@ function getCleanImageValidationError(cleanUrl: string): string | null {
 
 async function fetchAndCleanExternalImage(
   rawUrl: string,
-  options: { skipClean?: boolean; maxAttempts?: number; timeoutMs?: number } = {}
+  options: {
+    skipClean?: boolean;
+    aggressive?: boolean;
+    forceRefresh?: boolean;
+    maxAttempts?: number;
+    timeoutMs?: number;
+  } = {}
 ): Promise<CleanedImageCacheEntry> {
   const cleanUrl = normalizeCleanImageUrl(rawUrl);
   const skipClean = Boolean(options.skipClean);
+  const effectiveAggressive = Boolean(options.aggressive || isAggressiveWatermarkSource(cleanUrl));
+  const forceRefresh = Boolean(options.forceRefresh);
+  const cacheKey = getImageCacheKey(cleanUrl, effectiveAggressive);
 
-  if (!skipClean && imageCleanCache.has(cleanUrl)) {
-    return imageCleanCache.get(cleanUrl)!;
+  if (forceRefresh) {
+    evictImageCachesForUrl(cleanUrl);
   }
 
-  if (!skipClean && pendingImageCleans.has(cleanUrl)) {
-    const shared = await pendingImageCleans.get(cleanUrl)!;
+  if (!skipClean && !forceRefresh && imageCleanCache.has(cacheKey)) {
+    return imageCleanCache.get(cacheKey)!;
+  }
+
+  if (!skipClean && !forceRefresh && pendingImageCleans.has(cacheKey)) {
+    const shared = await pendingImageCleans.get(cacheKey)!;
     if (shared) return shared;
   }
 
@@ -506,14 +587,28 @@ async function fetchAndCleanExternalImage(
 
         let finalData = rawBuffer;
         let finalContentType = magic.mime;
+        let inpaintedBoxes = 0;
 
         if (!skipClean) {
-          finalData = await cleanImageWatermarks(rawBuffer, finalContentType, cleanUrl);
-          finalContentType = detectImageMagicBytes(finalData)?.mime || finalContentType;
-          addToImageCache(cleanUrl, { mimeType: finalContentType, data: finalData });
+          const cleaned = await cleanImageWatermarksDetailed(rawBuffer, finalContentType, cleanUrl, {
+            aggressive: effectiveAggressive,
+          });
+          finalData = cleaned.buffer;
+          finalContentType = detectImageMagicBytes(finalData)?.mime || cleaned.mimeType || finalContentType;
+          inpaintedBoxes = cleaned.inpaintedBoxes;
+          const entry: CleanedImageCacheEntry = {
+            mimeType: finalContentType,
+            data: finalData,
+            inpaintedBoxes,
+          };
+          addToImageCache(cacheKey, entry);
+          if (effectiveAggressive) {
+            // Also populate the default cache key so any standard proxy request immediately gets the cleaned image
+            addToImageCache(cleanUrl, entry);
+          }
         }
 
-        return { mimeType: finalContentType, data: finalData };
+        return { mimeType: finalContentType, data: finalData, inpaintedBoxes };
       } catch (error: any) {
         if (error?.isPermanentClientError) throw error;
         const msg = String(error?.message || "");
@@ -528,40 +623,54 @@ async function fetchAndCleanExternalImage(
     throw lastError || new Error("Failed to fetch image after retries");
   };
 
-  if (skipClean) {
+  if (skipClean || forceRefresh) {
     return runWork();
   }
 
   const sharedPromise = runWork()
     .catch((err) => {
-      pendingImageCleans.delete(cleanUrl);
+      pendingImageCleans.delete(cacheKey);
       throw err;
     })
     .then((entry) => {
-      pendingImageCleans.delete(cleanUrl);
+      pendingImageCleans.delete(cacheKey);
       return entry;
     });
-  pendingImageCleans.set(cleanUrl, sharedPromise);
+  pendingImageCleans.set(cacheKey, sharedPromise);
   return sharedPromise;
 }
 
-async function preCleanCrawlImages(urls: string[]): Promise<string[]> {
+async function preCleanCrawlImages(
+  urls: string[],
+  options: { aggressive?: boolean; syncBudgetMs?: number } = {}
+): Promise<string[]> {
   if (!urls || urls.length === 0) return [];
-  const concurrency = 6;
-  const deadline = Date.now() + 20000;
+  const concurrency = 8;
+  const syncBudgetMs = options.syncBudgetMs ?? 35000;
+  const deadline = Date.now() + syncBudgetMs;
   const keepFlags = new Array<boolean>(urls.length).fill(true);
+  const processedFlags = new Array<boolean>(urls.length).fill(false);
   let cursor = 0;
 
   const worker = async () => {
     while (true) {
       const idx = cursor++;
       if (idx >= urls.length) break;
-      if (Date.now() > deadline) continue;
+      if (Date.now() > deadline) break;
 
       const u = urls[idx];
-      if (!u || !u.startsWith("http")) continue;
+      if (!u || !u.startsWith("http")) {
+        processedFlags[idx] = true;
+        continue;
+      }
+      processedFlags[idx] = true;
       try {
-        await fetchAndCleanExternalImage(u, { skipClean: false, maxAttempts: 2, timeoutMs: 8000 });
+        await fetchAndCleanExternalImage(u, {
+          skipClean: false,
+          aggressive: options.aggressive,
+          maxAttempts: 2,
+          timeoutMs: 9000,
+        });
       } catch (err: any) {
         if (err?.isPermanentClientError) {
           keepFlags[idx] = false;
@@ -575,12 +684,40 @@ async function preCleanCrawlImages(urls: string[]): Promise<string[]> {
   };
 
   await Promise.all(Array.from({ length: Math.min(concurrency, urls.length) }, () => worker()));
+
+  // Never silently skip remaining images (e.g., large Storia.ro galleries with 25-60 photos):
+  // continue cleaning every remaining image in the background so 100% are warmed & watermark-cleaned.
+  const remainingUrls = urls.filter((u, idx) => !processedFlags[idx] && keepFlags[idx] && u && u.startsWith("http"));
+  if (remainingUrls.length > 0) {
+    console.log(`[Crawl PreClean] Scheduling background watermark processing for ${remainingUrls.length} remaining image(s).`);
+    void (async () => {
+      let bgCursor = 0;
+      const bgWorker = async () => {
+        while (true) {
+          const i = bgCursor++;
+          if (i >= remainingUrls.length) break;
+          const u = remainingUrls[i];
+          try {
+            await fetchAndCleanExternalImage(u, {
+              skipClean: false,
+              aggressive: options.aggressive,
+              maxAttempts: 2,
+              timeoutMs: 10000,
+            });
+          } catch {}
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, remainingUrls.length) }, () => bgWorker()));
+    })();
+  }
+
   return urls.filter((_, idx) => keepFlags[idx]);
 }
 
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT) || 3000;
+  const lifecycle = new ServerLifecycleController("brokr-core-api");
 
   // Trust exactly 1 reverse proxy hop by default (Cloud Run Google Frontend) so req.ip cannot be spoofed via leftmost X-Forwarded-For
   const parsedTrustProxyHops = Number(process.env.TRUST_PROXY_HOPS ?? 1);
@@ -849,10 +986,8 @@ async function startServer() {
   // Register notification synchronization endpoints
   registerNotificationRoutes(app);
 
-  // Health check
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok", timestamp: new Date().toISOString() });
-  });
+  // Phase 4 liveness (/api/healthz), readiness (/api/readyz), and backward-compatible /api/health probes
+  registerHealthRoutes(app, lifecycle);
 
   // Internal worker OIDC verification probe (Cloud Tasks / Cloud Scheduler SA authentication)
   app.post("/api/internal/workers/ping", requireWorkerOidc(), (req, res) => {
@@ -2963,7 +3098,7 @@ Returnează un JSON strict cu următoarele chei:
 
         const $ = cheerio.load(html);
 
-        // Structured states (Storia __NEXT_DATA__, OLX __PRERENDERED_STATE__, JSON-LD)
+        // Structured states (Storia __NEXT_DATA__ including React Query dehydratedState, OLX __PRERENDERED_STATE__, JSON-LD)
         let nextAdData: any = null;
         $("script#__NEXT_DATA__").each((_, el) => {
           if (nextAdData) return;
@@ -2971,7 +3106,7 @@ Returnează un JSON strict cu următoarele chei:
           if (htmlVal) {
             try {
               const parsed = JSON.parse(htmlVal);
-              nextAdData = parsed?.props?.pageProps?.ad || parsed?.props?.pageProps?.advert || parsed?.props?.pageProps?.offer || parsed?.props?.pageProps?.listing || parsed?.props?.pageProps?.data || null;
+              nextAdData = extractNextAdDataFromParsed(parsed);
             } catch {}
           }
         });
@@ -3126,26 +3261,20 @@ Returnează un JSON strict cu următoarele chei:
           });
         }
 
-        // Priority 1: Check __NEXT_DATA__ for the target property's dedicated photo gallery
-        let nextDataTargetImages: string[] = [];
-        const nextPhotoList = nextAdData?.photos || nextAdData?.images || nextAdData?.listingImages || nextAdData?.gallery || nextAdData?.media?.photos || nextAdData?.media?.images;
-        if (Array.isArray(nextPhotoList) && nextPhotoList.length > 0) {
-          nextPhotoList.forEach((item: any) => {
-            let candidate = item?.large || item?.medium || item?.url || item?.thumbnail || item?.small || item?.src || (typeof item === "string" ? item : null);
-            if (!candidate && item?.filename) {
-              candidate = `https://apollo.olxcdn.com/v1/files/${item.filename}/image;s=1000x700`;
-            }
-            if (!candidate && item?.id && typeof item?.id === "string" && item.id.length > 5) {
-              candidate = `https://apollo.olxcdn.com/v1/files/${item.id}/image;s=1000x700`;
-            }
-            if (candidate && typeof candidate === "string") {
-              const promoted = promoteToHighRes(candidate);
-              if (!isForbiddenGraphic(promoted) && !blockedAgencyPaths.has(getBaseUrlPath(promoted))) {
-                nextDataTargetImages.push(promoted);
-              }
-            }
-          });
+        // Priority 1: Extract ALL gallery photos from __NEXT_DATA__ (all non-empty arrays, dehydratedState, and Storia flight scripts)
+        const storiaExtraction = extractStoriaNextDataAndPhotos({
+          $,
+          pageUrl: url,
+          promoteToHighRes,
+          isForbiddenGraphic,
+          blockedAgencyPaths,
+          getBaseUrlPath,
+        });
+        if (!nextAdData && storiaExtraction.nextAdData) {
+          nextAdData = storiaExtraction.nextAdData;
         }
+        const nextDataTargetImages: string[] = storiaExtraction.nextDataTargetImages;
+        const isStoriaPage = url.toLowerCase().includes("storia.ro") || url.toLowerCase().includes("otodom.");
 
         // Priority 1B: OLX window.__PRERENDERED_STATE__ ad.photos
         let olxPhotos: string[] = [];
@@ -3284,7 +3413,12 @@ Returnează un JSON strict cu următoarele chei:
         }
 
         const rawCandidates = hasStructuredGallery
-          ? [...mosaicGalleryImages, ...nextDataTargetImages, ...olxPhotos]
+          ? [
+              ...nextDataTargetImages,
+              ...mosaicGalleryImages,
+              ...olxPhotos,
+              ...(isStoriaPage && nextDataTargetImages.length + mosaicGalleryImages.length <= 6 ? jsonLdImages : []),
+            ]
           : [...jsonLdImages, ...domGalleryImages, ...ogImages];
 
         // Deduplicate images and keep highest resolution version
@@ -3347,8 +3481,11 @@ Returnează un JSON strict cu următoarele chei:
           return Array.from(map.values()).filter(u => !isForbiddenGraphic(u));
         };
 
-        const dedupedImages = deduplicateImages(rawCandidates).slice(0, 50);
-        const uniqueImages = await preCleanCrawlImages(dedupedImages);
+        const dedupedImages = deduplicateImages(rawCandidates).slice(0, 100);
+        const uniqueImages = await preCleanCrawlImages(dedupedImages, {
+          aggressive: isStoriaPage || isOlxPage,
+          syncBudgetMs: isStoriaPage ? 45000 : 35000,
+        });
         console.log(`Found ${dedupedImages.length} unique images (${uniqueImages.length} pre-checked & cleaned) for ${url}`);
 
         // Extract seller name explicitly if possible (OLX DOM user-profile-user-name -> Storia/OLX structured -> fallback DOM patterns)
@@ -5225,6 +5362,14 @@ Returnează un JSON strict cu următoarele chei:
     const isSocialCrawler = /WhatsApp|facebookexternalhit|Facebot|Twitterbot|TelegramBot|LinkedInBot|Applebot/i.test(userAgent);
     const wantsJpeg = isSocialCrawler || req.query.format === "jpeg";
     const skipClean = req.query.noclean === "true";
+    const aggressive =
+      req.query.aggressive === "1" ||
+      req.query.aggressive === "true" ||
+      isAggressiveWatermarkSource(cleanUrl);
+    const regenToken =
+      typeof req.query.regen === "string"
+        ? req.query.regen.replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24)
+        : "";
 
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
@@ -5233,7 +5378,12 @@ Returnează un JSON strict cu următoarele chei:
     const preferWebp = shouldServeWebp(req.headers.accept, req.query.format);
 
     try {
-      const entry = await fetchAndCleanExternalImage(cleanUrl, { skipClean, maxAttempts: 3, timeoutMs: 8000 });
+      const entry = await fetchAndCleanExternalImage(cleanUrl, {
+        skipClean,
+        aggressive,
+        maxAttempts: 3,
+        timeoutMs: 8000,
+      });
       let sendData = entry.data;
       let sendMime = entry.mimeType;
 
@@ -5244,7 +5394,7 @@ Returnează un JSON strict cu următoarele chei:
           targetWidth,
           preferWebp: !wantsJpeg && preferWebp,
           forceJpeg: wantsJpeg,
-          cacheKey: `proxy::${cleanUrl}::clean=${!skipClean}`,
+          cacheKey: `proxy::${cleanUrl}::clean=${!skipClean}::agg=${aggressive ? 1 : 0}${regenToken ? `::r=${regenToken}` : ""}`,
         });
         sendData = thumb.data;
         sendMime = thumb.mimeType;
@@ -5269,6 +5419,213 @@ Returnează un JSON strict cu următoarele chei:
         return res.status(400).json({ error: error.message });
       }
       return res.status(502).json({ error: `Failed to fetch image after retries: ${error?.message}` });
+    }
+  });
+
+  // Regenerate ALL property images with aggressive watermark detection + inpainting and fresh cache-busted URLs
+  app.post("/api/properties/regenerate-images", ...requireTenantContext, crawlRouteLimiter, async (req, res) => {
+    try {
+      const rawImages = Array.isArray(req.body?.images) ? req.body.images : [];
+      const rawCover = typeof req.body?.coverImage === "string" ? req.body.coverImage.trim() : "";
+
+      const sanitizedInput = rawImages
+        .filter((u: unknown): u is string => typeof u === "string" && u.trim().length > 0)
+        .map((u: string) => u.trim())
+        .slice(0, 100);
+
+      if (sanitizedInput.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Este necesară cel puțin o imagine pentru regenerare.",
+        });
+      }
+
+      const regenVersion = String(Date.now());
+      const urlMap: Record<string, string> = {};
+      const results = new Array<string>(sanitizedInput.length);
+      let processedCount = 0;
+      let inpaintedCount = 0;
+      let failedCount = 0;
+      let ssrfBlockedCount = 0;
+
+      const unwrapExternalUrl = (inputUrl: string): string | null => {
+        const trimmed = inputUrl.trim();
+        if (trimmed.startsWith("/api/proxy-image") || trimmed.includes("/api/proxy-image?")) {
+          try {
+            const parsed = new URL(trimmed, "http://localhost");
+            const inner = parsed.searchParams.get("url");
+            if (inner) return normalizeCleanImageUrl(inner);
+          } catch {}
+        }
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://") || trimmed.startsWith("//")) {
+          return normalizeCleanImageUrl(trimmed);
+        }
+        return null;
+      };
+
+      const processSingleImage = async (origUrl: string): Promise<string> => {
+        // 1. Inline base64 data:image/... URLs
+        if (origUrl.startsWith("data:image/")) {
+          const match = origUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)$/);
+          if (!match) {
+            failedCount++;
+            return origUrl;
+          }
+          const declaredMime = match[1].toLowerCase();
+          if (declaredMime.includes("svg")) {
+            failedCount++;
+            return origUrl;
+          }
+          const rawBuf = Buffer.from(match[2], "base64");
+          if (rawBuf.length === 0 || rawBuf.length > DEFAULT_MAX_EXTERNAL_BYTES) {
+            failedCount++;
+            return origUrl;
+          }
+          const magic = detectImageMagicBytes(rawBuf);
+          if (!magic) {
+            failedCount++;
+            return origUrl;
+          }
+          const cleaned = await cleanImageWatermarksDetailed(rawBuf, magic.mime, "inline-data-url", {
+            aggressive: true,
+          });
+          processedCount++;
+          if (cleaned.inpaintedBoxes > 0) {
+            inpaintedCount++;
+            const outMime = detectImageMagicBytes(cleaned.buffer)?.mime || cleaned.mimeType || magic.mime;
+            return `data:${outMime};base64,${cleaned.buffer.toString("base64")}`;
+          }
+          return origUrl;
+        }
+
+        // 2. Local uploaded files under /uploads/<file> (strict path confinement)
+        const uploadsMatch = origUrl.match(/^\/uploads\/([^?#]+)/);
+        if (uploadsMatch) {
+          try {
+            const relName = decodeURIComponent(uploadsMatch[1]);
+            const resolved = path.resolve(uploadsDir, relName);
+            if (!resolved.startsWith(uploadsDir + path.sep) || !fs.existsSync(resolved) || !fs.statSync(resolved).isFile()) {
+              failedCount++;
+              return origUrl;
+            }
+            const fileBuf = fs.readFileSync(resolved);
+            if (fileBuf.length === 0 || fileBuf.length > DEFAULT_MAX_EXTERNAL_BYTES) {
+              failedCount++;
+              return origUrl;
+            }
+            const magic = detectImageMagicBytes(fileBuf);
+            if (!magic) {
+              failedCount++;
+              return origUrl;
+            }
+            const cleaned = await cleanImageWatermarksDetailed(fileBuf, magic.mime, `/uploads/${relName}`, {
+              aggressive: true,
+            });
+            processedCount++;
+            if (cleaned.inpaintedBoxes > 0) {
+              inpaintedCount++;
+              fs.writeFileSync(resolved, cleaned.buffer);
+            }
+            clearThumbnailCacheByPrefix(`upload::${resolved}`);
+            return `/uploads/${encodeURIComponent(relName)}?regen=${regenVersion}`;
+          } catch {
+            failedCount++;
+            return origUrl;
+          }
+        }
+
+        // 3. External URLs (direct or wrapped in /api/proxy-image?url=...)
+        const externalUrl = unwrapExternalUrl(origUrl);
+        if (externalUrl) {
+          try {
+            await validateSafeExternalUrl(externalUrl);
+          } catch {
+            ssrfBlockedCount++;
+            failedCount++;
+            return origUrl;
+          }
+          const blockedReason = getCleanImageValidationError(externalUrl);
+          if (blockedReason) {
+            failedCount++;
+            return origUrl;
+          }
+
+          try {
+            evictImageCachesForUrl(externalUrl);
+            const cleanedEntry = await fetchAndCleanExternalImage(externalUrl, {
+              skipClean: false,
+              aggressive: true,
+              forceRefresh: true,
+              maxAttempts: 3,
+              timeoutMs: 12000,
+            });
+            processedCount++;
+            if ((cleanedEntry.inpaintedBoxes || 0) > 0) {
+              inpaintedCount++;
+            }
+            return `/api/proxy-image?url=${encodeURIComponent(externalUrl)}&aggressive=1&regen=${regenVersion}`;
+          } catch {
+            failedCount++;
+            return origUrl;
+          }
+        }
+
+        // Preserve any other internal storage URLs safely
+        processedCount++;
+        return origUrl;
+      };
+
+      const concurrency = 6;
+      let cursor = 0;
+      const worker = async () => {
+        while (true) {
+          const idx = cursor++;
+          if (idx >= sanitizedInput.length) break;
+          const orig = sanitizedInput[idx];
+          const next = await processSingleImage(orig);
+          results[idx] = next;
+          urlMap[orig] = next;
+        }
+      };
+
+      await Promise.all(Array.from({ length: Math.min(concurrency, sanitizedInput.length) }, () => worker()));
+
+      if (ssrfBlockedCount === sanitizedInput.length) {
+        return res.status(400).json({
+          success: false,
+          error: "URL-urile imaginilor au fost blocate de politica de securitate SSRF.",
+        });
+      }
+
+      let regeneratedCover = results[0] || "";
+      if (rawCover) {
+        if (urlMap[rawCover]) {
+          regeneratedCover = urlMap[rawCover];
+        } else {
+          regeneratedCover = await processSingleImage(rawCover);
+          urlMap[rawCover] = regeneratedCover;
+        }
+      }
+
+      return res.json({
+        success: true,
+        data: {
+          regenVersion,
+          totalCount: sanitizedInput.length,
+          processedCount,
+          inpaintedCount,
+          failedCount,
+          images: results,
+          coverImage: regeneratedCover,
+          urlMap,
+        },
+      });
+    } catch (err: any) {
+      logger.error(`Image regeneration error: ${err?.message || err}`, { module: "media" });
+      return res.status(500).json({
+        success: false,
+        error: "A apărut o eroare la regenerarea imaginilor.",
+      });
     }
   });
 
@@ -5352,6 +5709,7 @@ Returnează un JSON strict cu următoarele chei:
   }
 
   const server = app.listen(PORT, "0.0.0.0", () => {
+    lifecycle.markReady();
     console.log(`Server running on http://localhost:${PORT}`);
   });
 
@@ -5359,7 +5717,33 @@ Returnează un JSON strict cu următoarele chei:
   setupWebSocket(server);
 
   // Initialize offline / background Web Push notification listener for upcoming viewings
-  setupBackgroundNotifications();
+  const stopBackgroundNotifications = setupBackgroundNotifications();
+
+  // Graceful SIGTERM/SIGINT draining for Cloud Run zero-downtime deploys and scaling
+  attachGracefulShutdown({
+    server,
+    lifecycle,
+    cleanupTasks: [
+      {
+        name: "background-notifications",
+        run: () => {
+          if (typeof stopBackgroundNotifications === "function") {
+            stopBackgroundNotifications();
+          }
+        },
+      },
+      ...(vite
+        ? [
+            {
+              name: "vite-dev-server",
+              run: async () => {
+                await vite.close();
+              },
+            },
+          ]
+        : []),
+    ],
+  });
 }
 
 startServer();

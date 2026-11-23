@@ -44,7 +44,9 @@ import {
   Image as ImageIcon,
   Trash2,
   Globe,
-  ArrowUp
+  ArrowUp,
+  Loader2,
+  Wand2
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
@@ -52,6 +54,7 @@ import { resolvePublicDisplayTitle, resolvePublicDisplayDescription } from "../u
 import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
+import { regeneratePropertyImages } from "../utils/regeneratePropertyImages";
 import { auth } from "../lib/firebase";
 import { ProtectedPublicImage } from "./ProtectedPublicImage";
 
@@ -1244,6 +1247,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const [imagesList, setImagesList] = useState<string[]>(allImages);
   const [isEditingPhotos, setIsEditingPhotos] = useState<boolean>(false);
   const [isPhotosDirty, setIsPhotosDirty] = useState<boolean>(false);
+  const [isRegeneratingImages, setIsRegeneratingImages] = useState<boolean>(false);
   const [isDraggingOverCard, setIsDraggingOverCard] = useState<boolean>(false);
   const [draggedSlotIndex, setDraggedSlotIndex] = useState<number | null>(null);
   const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
@@ -1400,6 +1404,45 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     setImagesList(allImages);
     setIsEditingPhotos(false);
     setIsPhotosDirty(false);
+  };
+
+  const handleRegenerateImages = async () => {
+    if (!lead?.id || isRegeneratingImages) return;
+    if (imagesList.length === 0) {
+      toast.error("Nu există fotografii disponibile pentru regenerare.");
+      return;
+    }
+    setIsRegeneratingImages(true);
+    const loadingToastId = toast.loading(
+      `Se regenerează ${imagesList.length} ${imagesList.length === 1 ? "fotografie" : "fotografii"} (ascundere watermark)...`
+    );
+    try {
+      const result = await regeneratePropertyImages({
+        lead,
+        currentImages: imagesList,
+        tenantId: tenant?.id,
+        onUpdateLead,
+      });
+      setImagesList(result.images);
+      toast.dismiss(loadingToastId);
+      if (result.inpaintedCount > 0) {
+        toast.success(
+          `Au fost procesate ${result.processedCount}/${result.totalCount} fotografii și curățate ${result.inpaintedCount} watermark-uri.`,
+          { duration: 5000 }
+        );
+      } else {
+        toast.success(
+          `Toate cele ${result.processedCount}/${result.totalCount} fotografii au fost regenerate și reîmprospătate.`,
+          { duration: 4000 }
+        );
+      }
+    } catch (err: any) {
+      toast.dismiss(loadingToastId);
+      console.error("[PropertyDetailView] Failed to regenerate images:", err);
+      toast.error(err?.message || "Eroare la regenerarea imaginilor.");
+    } finally {
+      setIsRegeneratingImages(false);
+    }
   };
 
   const handleAddPhotoFiles = (files: FileList | File[]) => {
@@ -2550,6 +2593,43 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 {renderRow("parcare", "Parcare", "Publica in zona", true, true)}
               </div>
             </div>
+
+            {/* Bottom action bar for regenerating all property images with watermark inpainting (internal CRM only) */}
+            {!isPublicShared && (
+              <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 shadow-xs font-sans flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div className="flex items-start sm:items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center shrink-0">
+                    <Wand2 size={16} className="text-[#BE9662]" />
+                  </div>
+                  <div>
+                    <h3 className="font-title text-[12px] font-semibold text-[#051D35]">
+                      Curățare Watermark Fotografii
+                    </h3>
+                    <p className="text-[11px] text-gray-500 mt-0.5">
+                      Reprocesează toate cele {imagesList.length} {imagesList.length === 1 ? "fotografie" : "fotografii"} ale proprietății prin inpainting pentru a ascunde watermark-urile.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleRegenerateImages()}
+                  disabled={isRegeneratingImages || isEditingPhotos || imagesList.length === 0}
+                  className="h-9 px-4 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-2 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed shadow-2xs"
+                >
+                  {isRegeneratingImages ? (
+                    <>
+                      <Loader2 size={14} className="animate-spin text-[#BE9662]" />
+                      <span>Se regenerează imaginile...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Wand2 size={14} className="text-[#BE9662]" />
+                      <span>Regenerează imagini (ascunde watermark)</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
 
             {/* Bottom spacing ensuring smooth scrolling and precise alignment for all jump links */}
             <div className={isPublicShared ? "h-[calc(100vh-104px)] pointer-events-none" : "h-[20vh] min-h-[160px] pointer-events-none"} aria-hidden="true" />

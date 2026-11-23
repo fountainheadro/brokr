@@ -382,7 +382,14 @@ export function setupBackgroundNotifications() {
   };
 
   void runCheckTick();
-  setInterval(() => {
+  const intervalId = setInterval(() => {
     void runCheckTick();
   }, 45000);
+
+  return () => {
+    clearInterval(intervalId);
+    logger.info("Background notification scheduler stopped cleanly.", {
+      module: "background-notifications",
+    });
+  };
 }
