@@ -10,9 +10,9 @@ interface DecodedEntry {
 const decodedBitmapCache = new Map<string, DecodedEntry>();
 const inFlightFetches = new Map<string, Promise<DecodedEntry>>();
 
-// Priority-aware client concurrency queue so the active lightbox image loads immediately
-// instead of competing with 20+ simultaneous thumbnail requests.
-const MAX_CONCURRENT_IMAGE_FETCHES = 4;
+// Priority-aware client concurrency queue so the active hero/lightbox image loads immediately
+// while allowing all 5 mosaic photos to load concurrently over HTTP/2.
+const MAX_CONCURRENT_IMAGE_FETCHES = 6;
 let activeImageFetches = 0;
 const highPriorityQueue: Array<() => void> = [];
 const normalPriorityQueue: Array<() => void> = [];
@@ -135,7 +135,7 @@ async function fetchAndDecodeWithRetries(
             headers: isProtectedEndpoint
               ? { "X-Brokr-Public-View": "1" }
               : undefined,
-            cache: "no-store",
+            cache: "default",
             signal: controller?.signal,
           });
 
@@ -204,6 +204,16 @@ async function loadProtectedBitmap(
   } finally {
     inFlightFetches.delete(src);
   }
+}
+
+export function prefetchProtectedPublicImage(
+  src: string,
+  priority: "high" | "normal" = "normal"
+): void {
+  if (!src || decodedBitmapCache.has(src) || inFlightFetches.has(src)) return;
+  loadProtectedBitmap(src, priority).catch(() => {
+    // Best-effort silent background prefetch
+  });
 }
 
 interface ProtectedPublicImageProps {

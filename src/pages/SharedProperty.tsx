@@ -34,10 +34,47 @@ function upsertCanonicalLink(href: string): void {
   el.setAttribute("href", href);
 }
 
+function consumeInitialPublicProperty(routeId: string | undefined): Lead | null {
+  if (!routeId || typeof document === "undefined") return null;
+  try {
+    const el = document.getElementById("__BROKR_INITIAL_PUBLIC_PROPERTY__");
+    if (!el || !el.textContent) return null;
+    const parsed = JSON.parse(el.textContent);
+    // Always remove after reading so subsequent client-side navigations fetch fresh data
+    el.remove();
+    if (!parsed || !parsed.data) return null;
+    const matchesRoute =
+      String(parsed.routeId || "").toLowerCase() === String(routeId).toLowerCase() ||
+      String(parsed.data.id || "").toLowerCase() === String(routeId).toLowerCase() ||
+      String(parsed.data.propertyId || "").toLowerCase() === String(routeId).toLowerCase();
+    if (!matchesRoute) return null;
+    return {
+      ...parsed.data,
+      ownerName: "",
+      ownerPhone: "",
+      url: "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const SharedProperty: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  const [lead, setLead] = useState<Lead | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const initialHydratedRef = useRef<{ routeId: string; lead: Lead } | null>(null);
+  if (initialHydratedRef.current === null && id) {
+    const ssrLead = consumeInitialPublicProperty(id);
+    if (ssrLead) {
+      initialHydratedRef.current = { routeId: id, lead: ssrLead };
+    }
+  }
+  const hasMatchingInitial =
+    Boolean(id && initialHydratedRef.current && initialHydratedRef.current.routeId === id);
+
+  const [lead, setLead] = useState<Lead | null>(() =>
+    hasMatchingInitial ? initialHydratedRef.current!.lead : null
+  );
+  const [loading, setLoading] = useState<boolean>(() => !hasMatchingInitial);
   const [error, setError] = useState<string | null>(null);
   const [isInspectBlocked, setIsInspectBlocked] = useState<boolean>(false);
   const lastRefreshAtRef = useRef<number>(0);
@@ -72,6 +109,14 @@ export const SharedProperty: React.FC = () => {
       if (!id) {
         setError("Identificatorul proprietății lipsește.");
         setLoading(false);
+        return;
+      }
+
+      // Skip redundant network fetch when already hydrated from SSR HTML for this exact route ID
+      if (initialHydratedRef.current && initialHydratedRef.current.routeId === id) {
+        setLead(initialHydratedRef.current.lead);
+        setLoading(false);
+        setError(null);
         return;
       }
 

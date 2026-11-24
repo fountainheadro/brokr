@@ -1695,6 +1695,252 @@ Returnează un JSON strict cu următoarele chei:
     return null;
   }
 
+  function buildPublicPropertyPayload(property: any, id: string, req: express.Request) {
+    const clientIp =
+      String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "anon")
+        .split(",")[0]
+        .trim();
+    const viewerSid = crypto
+      .createHash("sha256")
+      .update(`${clientIp}:${Date.now()}:${crypto.randomUUID()}`)
+      .digest("hex")
+      .slice(0, 12);
+    const ipHash = crypto
+      .createHash("sha256")
+      .update(clientIp)
+      .digest("hex")
+      .slice(0, 6)
+      .toUpperCase();
+    const nowTime = new Date().toISOString().slice(11, 16).replace(":", "");
+    const viewerStamp = `${ipHash}-${nowTime}`;
+    const propCode = String(property.propertyId || id).slice(0, 10).toUpperCase();
+
+    const publicTokenTtlMs = 24 * 60 * 60 * 1000;
+    const tokenUrlBySource = new Map<string, string>();
+    const orderedNormalizedSources: string[] = [];
+    const tokenizeImageUrl = (rawUrl: string): string => {
+      const normalizedSource = normalizeStoredImageUrl(rawUrl) || rawUrl.trim();
+      const dedupKey = getImageIdentityKey(normalizedSource) || normalizedSource;
+      const existing = tokenUrlBySource.get(dedupKey);
+      if (existing) return existing;
+      orderedNormalizedSources.push(normalizedSource);
+      const token = createPublicImageToken({
+        sourceUrl: normalizedSource,
+        propertyId: propCode,
+        viewerSid,
+        viewerStamp,
+        ttlMs: publicTokenTtlMs,
+        deterministic: true,
+      });
+      const tokenized = `/api/public-image?token=${encodeURIComponent(token)}`;
+      tokenUrlBySource.set(dedupKey, tokenized);
+      return tokenized;
+    };
+
+    const sanitized = sanitizePublicProperty(property, { tokenizeImageUrl });
+    const payload = {
+      ...sanitized,
+      publicProtection: {
+        viewerStamp,
+        expiresAt: Date.now() + publicTokenTtlMs,
+      },
+    };
+    return {
+      payload,
+      propCode,
+      mosaicSources: orderedNormalizedSources.slice(0, 5),
+    };
+  }
+
+  async function resolvePublicImageRawBuffer(rawSourceUrl: string): Promise<Buffer | null> {
+    let sourceUrl = rawSourceUrl.trim().replace(/&amp;/g, "&");
+    if (sourceUrl.startsWith("inline:")) {
+      const resolvedDataUrl = resolveInlinePublicDataUrl(sourceUrl);
+      if (!resolvedDataUrl) {
+        return null;
+      }
+      sourceUrl = resolvedDataUrl;
+    }
+
+    // Unwrap nested proxy-image wrappers if present
+    for (let depth = 0; depth < 3 && sourceUrl.includes("/api/proxy-image"); depth++) {
+      try {
+        const parsed = new URL(sourceUrl, "https://placeholder.local");
+        const inner = parsed.searchParams.get("url");
+        if (inner) {
+          sourceUrl = inner.trim().replace(/&amp;/g, "&");
+        } else {
+          break;
+        }
+      } catch {
+        break;
+      }
+    }
+
+    if (sourceUrl.startsWith("//")) {
+      sourceUrl = `https:${sourceUrl}`;
+    }
+
+    let localPathCandidate = sourceUrl;
+    if (/^https?:\/\//i.test(sourceUrl)) {
+      try {
+        const parsedAbs = new URL(sourceUrl);
+        if (
+          parsedAbs.pathname.startsWith("/uploads/") ||
+          parsedAbs.pathname.startsWith("/api/storage/media/") ||
+          parsedAbs.pathname.startsWith("/api/storage/public-shares/")
+        ) {
+          localPathCandidate = parsedAbs.pathname;
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
+
+    if (sourceUrl.startsWith("data:image/")) {
+      const parts = sourceUrl.split(",");
+      if (parts.length === 2) {
+        return Buffer.from(parts[1], "base64");
+      }
+      return null;
+    }
+
+    if (localPathCandidate.startsWith("/api/storage/media/")) {
+      const rawSuffix = localPathCandidate
+        .replace(/^\/api\/storage\/media\//, "")
+        .split("?")[0]
+        .split("#")[0];
+      const decodedParts = rawSuffix
+        .split("/")
+        .filter(Boolean)
+        .map((seg) => {
+          try {
+            return decodeURIComponent(seg);
+          } catch {
+            return seg;
+          }
+        });
+      const objectKey =
+        decodedParts[0] === "tenants"
+          ? decodedParts.join("/")
+          : decodedParts.length === 4 && decodedParts[1] === "properties"
+            ? `tenants/${decodedParts.join("/")}`
+            : decodedParts.join("/");
+      const { buffer } = await CloudStorageService.downloadObject({
+        objectKey,
+        allowPublicListing: true,
+      });
+      return buffer;
+    }
+
+    if (localPathCandidate.startsWith("/api/storage/public-shares/")) {
+      const rawSuffix = localPathCandidate
+        .replace(/^\/api\/storage\/public-shares\//, "")
+        .split("?")[0]
+        .split("#")[0];
+      const decodedParts = rawSuffix
+        .split("/")
+        .filter(Boolean)
+        .map((seg) => {
+          try {
+            return decodeURIComponent(seg);
+          } catch {
+            return seg;
+          }
+        });
+      const rawKey = `public/shares/${decodedParts.join("/")}`;
+      const found = await CloudStorageService.getRawObject(rawKey);
+      if (found?.buffer && found.buffer.length > 0) {
+        return found.buffer;
+      }
+      return null;
+    }
+
+    if (localPathCandidate.startsWith("/uploads/")) {
+      const rawRel = localPathCandidate
+        .replace(/^\/uploads\//, "")
+        .split("?")[0]
+        .split("#")[0];
+      let decodedRel = rawRel;
+      try {
+        decodedRel = decodeURIComponent(rawRel);
+      } catch {
+        // keep raw
+      }
+      const relName = path.basename(decodedRel);
+      const localPath = path.resolve(uploadsDir, relName);
+      if (localPath.startsWith(uploadsDir + path.sep) && fs.existsSync(localPath)) {
+        return fs.readFileSync(localPath);
+      }
+      return null;
+    }
+
+    if (/^https?:\/\//i.test(sourceUrl)) {
+      const cleanUrl = normalizeCleanImageUrl(sourceUrl);
+      await validateSafeExternalUrl(cleanUrl);
+      const validationError = getCleanImageValidationError(cleanUrl);
+      if (validationError) {
+        const err: any = new Error(validationError);
+        err.statusCode = 400;
+        throw err;
+      }
+      try {
+        const entry = await fetchAndCleanExternalImage(cleanUrl, { maxAttempts: 3, timeoutMs: 8000 });
+        return entry.data;
+      } catch (primaryErr) {
+        // Fallback: plain-header fetch for CDNs that reject spoofed Referer/Sec-Fetch headers
+        try {
+          const plainResp = await axios.get(cleanUrl, {
+            responseType: "arraybuffer",
+            timeout: 7000,
+            maxRedirects: 5,
+            maxContentLength: 20 * 1024 * 1024,
+            headers: {
+              "User-Agent": "Mozilla/5.0 (compatible; BrokrMedia/1.0)",
+              Accept: "image/jpeg,image/png,image/webp,image/*,*/*;q=0.8",
+            },
+          });
+          const plainBuf = Buffer.from(plainResp.data);
+          if (plainBuf.length > 0 && detectImageMagicBytes(plainBuf)) {
+            return plainBuf;
+          }
+          throw primaryErr;
+        } catch {
+          throw primaryErr;
+        }
+      }
+    }
+
+    return null;
+  }
+
+  function warmPublicShareMosaicImages(propCode: string, sources: string[]): void {
+    if (!sources || sources.length === 0) return;
+    sources.slice(0, 5).forEach((sourceUrl, idx) => {
+      const targetWidth = idx === 0 ? 1280 : 640;
+      (async () => {
+        const alreadyCached = await getPersistedProtectedPublicImage({
+          cacheKey: sourceUrl,
+          propertyCode: propCode || "BROKR",
+          maxWidth: targetWidth,
+          preferWebp: true,
+        });
+        if (alreadyCached) return;
+        const rawBuffer = await resolvePublicImageRawBuffer(sourceUrl);
+        if (!rawBuffer || rawBuffer.length === 0) return;
+        await applyPublicImageProtections(rawBuffer, {
+          cacheKey: sourceUrl,
+          propertyCode: propCode || "BROKR",
+          viewerStamp: "PUBLIC",
+          maxWidth: targetWidth,
+          preferWebp: true,
+        });
+      })().catch(() => {
+        // Best-effort background pre-warm; never fails page render
+      });
+    });
+  }
+
   // Public property endpoint for shared property links (strictly strips private owner PII & source URLs, tokenizes images)
   app.get("/api/public-property/:id", async (req, res) => {
     try {
@@ -1707,45 +1953,12 @@ Returnează un JSON strict cu următoarele chei:
         return res.status(404).json({ error: "Property not found" });
       }
 
-      const clientIp =
-        String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "anon")
-          .split(",")[0]
-          .trim();
-      const viewerSid = crypto.createHash("sha256").update(`${clientIp}:${Date.now()}:${crypto.randomUUID()}`).digest("hex").slice(0, 12);
-      const ipHash = crypto.createHash("sha256").update(clientIp).digest("hex").slice(0, 6).toUpperCase();
-      const nowTime = new Date().toISOString().slice(11, 16).replace(":", "");
-      const viewerStamp = `${ipHash}-${nowTime}`;
-      const propCode = String(property.propertyId || id).slice(0, 10).toUpperCase();
+      const { payload, propCode, mosaicSources } = buildPublicPropertyPayload(property, id, req);
+      warmPublicShareMosaicImages(propCode, mosaicSources);
 
-      const publicTokenTtlMs = 4 * 60 * 60 * 1000;
-      const tokenUrlBySource = new Map<string, string>();
-      const tokenizeImageUrl = (rawUrl: string): string => {
-        const normalizedSource = normalizeStoredImageUrl(rawUrl) || rawUrl.trim();
-        const dedupKey = getImageIdentityKey(normalizedSource) || normalizedSource;
-        const existing = tokenUrlBySource.get(dedupKey);
-        if (existing) return existing;
-        const token = createPublicImageToken({
-          sourceUrl: normalizedSource,
-          propertyId: propCode,
-          viewerSid,
-          viewerStamp,
-          ttlMs: publicTokenTtlMs,
-        });
-        const tokenized = `/api/public-image?token=${encodeURIComponent(token)}`;
-        tokenUrlBySource.set(dedupKey, tokenized);
-        return tokenized;
-      };
-
-      const sanitized = sanitizePublicProperty(property, { tokenizeImageUrl });
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
       res.setHeader("X-Robots-Tag", "noindex, noimageindex, noarchive");
-      res.json({
-        ...sanitized,
-        publicProtection: {
-          viewerStamp,
-          expiresAt: Date.now() + publicTokenTtlMs,
-        },
-      });
+      res.json(payload);
     } catch (e: any) {
       if (e.response && (e.response.status === 404 || e.response.status === 403)) {
         return res.status(404).json({ error: "Property not found or requires server credentials" });
@@ -1782,7 +1995,7 @@ Returnează un JSON strict cu următoarele chei:
     const targetWidth = parseThumbnailWidth(req.query.w);
     const preferWebp = shouldServeWebp(req.headers.accept, req.query.format);
 
-    // Fast path: serve from RAM or persistent Cloud Storage without hitting upstream CDN or running transforms
+    // Fast path: serve from RAM, /tmp disk cache, or persistent Cloud Storage without hitting upstream CDN or running transforms
     const cachedProtected = await getPersistedProtectedPublicImage({
       cacheKey: verified.payload.u,
       propertyCode: verified.payload.p || "BROKR",
@@ -1793,8 +2006,7 @@ Returnează un JSON strict cu următoarele chei:
       res.setHeader("Content-Type", cachedProtected.mimeType);
       res.setHeader("Content-Length", String(cachedProtected.buffer.length));
       res.setHeader("Vary", "Accept");
-      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
       res.setHeader("X-Robots-Tag", "noindex, noimageindex");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
@@ -1802,154 +2014,8 @@ Returnează un JSON strict cu următoarele chei:
       return res.send(cachedProtected.buffer);
     }
 
-    let sourceUrl = verified.payload.u.trim().replace(/&amp;/g, "&");
-    if (sourceUrl.startsWith("inline:")) {
-      const resolvedDataUrl = resolveInlinePublicDataUrl(sourceUrl);
-      if (!resolvedDataUrl) {
-        return res.status(404).json({ error: "Protected inline image expired" });
-      }
-      sourceUrl = resolvedDataUrl;
-    }
-
-    // Unwrap nested proxy-image wrappers if present
-    for (let depth = 0; depth < 3 && sourceUrl.includes("/api/proxy-image"); depth++) {
-      try {
-        const parsed = new URL(sourceUrl, "https://placeholder.local");
-        const inner = parsed.searchParams.get("url");
-        if (inner) {
-          sourceUrl = inner.trim().replace(/&amp;/g, "&");
-        } else {
-          break;
-        }
-      } catch {
-        break;
-      }
-    }
-
-    if (sourceUrl.startsWith("//")) {
-      sourceUrl = `https:${sourceUrl}`;
-    }
-
     try {
-      let rawBuffer: Buffer | null = null;
-
-      let localPathCandidate = sourceUrl;
-      if (/^https?:\/\//i.test(sourceUrl)) {
-        try {
-          const parsedAbs = new URL(sourceUrl);
-          if (
-            parsedAbs.pathname.startsWith("/uploads/") ||
-            parsedAbs.pathname.startsWith("/api/storage/media/") ||
-            parsedAbs.pathname.startsWith("/api/storage/public-shares/")
-          ) {
-            localPathCandidate = parsedAbs.pathname;
-          }
-        } catch {
-          // ignore parse error
-        }
-      }
-
-      if (sourceUrl.startsWith("data:image/")) {
-        const parts = sourceUrl.split(",");
-        if (parts.length === 2) {
-          rawBuffer = Buffer.from(parts[1], "base64");
-        }
-      } else if (localPathCandidate.startsWith("/api/storage/media/")) {
-        const rawSuffix = localPathCandidate
-          .replace(/^\/api\/storage\/media\//, "")
-          .split("?")[0]
-          .split("#")[0];
-        const decodedParts = rawSuffix
-          .split("/")
-          .filter(Boolean)
-          .map((seg) => {
-            try {
-              return decodeURIComponent(seg);
-            } catch {
-              return seg;
-            }
-          });
-        const objectKey =
-          decodedParts[0] === "tenants"
-            ? decodedParts.join("/")
-            : decodedParts.length === 4 && decodedParts[1] === "properties"
-              ? `tenants/${decodedParts.join("/")}`
-              : decodedParts.join("/");
-        const { buffer } = await CloudStorageService.downloadObject({
-          objectKey,
-          allowPublicListing: true,
-        });
-        rawBuffer = buffer;
-      } else if (localPathCandidate.startsWith("/api/storage/public-shares/")) {
-        const rawSuffix = localPathCandidate
-          .replace(/^\/api\/storage\/public-shares\//, "")
-          .split("?")[0]
-          .split("#")[0];
-        const decodedParts = rawSuffix
-          .split("/")
-          .filter(Boolean)
-          .map((seg) => {
-            try {
-              return decodeURIComponent(seg);
-            } catch {
-              return seg;
-            }
-          });
-        const rawKey = `public/shares/${decodedParts.join("/")}`;
-        const found = await CloudStorageService.getRawObject(rawKey);
-        if (found?.buffer && found.buffer.length > 0) {
-          rawBuffer = found.buffer;
-        }
-      } else if (localPathCandidate.startsWith("/uploads/")) {
-        const rawRel = localPathCandidate
-          .replace(/^\/uploads\//, "")
-          .split("?")[0]
-          .split("#")[0];
-        let decodedRel = rawRel;
-        try {
-          decodedRel = decodeURIComponent(rawRel);
-        } catch {
-          // keep raw
-        }
-        const relName = path.basename(decodedRel);
-        const localPath = path.resolve(uploadsDir, relName);
-        if (localPath.startsWith(uploadsDir + path.sep) && fs.existsSync(localPath)) {
-          rawBuffer = fs.readFileSync(localPath);
-        }
-      } else if (/^https?:\/\//i.test(sourceUrl)) {
-        const cleanUrl = normalizeCleanImageUrl(sourceUrl);
-        await validateSafeExternalUrl(cleanUrl);
-        const validationError = getCleanImageValidationError(cleanUrl);
-        if (validationError) {
-          return res.status(400).json({ error: validationError });
-        }
-        try {
-          const entry = await fetchAndCleanExternalImage(cleanUrl, { maxAttempts: 3, timeoutMs: 8000 });
-          rawBuffer = entry.data;
-        } catch (primaryErr) {
-          // Fallback: plain-header fetch for CDNs that reject spoofed Referer/Sec-Fetch headers
-          try {
-            const plainResp = await axios.get(cleanUrl, {
-              responseType: "arraybuffer",
-              timeout: 7000,
-              maxRedirects: 5,
-              maxContentLength: 20 * 1024 * 1024,
-              headers: {
-                "User-Agent": "Mozilla/5.0 (compatible; BrokrMedia/1.0)",
-                Accept: "image/jpeg,image/png,image/webp,image/*,*/*;q=0.8",
-              },
-            });
-            const plainBuf = Buffer.from(plainResp.data);
-            if (plainBuf.length > 0 && detectImageMagicBytes(plainBuf)) {
-              rawBuffer = plainBuf;
-            } else {
-              throw primaryErr;
-            }
-          } catch {
-            throw primaryErr;
-          }
-        }
-      }
+      const rawBuffer = await resolvePublicImageRawBuffer(verified.payload.u);
 
       if (!rawBuffer || rawBuffer.length === 0) {
         return res.status(404).json({ error: "Image not found" });
@@ -1966,8 +2032,7 @@ Returnează un JSON strict cu următoarele chei:
       res.setHeader("Content-Type", protectedImg.mimeType);
       res.setHeader("Content-Length", String(protectedImg.buffer.length));
       res.setHeader("Vary", "Accept");
-      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
-      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Cache-Control", "public, max-age=86400, stale-while-revalidate=604800");
       res.setHeader("X-Robots-Tag", "noindex, noimageindex");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
@@ -1975,9 +2040,16 @@ Returnează un JSON strict cu următoarele chei:
     } catch (err: any) {
       console.warn("[Server] /api/public-image error:", err?.message || err);
       const status =
-        err?.statusCode === 404 || err?.statusCode === 403 ? err.statusCode : 502;
+        err?.statusCode === 400 || err?.statusCode === 404 || err?.statusCode === 403
+          ? err.statusCode
+          : 502;
       return res.status(status).json({
-        error: status === 404 ? "Image not found" : "Failed to serve protected public image",
+        error:
+          status === 404
+            ? "Image not found"
+            : status === 400
+              ? err?.message || "Invalid image URL"
+              : "Failed to serve protected public image",
       });
     }
   });
@@ -2295,8 +2367,17 @@ Returnează un JSON strict cu următoarele chei:
         return res.sendFile(indexInfo.path);
       }
 
+      const ua = String(req.headers["user-agent"] || "").toLowerCase();
+      const isLinkPreviewBot =
+        /whatsapp|facebookexternalhit|facebot|telegrambot|twitterbot|linkedinbot|slackbot|discordbot|skypeuripreview|applebot|imessage|viber|pinterest|googlebot|bingbot|crawler|preview/i.test(
+          ua
+        );
+
       const preferredTenantId = resolvePublicShareTenantId(req);
-      const property = await fetchPropertyByIdCached(id, preferredTenantId);
+      // Human browsers always get fresh property data; link-preview bots reuse the 10s cache
+      const property = isLinkPreviewBot
+        ? await fetchPropertyByIdCached(id, preferredTenantId)
+        : await fetchPropertyById(id, { preferredTenantId });
 
       const title = resolvePublicDisplayTitle(property, "Proprietate Imobiliară • brokr.");
       const description = formatOpenGraphDescription(
@@ -2314,20 +2395,37 @@ Returnează un JSON strict cu următoarele chei:
         ? crypto.createHash("sha256").update(imageVersionSeed).digest("hex").slice(0, 10)
         : "";
 
-      // Pre-warm the OpenGraph thumbnail right now while we already have `property` in memory.
-      // Wait briefly (up to 1.8s) so chat crawlers get an instant <5ms cache hit on /api/og-image/...
-      // without ever stalling the HTML response if an external CDN is slow.
+      // Pre-warm the OpenGraph thumbnail ONLY blocking for chat/social link-preview bots.
+      // Human browsers receive HTML immediately (saving up to 1.8s on Time-to-First-Byte)
+      // while the OG image + first 5 mosaic photos warm asynchronously in the background.
       if (property && firstImageUrl) {
         const warmPromise = getOrBuildOgImageBuffer({
           id,
           preferredTenantId,
           versionKey: imageVersion,
           property,
-        });
-        await Promise.race([
-          warmPromise,
-          new Promise<void>((resolve) => setTimeout(resolve, 1800)),
-        ]);
+        }).catch(() => null);
+        if (isLinkPreviewBot) {
+          await Promise.race([
+            warmPromise,
+            new Promise<void>((resolve) => setTimeout(resolve, 1800)),
+          ]);
+        }
+      }
+
+      // Build sanitized public payload + start warming the first 5 mosaic WebP variants in parallel
+      // while the browser downloads/executes the SPA bundle.
+      let initialPayloadScript = "";
+      if (property && !isLinkPreviewBot) {
+        const { payload, propCode, mosaicSources } = buildPublicPropertyPayload(property, id, req);
+        warmPublicShareMosaicImages(propCode, mosaicSources);
+        const safeJson = JSON.stringify({ routeId: id, data: payload })
+          .replace(/</g, "\\u003c")
+          .replace(/>/g, "\\u003e")
+          .replace(/&/g, "\\u0026")
+          .replace(/\u2028/g, "\\u2028")
+          .replace(/\u2029/g, "\\u2029");
+        initialPayloadScript = `    <script id="__BROKR_INITIAL_PUBLIC_PROPERTY__" type="application/json">${safeJson}</script>`;
       }
 
       // Clean path-versioned `.jpg` URL with zero query parameters for maximum compatibility across chat apps
@@ -2422,6 +2520,7 @@ Returnează un JSON strict cu următoarele chei:
         `    <meta name="twitter:description" content="${esc(description)}" />`,
         `    <meta name="twitter:image" content="${esc(ogImageUrl)}" />`,
         `    <meta name="twitter:image:alt" content="${esc(title)}" />`,
+        ...(initialPayloadScript ? [initialPayloadScript] : []),
       ].join("\n");
 
       // WhatsApp / Facebook / Twitter / LinkedIn / iMessage crawlers parse only the top of <head>.

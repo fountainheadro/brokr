@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
@@ -64,12 +65,96 @@ const pendingProtectedBuilds = new Map<
   string,
   Promise<{ buffer: Buffer; mimeType: string }>
 >();
-const PROTECTED_CACHE_MAX = 300;
-const PROTECTED_CACHE_TTL_MS = 15 * 60 * 1000;
+const PROTECTED_CACHE_MAX = 600;
+const PROTECTED_CACHE_MAX_BYTES = 64 * 1024 * 1024; // 64 MB RAM cap
+const PROTECTED_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12 hours
+let protectedCacheBytes = 0;
 
-// Bounded concurrency for ImageMagick/Jimp transforms so opening a 20+ photo gallery
-// on small hosting containers never spikes RAM/CPU or triggers proxy 502 timeouts.
-const MAX_CONCURRENT_TRANSFORMS = 2;
+// Fast container-local /tmp disk cache (strictly disabled in NODE_ENV=test so Phase 5
+// cold-restart storage tests exercise real Cloud Storage hits cleanly).
+const DISK_CACHE_DIR = path.join(os.tmpdir(), "brokr-public-media-cache");
+const DISK_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+let diskCacheInitialized = false;
+
+function isDiskCacheEnabled(): boolean {
+  return process.env.NODE_ENV !== "test";
+}
+
+function getDiskCacheFilePath(fullCacheKey: string, preferWebp: boolean): string {
+  const hash = crypto.createHash("sha256").update(fullCacheKey).digest("hex").slice(0, 32);
+  const ext = preferWebp ? "webp" : "jpg";
+  return path.join(DISK_CACHE_DIR, `${hash}.${ext}`);
+}
+
+function readDiskCachedPublicImage(
+  fullCacheKey: string,
+  preferWebp: boolean
+): { buffer: Buffer; mimeType: string } | null {
+  if (!isDiskCacheEnabled()) return null;
+  try {
+    const filePath = getDiskCacheFilePath(fullCacheKey, preferWebp);
+    if (!fs.existsSync(filePath)) return null;
+    const stat = fs.statSync(filePath);
+    if (stat.size <= 0 || Date.now() - stat.mtimeMs > DISK_CACHE_TTL_MS) {
+      fs.unlink(filePath, () => {});
+      return null;
+    }
+    const buffer = fs.readFileSync(filePath);
+    if (!buffer || buffer.length === 0) return null;
+    const mimeType = preferWebp ? "image/webp" : "image/jpeg";
+    return { buffer, mimeType };
+  } catch {
+    return null;
+  }
+}
+
+function writeDiskCachedPublicImage(fullCacheKey: string, buffer: Buffer, mimeType: string): void {
+  if (!isDiskCacheEnabled() || !buffer || buffer.length === 0) return;
+  try {
+    if (!diskCacheInitialized) {
+      fs.mkdirSync(DISK_CACHE_DIR, { recursive: true });
+      diskCacheInitialized = true;
+    }
+    const preferWebp = mimeType === "image/webp";
+    const filePath = getDiskCacheFilePath(fullCacheKey, preferWebp);
+    const tmpPath = `${filePath}.${process.pid}.tmp`;
+    fs.writeFile(tmpPath, buffer, (err) => {
+      if (err) return;
+      fs.rename(tmpPath, filePath, () => {});
+    });
+  } catch {
+    // Non-fatal disk cache write failure
+  }
+}
+
+function putProtectedMemoryCache(fullCacheKey: string, buffer: Buffer, mimeType: string): void {
+  const existing = protectedImageCache.get(fullCacheKey);
+  if (existing) {
+    protectedCacheBytes = Math.max(0, protectedCacheBytes - existing.buffer.length);
+    protectedImageCache.delete(fullCacheKey);
+  }
+  while (
+    protectedImageCache.size >= PROTECTED_CACHE_MAX ||
+    (protectedCacheBytes + buffer.length > PROTECTED_CACHE_MAX_BYTES && protectedImageCache.size > 0)
+  ) {
+    const oldestKey = protectedImageCache.keys().next().value;
+    if (!oldestKey) break;
+    const oldestVal = protectedImageCache.get(oldestKey);
+    if (oldestVal) {
+      protectedCacheBytes = Math.max(0, protectedCacheBytes - oldestVal.buffer.length);
+    }
+    protectedImageCache.delete(oldestKey);
+  }
+  protectedImageCache.set(fullCacheKey, {
+    buffer,
+    mimeType,
+    ts: Date.now(),
+  });
+  protectedCacheBytes += buffer.length;
+}
+
+// Bounded concurrency for sharp/libvips transforms (fast & low memory)
+const MAX_CONCURRENT_TRANSFORMS = 6;
 let activeTransforms = 0;
 const transformWaitQueue: Array<() => void> = [];
 
@@ -111,7 +196,7 @@ export function getCachedProtectedPublicImage(
 }
 
 /**
- * Checks bounded RAM cache first, then persistent Cloud Storage under
+ * Checks bounded RAM cache first, then fast container /tmp cache, then persistent Cloud Storage under
  * `public/shares/{propertyCode}/gallery/{hash}_w{width}.{webp|jpg}` so cold server
  * restarts serve already-generated public gallery images with 0 transforms and 0 upstream fetches.
  */
@@ -130,6 +215,12 @@ export async function getPersistedProtectedPublicImage(params: {
     return { buffer: mem.buffer, mimeType: mem.mimeType, fromStorage: false };
   }
 
+  const diskHit = readDiskCachedPublicImage(fullCacheKey, preferWebp);
+  if (diskHit) {
+    putProtectedMemoryCache(fullCacheKey, diskHit.buffer, diskHit.mimeType);
+    return { buffer: diskHit.buffer, mimeType: diskHit.mimeType, fromStorage: false };
+  }
+
   const persisted = await MediaPipelineService.getPersistedPublicShareVariant({
     shareCode: params.propertyCode || "BROKR",
     sourceKey: params.cacheKey,
@@ -138,21 +229,15 @@ export async function getPersistedProtectedPublicImage(params: {
   });
   if (!persisted) return null;
 
-  if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
-    const oldestKey = protectedImageCache.keys().next().value;
-    if (oldestKey) protectedImageCache.delete(oldestKey);
-  }
-  protectedImageCache.set(fullCacheKey, {
-    buffer: persisted.buffer,
-    mimeType: persisted.mimeType,
-    ts: Date.now(),
-  });
+  putProtectedMemoryCache(fullCacheKey, persisted.buffer, persisted.mimeType);
+  writeDiskCachedPublicImage(fullCacheKey, persisted.buffer, persisted.mimeType);
   return { buffer: persisted.buffer, mimeType: persisted.mimeType, fromStorage: true };
 }
 
 export function clearProtectedMemoryCacheForTests(): void {
   protectedImageCache.clear();
   pendingProtectedBuilds.clear();
+  protectedCacheBytes = 0;
 }
 
 function pruneTokenCounts() {
@@ -198,19 +283,41 @@ export function createPublicImageToken(params: {
   viewerSid: string;
   viewerStamp: string;
   ttlMs?: number;
+  deterministic?: boolean;
 }): string {
   const storedSource = params.sourceUrl.startsWith("data:")
     ? registerInlinePublicDataUrl(params.sourceUrl)
     : params.sourceUrl;
 
-  const payload: PublicImageTokenPayload = {
-    u: storedSource,
-    p: params.propertyId,
-    s: params.viewerSid,
-    st: params.viewerStamp,
-    exp: Date.now() + (params.ttlMs ?? 10 * 60 * 1000),
-    jti: crypto.randomBytes(8).toString("hex"),
-  };
+  let payload: PublicImageTokenPayload;
+  if (params.deterministic) {
+    // 24-hour UTC epoch bucket so every visitor & reload gets the exact same cacheable HMAC-signed URL
+    // (valid for 24h–48h, automatically rotating daily without breaking browser caching).
+    const bucketMs = 24 * 60 * 60 * 1000;
+    const bucketEnd = (Math.floor(Date.now() / bucketMs) + 2) * bucketMs;
+    const deterministicJti = crypto
+      .createHash("sha256")
+      .update(`${params.propertyId}|${storedSource}|${bucketEnd}`)
+      .digest("hex")
+      .slice(0, 16);
+    payload = {
+      u: storedSource,
+      p: params.propertyId,
+      s: "pub",
+      st: "PUBLIC",
+      exp: bucketEnd,
+      jti: deterministicJti,
+    };
+  } else {
+    payload = {
+      u: storedSource,
+      p: params.propertyId,
+      s: params.viewerSid,
+      st: params.viewerStamp,
+      exp: Date.now() + (params.ttlMs ?? 10 * 60 * 1000),
+      jti: crypto.randomBytes(8).toString("hex"),
+    };
+  }
   const payloadB64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
   const sigB64 = crypto
     .createHmac("sha256", RUNTIME_SECRET)
@@ -259,12 +366,16 @@ export function verifyPublicImageToken(
     return { valid: false, reason: "Image token expired", status: 403 };
   }
 
-  pruneTokenCounts();
-  const prev = tokenFetchCounts.get(payload.jti) || { count: 0, exp: payload.exp };
-  if (prev.count >= TOKEN_MAX_FETCHES) {
-    return { valid: false, reason: "Image token fetch limit exceeded", status: 429 };
+  // Deterministic shared public tokens are rate-limited per IP by proxyImageLimiter;
+  // per-jti fetch counters only apply to per-session legacy tokens.
+  if (payload.s !== "pub") {
+    pruneTokenCounts();
+    const prev = tokenFetchCounts.get(payload.jti) || { count: 0, exp: payload.exp };
+    if (prev.count >= TOKEN_MAX_FETCHES) {
+      return { valid: false, reason: "Image token fetch limit exceeded", status: 429 };
+    }
+    tokenFetchCounts.set(payload.jti, { count: prev.count + 1, exp: payload.exp });
   }
-  tokenFetchCounts.set(payload.jti, { count: prev.count + 1, exp: payload.exp });
 
   return { valid: true, payload };
 }
@@ -416,7 +527,13 @@ export async function applyPublicImageProtections(
       return { buffer: cachedInside.buffer, mimeType: cachedInside.mimeType };
     }
 
-    // Check persistent Cloud Storage before running ImageMagick/Jimp (survives cold restarts)
+    const diskHitInside = readDiskCachedPublicImage(fullCacheKey, preferWebp);
+    if (diskHitInside) {
+      putProtectedMemoryCache(fullCacheKey, diskHitInside.buffer, diskHitInside.mimeType);
+      return diskHitInside;
+    }
+
+    // Check persistent Cloud Storage before running sharp/ImageMagick/Jimp (survives cold restarts)
     const persisted = await MediaPipelineService.getPersistedPublicShareVariant({
       shareCode: options.propertyCode || "BROKR",
       sourceKey: options.cacheKey,
@@ -424,15 +541,8 @@ export async function applyPublicImageProtections(
       preferWebp,
     });
     if (persisted && persisted.buffer.length > 0) {
-      if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
-        const oldestKey = protectedImageCache.keys().next().value;
-        if (oldestKey) protectedImageCache.delete(oldestKey);
-      }
-      protectedImageCache.set(fullCacheKey, {
-        buffer: persisted.buffer,
-        mimeType: persisted.mimeType,
-        ts: Date.now(),
-      });
+      putProtectedMemoryCache(fullCacheKey, persisted.buffer, persisted.mimeType);
+      writeDiskCachedPublicImage(fullCacheKey, persisted.buffer, persisted.mimeType);
       return { buffer: persisted.buffer, mimeType: persisted.mimeType };
     }
 
@@ -448,7 +558,7 @@ export async function applyPublicImageProtections(
         targetWidth: capWidth,
         preferWebp,
         forceJpeg: !preferWebp,
-        quality: preferWebp ? 86 : 88,
+        quality: preferWebp ? 84 : 88,
         cacheKey: fullCacheKey,
       });
       outBuffer = resized.data;
@@ -476,15 +586,8 @@ export async function applyPublicImageProtections(
       mimeType: outMime,
     });
 
-    if (protectedImageCache.size >= PROTECTED_CACHE_MAX) {
-      const oldestKey = protectedImageCache.keys().next().value;
-      if (oldestKey) protectedImageCache.delete(oldestKey);
-    }
-    protectedImageCache.set(fullCacheKey, {
-      buffer: outBuffer,
-      mimeType: outMime,
-      ts: Date.now(),
-    });
+    putProtectedMemoryCache(fullCacheKey, outBuffer, outMime);
+    writeDiskCachedPublicImage(fullCacheKey, outBuffer, outMime);
 
     return { buffer: outBuffer, mimeType: outMime };
   });

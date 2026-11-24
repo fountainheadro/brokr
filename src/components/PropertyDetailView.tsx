@@ -62,7 +62,7 @@ import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUti
 import { regeneratePropertyImages } from "../utils/regeneratePropertyImages";
 import { auth } from "../lib/firebase";
 import { getApiAuthHeaders } from "../lib/apiAuth";
-import { ProtectedPublicImage } from "./ProtectedPublicImage";
+import { ProtectedPublicImage, prefetchProtectedPublicImage } from "./ProtectedPublicImage";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -1324,6 +1324,17 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
   }, [galleryImages.length, selectedPhotoIndex]);
 
+  // Silently prefetch adjacent lightbox photos so clicking Next / Prev is instantaneous
+  useEffect(() => {
+    if (!isGalleryOpen || !isPublicShared || galleryImages.length <= 1) return;
+    const nextIdx = selectedPhotoIndex >= galleryImages.length - 1 ? 0 : selectedPhotoIndex + 1;
+    const prevIdx = selectedPhotoIndex <= 0 ? galleryImages.length - 1 : selectedPhotoIndex - 1;
+    const nextUrl = galleryImages[nextIdx] ? getThumbnailImageUrl(galleryImages[nextIdx], 1280) : "";
+    const prevUrl = galleryImages[prevIdx] ? getThumbnailImageUrl(galleryImages[prevIdx], 1280) : "";
+    if (nextUrl) prefetchProtectedPublicImage(nextUrl, "normal");
+    if (prevUrl && prevIdx !== nextIdx) prefetchProtectedPublicImage(prevUrl, "normal");
+  }, [isGalleryOpen, isPublicShared, selectedPhotoIndex, galleryImages]);
+
   useEffect(() => {
     const page = Math.floor(carouselIndex / 4);
     if (page !== slotPage) {
@@ -1996,7 +2007,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 >
                   {isPublicShared ? (
                     <ProtectedPublicImage
-                      src={getThumbnailImageUrl(allImages[0], 1000)}
+                      src={getThumbnailImageUrl(allImages[0], 1280)}
                       alt={`${displayTitle} - foto principală`}
                       fit="cover"
                       priority="high"
@@ -2022,7 +2033,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   >
                     {isPublicShared ? (
                       <ProtectedPublicImage
-                        src={getThumbnailImageUrl(allImages[1] || allImages[0], 560)}
+                        src={getThumbnailImageUrl(allImages[1] || allImages[0], allImages[1] ? 640 : 1280)}
                         alt={`${displayTitle} - foto 2`}
                         fit="cover"
                         onAuthExpired={onRefreshPublicProperty}
@@ -2044,7 +2055,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   >
                     {isPublicShared ? (
                       <ProtectedPublicImage
-                        src={getThumbnailImageUrl(allImages[2] || allImages[0], 560)}
+                        src={getThumbnailImageUrl(allImages[2] || allImages[0], allImages[2] ? 640 : 1280)}
                         alt={`${displayTitle} - foto 3`}
                         fit="cover"
                         onAuthExpired={onRefreshPublicProperty}
@@ -2070,7 +2081,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   >
                     {isPublicShared ? (
                       <ProtectedPublicImage
-                        src={getThumbnailImageUrl(allImages[3] || allImages[0], 560)}
+                        src={getThumbnailImageUrl(allImages[3] || allImages[0], allImages[3] ? 640 : 1280)}
                         alt={`${displayTitle} - foto 4`}
                         fit="cover"
                         onAuthExpired={onRefreshPublicProperty}
@@ -2092,7 +2103,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   >
                     {isPublicShared ? (
                       <ProtectedPublicImage
-                        src={getThumbnailImageUrl(allImages[4] || allImages[0], 560)}
+                        src={getThumbnailImageUrl(allImages[4] || allImages[0], allImages[4] ? 640 : 1280)}
                         alt={`${displayTitle} - foto 5`}
                         fit="cover"
                         onAuthExpired={onRefreshPublicProperty}
@@ -3219,7 +3230,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             {isPublicShared ? (
               <div className="w-full h-full max-w-[90vw] max-h-full">
                 <ProtectedPublicImage
-                  src={getThumbnailImageUrl(galleryImages[selectedPhotoIndex] || galleryImages[0], 1600)}
+                  src={getThumbnailImageUrl(galleryImages[selectedPhotoIndex] || galleryImages[0], 1280)}
                   alt={`${displayTitle} - ${selectedPhotoIndex + 1}`}
                   fit="contain"
                   priority="high"
@@ -3275,7 +3286,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               >
                 {isPublicShared ? (
                   <ProtectedPublicImage
-                    src={getThumbnailImageUrl(img, 140)}
+                    src={getThumbnailImageUrl(img, idx === 0 ? 1280 : 640)}
                     alt={`thumb-${idx}`}
                     fit="cover"
                     lazy={true}

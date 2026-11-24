@@ -1,4 +1,5 @@
 import { spawn } from "child_process";
+import sharp from "sharp";
 import { defaultFormats, defaultPlugins } from "jimp";
 import { createJimp } from "@jimp/core";
 import webp from "@jimp/wasm-webp";
@@ -7,6 +8,10 @@ const Jimp = createJimp({
   formats: [...defaultFormats, webp],
   plugins: defaultPlugins,
 });
+
+// Keep sharp's internal libvips cache lean on small containers while staying blazing fast
+sharp.cache({ memory: 32, files: 0, items: 64 });
+sharp.concurrency(2);
 
 const THUMBNAIL_WIDTH_BUCKETS = [160, 240, 360, 480, 640, 800, 1000, 1280, 1600] as const;
 
@@ -95,17 +100,29 @@ export interface ThumbnailResult {
 const thumbnailCache = new Map<string, ThumbnailResult>();
 const pendingThumbnails = new Map<string, Promise<ThumbnailResult>>();
 const MAX_THUMBNAIL_CACHE = 800;
+const MAX_THUMBNAIL_CACHE_BYTES = 40 * 1024 * 1024; // 40 MB
+let thumbnailCacheBytes = 0;
 
 function setThumbnailCache(key: string, val: ThumbnailResult) {
-  if (thumbnailCache.size >= MAX_THUMBNAIL_CACHE) {
-    const keys = thumbnailCache.keys();
-    for (let i = 0; i < 150; i++) {
-      const next = keys.next();
-      if (next.done) break;
-      thumbnailCache.delete(next.value);
+  const existing = thumbnailCache.get(key);
+  if (existing) {
+    thumbnailCacheBytes = Math.max(0, thumbnailCacheBytes - existing.data.length);
+    thumbnailCache.delete(key);
+  }
+  while (
+    thumbnailCache.size >= MAX_THUMBNAIL_CACHE ||
+    (thumbnailCacheBytes + val.data.length > MAX_THUMBNAIL_CACHE_BYTES && thumbnailCache.size > 0)
+  ) {
+    const oldestKey = thumbnailCache.keys().next().value;
+    if (!oldestKey) break;
+    const oldestVal = thumbnailCache.get(oldestKey);
+    if (oldestVal) {
+      thumbnailCacheBytes = Math.max(0, thumbnailCacheBytes - oldestVal.data.length);
     }
+    thumbnailCache.delete(oldestKey);
   }
   thumbnailCache.set(key, val);
+  thumbnailCacheBytes += val.data.length;
 }
 
 export function clearThumbnailCacheByPrefix(prefix: string): number {
@@ -113,6 +130,10 @@ export function clearThumbnailCacheByPrefix(prefix: string): number {
   let removed = 0;
   for (const key of Array.from(thumbnailCache.keys())) {
     if (key.startsWith(prefix)) {
+      const val = thumbnailCache.get(key);
+      if (val) {
+        thumbnailCacheBytes = Math.max(0, thumbnailCacheBytes - val.data.length);
+      }
       thumbnailCache.delete(key);
       removed++;
     }
@@ -123,6 +144,7 @@ export function clearThumbnailCacheByPrefix(prefix: string): number {
 export function clearAllThumbnailCache(): number {
   const count = thumbnailCache.size;
   thumbnailCache.clear();
+  thumbnailCacheBytes = 0;
   return count;
 }
 
@@ -151,7 +173,7 @@ export async function createThumbnail(params: {
 
   const outFormat: "jpeg" | "webp" = forceJpeg || !preferWebp ? "jpeg" : "webp";
   const outMime = outFormat === "webp" ? "image/webp" : "image/jpeg";
-  const resolvedQuality = quality ?? (outFormat === "webp" ? 85 : 86);
+  const resolvedQuality = quality ?? (outFormat === "webp" ? 84 : 86);
   const fullCacheKey = cacheKey ? `${cacheKey}::w=${targetWidth}::fmt=${outFormat}::q=${resolvedQuality}` : "";
 
   if (fullCacheKey) {
@@ -163,6 +185,31 @@ export async function createThumbnail(params: {
   }
 
   const work = (async (): Promise<ThumbnailResult> => {
+    // 1. Primary path: native sharp (libvips) — ~15-50ms, strips EXIF by default, minimal RAM
+    try {
+      const pipeline = sharp(buffer, { failOn: "none", limitInputPixels: 40_000_000 })
+        .rotate()
+        .resize({
+          width: targetWidth,
+          withoutEnlargement: true,
+          fit: "inside",
+        });
+
+      const resized =
+        outFormat === "webp"
+          ? await pipeline.webp({ quality: resolvedQuality, effort: 3 }).toBuffer()
+          : await pipeline.jpeg({ quality: resolvedQuality, progressive: true }).toBuffer();
+
+      if (resized && resized.length > 0) {
+        const result: ThumbnailResult = { data: resized, mimeType: outMime };
+        if (fullCacheKey) setThumbnailCache(fullCacheKey, result);
+        return result;
+      }
+    } catch {
+      // Fall through to ImageMagick / Jimp fallback for exotic formats
+    }
+
+    // 2. Fallback: ImageMagick convert CLI (if installed)
     try {
       const outTarget = outFormat === "webp" ? "webp:-" : "jpg:-";
       const args = [
@@ -184,6 +231,7 @@ export async function createThumbnail(params: {
       if (fullCacheKey) setThumbnailCache(fullCacheKey, result);
       return result;
     } catch {
+      // 3. Final fallback: pure-JS Jimp
       try {
         const img = await Jimp.read(buffer);
         if (img.width > targetWidth) {
