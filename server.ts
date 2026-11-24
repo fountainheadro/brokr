@@ -1974,7 +1974,11 @@ Returnează un JSON strict cu următoarele chei:
       return res.send(protectedImg.buffer);
     } catch (err: any) {
       console.warn("[Server] /api/public-image error:", err?.message || err);
-      return res.status(502).json({ error: "Failed to serve protected public image" });
+      const status =
+        err?.statusCode === 404 || err?.statusCode === 403 ? err.statusCode : 502;
+      return res.status(status).json({
+        error: status === 404 ? "Image not found" : "Failed to serve protected public image",
+      });
     }
   });
 

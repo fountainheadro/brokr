@@ -173,6 +173,80 @@ storageRouter.get("/signed", async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/storage/sync-public-media
+ * Tenant-authenticated endpoint ensuring any referenced `/api/storage/media/...` property photos
+ * stored on local disk are replicated into shared Cloud Firestore `public_property_media` so
+ * external share links on other domains/instances load them immediately.
+ */
+storageRouter.post(
+  "/sync-public-media",
+  ...requireTenantContext,
+  async (req: Request, res: Response) => {
+    try {
+      const ctx = req.tenantContext!;
+      const rawUrls = Array.isArray(req.body?.urls) ? req.body.urls : [];
+      const urls = rawUrls
+        .filter((u: unknown): u is string => typeof u === "string" && u.trim().length > 0)
+        .slice(0, 60);
+
+      let syncedCount = 0;
+      for (const rawUrl of urls) {
+        let pathname = rawUrl.trim();
+        if (/^https?:\/\//i.test(pathname)) {
+          try {
+            pathname = new URL(pathname).pathname;
+          } catch {
+            continue;
+          }
+        }
+        if (!pathname.startsWith("/api/storage/media/")) continue;
+
+        const rawSuffix = pathname
+          .replace(/^\/api\/storage\/media\//, "")
+          .split("?")[0]
+          .split("#")[0];
+        const decodedParts = rawSuffix
+          .split("/")
+          .filter(Boolean)
+          .map((seg) => {
+            try {
+              return decodeURIComponent(seg);
+            } catch {
+              return seg;
+            }
+          });
+        const objectKey =
+          decodedParts[0] === "tenants"
+            ? decodedParts.join("/")
+            : decodedParts.length === 4 && decodedParts[1] === "properties"
+              ? `tenants/${decodedParts.join("/")}`
+              : decodedParts.join("/");
+
+        if (!objectKey.startsWith(`tenants/${ctx.tenantId}/properties/`)) {
+          continue;
+        }
+        try {
+          const ok = await CloudStorageService.syncLocalPublicPropertyObjectToFirestore({
+            tenantId: ctx.tenantId,
+            objectKey,
+          });
+          if (ok) syncedCount++;
+        } catch {
+          // Best-effort per object
+        }
+      }
+
+      res.json(createSuccessResponse({ syncedCount, checkedCount: urls.length }));
+    } catch (err: any) {
+      const status = err?.statusCode || 500;
+      res
+        .status(status)
+        .json(createErrorResponse(err?.code || "INTERNAL_ERROR", err?.message || "Eroare internă."));
+    }
+  }
+);
+
+/**
  * POST /api/storage/documents/upload
  * Tenant-authenticated private document upload.
  * Derives tenantId STRICTLY from server-verified req.tenantContext.tenantId.

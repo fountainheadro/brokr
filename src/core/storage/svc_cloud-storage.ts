@@ -4,6 +4,8 @@ import path from "path";
 import crypto from "crypto";
 import axios from "axios";
 import { detectImageMagicBytes } from "../../../server/security/sec_image-validator";
+import { createThumbnail } from "../../../server/utils/img_thumbnail";
+import { PersistentStoreService } from "../database/svc_persistent-store";
 import { AppError, ForbiddenError, NotFoundError } from "../errors/app_error";
 import { GcpAuthService } from "../gcp/svc_gcp-auth";
 import { logger } from "../logger/logger";
@@ -38,17 +40,273 @@ const FORBIDDEN_EXTENSIONS = new Set([
 ]);
 
 export const GCS_STORAGE_SCOPE = "https://www.googleapis.com/auth/devstorage.read_write";
+export const COL_PUBLIC_PROPERTY_MEDIA = "public_property_media";
+const MAX_FIRESTORE_PUBLIC_IMAGE_BYTES = 580_000;
+const PUBLIC_MEDIA_CACHE_MAX = 80;
+const PUBLIC_MEDIA_CACHE_TTL_MS = 30 * 60 * 1000;
 
 /**
  * Validates and uploads/downloads/deletes tenant-scoped files using Google Cloud Storage JSON v1 API
  * (via Application Default Credentials / Service Account / GCP Metadata / GCS Emulator) with strict tenant path isolation
- * and isolated local disk fallback when no live GCS credentials or emulator are configured.
+ * and isolated local disk + shared Firestore public property media persistence when no live GCS credentials or emulator are configured.
  */
 export class CloudStorageService {
   private static ephemeralSigningSecret = crypto.randomBytes(32).toString("hex");
+  private static publicMediaFallbackCache = new Map<
+    string,
+    { buffer: Buffer; mimeType: string; ts: number }
+  >();
 
   public static clearTokenCache(): void {
     GcpAuthService.clearTokenCache();
+  }
+
+  public static clearPublicMediaFallbackCacheForTests(): void {
+    this.publicMediaFallbackCache.clear();
+  }
+
+  public static buildPublicPropertyMediaDocId(objectKey: string): string {
+    return `pm_${crypto.createHash("sha256").update(objectKey).digest("hex").slice(0, 40)}`;
+  }
+
+  private static setPublicMediaFallbackCache(
+    objectKey: string,
+    entry: { buffer: Buffer; mimeType: string }
+  ): void {
+    if (this.publicMediaFallbackCache.size >= PUBLIC_MEDIA_CACHE_MAX) {
+      const oldestKey = this.publicMediaFallbackCache.keys().next().value;
+      if (oldestKey) {
+        this.publicMediaFallbackCache.delete(oldestKey);
+      }
+    }
+    this.publicMediaFallbackCache.set(objectKey, {
+      buffer: entry.buffer,
+      mimeType: entry.mimeType,
+      ts: Date.now(),
+    });
+  }
+
+  private static async preparePublicImageForFirestore(
+    buffer: Buffer,
+    mimeType: string
+  ): Promise<{ buffer: Buffer; mimeType: string } | null> {
+    if (
+      buffer.length <= MAX_FIRESTORE_PUBLIC_IMAGE_BYTES &&
+      (mimeType === "image/jpeg" || mimeType === "image/png" || mimeType === "image/webp")
+    ) {
+      return { buffer, mimeType };
+    }
+
+    const attempts: Array<{ targetWidth: number; quality: number }> = [
+      { targetWidth: 1600, quality: 82 },
+      { targetWidth: 1280, quality: 76 },
+      { targetWidth: 1024, quality: 68 },
+      { targetWidth: 800, quality: 60 },
+    ];
+
+    let smallest: { buffer: Buffer; mimeType: string } | null = null;
+    for (const attempt of attempts) {
+      try {
+        const thumb = await createThumbnail({
+          buffer,
+          mimeType,
+          targetWidth: attempt.targetWidth,
+          preferWebp: false,
+          quality: attempt.quality,
+        });
+        const detected = detectImageMagicBytes(thumb.data);
+        const outMime = detected?.mime || thumb.mimeType || "image/jpeg";
+        if (!smallest || thumb.data.length < smallest.buffer.length) {
+          smallest = { buffer: thumb.data, mimeType: outMime };
+        }
+        if (thumb.data.length <= MAX_FIRESTORE_PUBLIC_IMAGE_BYTES) {
+          return { buffer: thumb.data, mimeType: outMime };
+        }
+      } catch {
+        // Try next downscale step
+      }
+    }
+
+    if (smallest && smallest.buffer.length <= 615_000) {
+      return smallest;
+    }
+    return null;
+  }
+
+  public static async persistPublicPropertyMediaToFirestore(params: {
+    objectKey: string;
+    tenantId: string;
+    entityId: string;
+    buffer: Buffer;
+    mimeType: string;
+  }): Promise<boolean> {
+    const rawKey = String(params.objectKey || "").trim();
+    if (
+      !/^tenants\/[a-zA-Z0-9_.\-]+\/properties\/[a-zA-Z0-9_.\-]+\/[a-zA-Z0-9_.\-]+$/.test(rawKey)
+    ) {
+      return false;
+    }
+
+    const prepared = await this.preparePublicImageForFirestore(params.buffer, params.mimeType);
+    if (!prepared) {
+      logger.warn("Imaginea proprietății nu a putut fi comprimată sub limita Firestore", {
+        module: "cloud-storage",
+        tenantId: params.tenantId,
+      });
+      return false;
+    }
+
+    const dataBase64 = prepared.buffer.toString("base64");
+    if (dataBase64.length > 820_000) {
+      return false;
+    }
+
+    const docId = this.buildPublicPropertyMediaDocId(rawKey);
+    const payload = {
+      objectKey: rawKey,
+      tenantId: params.tenantId,
+      entityId: params.entityId,
+      mimeType: prepared.mimeType,
+      dataBase64,
+      sizeBytes: prepared.buffer.length,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (process.env.NODE_ENV === "test") {
+      PersistentStoreService.set(COL_PUBLIC_PROPERTY_MEDIA, docId, payload);
+      this.setPublicMediaFallbackCache(rawKey, prepared);
+      return true;
+    }
+
+    if (!PersistentStoreService.isRemoteFirestoreConfigured()) {
+      return false;
+    }
+
+    await PersistentStoreService.remoteSet(COL_PUBLIC_PROPERTY_MEDIA, docId, payload);
+    this.setPublicMediaFallbackCache(rawKey, prepared);
+    return true;
+  }
+
+  public static async fetchPublicPropertyMediaFromFirestore(
+    objectKey: string
+  ): Promise<{ buffer: Buffer; mimeType: string } | null> {
+    const rawKey = String(objectKey || "").trim();
+    if (
+      !/^tenants\/[a-zA-Z0-9_.\-]+\/properties\/[a-zA-Z0-9_.\-]+\/[a-zA-Z0-9_.\-]+$/.test(rawKey)
+    ) {
+      return null;
+    }
+
+    const cached = this.publicMediaFallbackCache.get(rawKey);
+    if (cached && Date.now() - cached.ts < PUBLIC_MEDIA_CACHE_TTL_MS) {
+      return { buffer: cached.buffer, mimeType: cached.mimeType };
+    }
+
+    const docId = this.buildPublicPropertyMediaDocId(rawKey);
+    let decoded: Record<string, any> | null = null;
+
+    if (process.env.NODE_ENV === "test") {
+      decoded = PersistentStoreService.get<Record<string, any>>(COL_PUBLIC_PROPERTY_MEDIA, docId);
+    } else {
+      const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
+      const docUrl = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+        projectId
+      )}/databases/${encodeURIComponent(
+        databaseId
+      )}/documents/${COL_PUBLIC_PROPERTY_MEDIA}/${encodeURIComponent(docId)}`;
+
+      try {
+        const res = await axios.get(docUrl, { timeout: 10_000 });
+        if (res.data?.fields) {
+          decoded = PersistentStoreService.decodeDocument(res.data);
+        }
+      } catch (err: any) {
+        if (err?.response?.status !== 404) {
+          logger.warn("Eroare la citirea imaginii publice din Firestore fallback", {
+            module: "cloud-storage",
+            statusCode: err?.response?.status,
+          });
+        }
+        return null;
+      }
+    }
+
+    if (
+      !decoded ||
+      decoded.objectKey !== rawKey ||
+      typeof decoded.dataBase64 !== "string" ||
+      decoded.dataBase64.length < 16
+    ) {
+      return null;
+    }
+
+    const buffer = Buffer.from(decoded.dataBase64, "base64");
+    const magic = detectImageMagicBytes(buffer);
+    if (!magic) {
+      return null;
+    }
+
+    const entry = { buffer, mimeType: magic.mime };
+    this.setPublicMediaFallbackCache(rawKey, entry);
+
+    // Best-effort local disk warm-backfill when local storage is enabled (non-production)
+    if (this.isLocalFallbackAllowed() && this.getActiveBackendKind() === "local_isolated") {
+      try {
+        const localRoot = this.getLocalStorageRoot();
+        const targetPath = path.resolve(localRoot, rawKey);
+        if (targetPath.startsWith(localRoot + path.sep) && !fs.existsSync(targetPath)) {
+          fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+          const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+          fs.writeFileSync(tmpPath, buffer);
+          fs.renameSync(tmpPath, targetPath);
+        }
+      } catch {
+        // Non-fatal local cache backfill error
+      }
+    }
+
+    return entry;
+  }
+
+  public static async syncLocalPublicPropertyObjectToFirestore(params: {
+    tenantId: string;
+    objectKey: string;
+  }): Promise<boolean> {
+    this.assertObjectKeyBelongsToTenant(params.tenantId, params.objectKey);
+    const parts = params.objectKey.split("/");
+    if (parts.length !== 5 || parts[2] !== "properties") {
+      return false;
+    }
+
+    let buffer: Buffer | null = null;
+    let mimeType = "image/jpeg";
+
+    const cached = this.publicMediaFallbackCache.get(params.objectKey);
+    if (cached && cached.buffer.length > 0) {
+      buffer = cached.buffer;
+      mimeType = cached.mimeType;
+    } else {
+      const localRoot = this.getLocalStorageRoot();
+      const targetPath = path.resolve(localRoot, params.objectKey);
+      if (targetPath.startsWith(localRoot + path.sep) && fs.existsSync(targetPath)) {
+        buffer = fs.readFileSync(targetPath);
+        const magic = detectImageMagicBytes(buffer);
+        if (!magic) return false;
+        mimeType = magic.mime;
+      }
+    }
+
+    if (!buffer || buffer.length === 0) {
+      return false;
+    }
+
+    return this.persistPublicPropertyMediaToFirestore({
+      objectKey: params.objectKey,
+      tenantId: params.tenantId,
+      entityId: parts[3],
+      buffer,
+      mimeType,
+    });
   }
 
   public static getBucketName(): string {
@@ -627,20 +885,59 @@ export class CloudStorageService {
         throw safeErr;
       }
     } else {
-      this.assertLocalFallbackAllowed("uploadObject");
-      const localRoot = this.getLocalStorageRoot();
-      const targetPath = path.resolve(localRoot, objectKey);
-      if (!targetPath.startsWith(localRoot + path.sep)) {
-        throw new AppError({
-          message: "Cale țintă de stocare invalidă.",
-          code: "VALIDATION_ERROR",
-          statusCode: 400,
+      const canPersistPublicPropertyToFirestore =
+        input.entityType === "properties" &&
+        visibility === "public_listing" &&
+        (process.env.NODE_ENV === "test" || PersistentStoreService.isRemoteFirestoreConfigured());
+
+      if (this.isLocalFallbackAllowed()) {
+        const localRoot = this.getLocalStorageRoot();
+        const targetPath = path.resolve(localRoot, objectKey);
+        if (!targetPath.startsWith(localRoot + path.sep)) {
+          throw new AppError({
+            message: "Cale țintă de stocare invalidă.",
+            code: "VALIDATION_ERROR",
+            statusCode: 400,
+          });
+        }
+        fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+        const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
+        fs.writeFileSync(tmpPath, input.buffer);
+        fs.renameSync(tmpPath, targetPath);
+
+        if (canPersistPublicPropertyToFirestore) {
+          try {
+            await this.persistPublicPropertyMediaToFirestore({
+              objectKey,
+              tenantId: input.tenantId,
+              entityId: input.entityId,
+              buffer: input.buffer,
+              mimeType,
+            });
+          } catch (syncErr: any) {
+            logger.warn("Sincronizarea imaginii publice în Firestore a eșuat (păstrată local)", {
+              module: "cloud-storage",
+              tenantId: input.tenantId,
+              reason: syncErr?.message || String(syncErr),
+            });
+          }
+        }
+      } else if (canPersistPublicPropertyToFirestore && process.env.NODE_ENV !== "test") {
+        // Production without GCS SA but with verified Firebase Auth user token:
+        // persist strictly to shared Cloud Firestore without touching ephemeral container disk.
+        const persisted = await this.persistPublicPropertyMediaToFirestore({
+          objectKey,
+          tenantId: input.tenantId,
+          entityId: input.entityId,
+          buffer: input.buffer,
+          mimeType,
         });
+        if (!persisted) {
+          this.assertLocalFallbackAllowed("uploadObject");
+        }
+      } else {
+        this.assertLocalFallbackAllowed("uploadObject");
       }
-      fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-      const tmpPath = `${targetPath}.${process.pid}.${Date.now()}.tmp`;
-      fs.writeFileSync(tmpPath, input.buffer);
-      fs.renameSync(tmpPath, targetPath);
     }
 
     const now = new Date().toISOString();
@@ -785,23 +1082,60 @@ export class CloudStorageService {
         buffer = Buffer.from(res.data);
       } catch (err: any) {
         if (err?.response?.status === 404) {
-          throw new NotFoundError("Fișier Cloud Storage", params.objectKey);
+          if (
+            params.allowPublicListing &&
+            meta.entityType === "properties" &&
+            meta.visibility === "public_listing" &&
+            !StorageMetadataRepository.isDeleted(meta.objectKey)
+          ) {
+            const firestoreMedia = await this.fetchPublicPropertyMediaFromFirestore(meta.objectKey);
+            if (firestoreMedia) {
+              buffer = firestoreMedia.buffer;
+              meta = {
+                ...meta,
+                mimeType: firestoreMedia.mimeType,
+                sizeBytes: firestoreMedia.buffer.length,
+              };
+            } else {
+              throw new NotFoundError("Fișier Cloud Storage", params.objectKey);
+            }
+          } else {
+            throw new NotFoundError("Fișier Cloud Storage", params.objectKey);
+          }
+        } else {
+          const safeErr = GcpAuthService.sanitizeGcpHttpError(err, "Cloud Storage", "downloadObject");
+          logger.error("Eroare la descărcarea fișierului din Cloud Storage", safeErr, {
+            module: "cloud-storage",
+            tenantId: params.tenantId,
+            statusCode: safeErr.statusCode,
+          });
+          throw safeErr;
         }
-        const safeErr = GcpAuthService.sanitizeGcpHttpError(err, "Cloud Storage", "downloadObject");
-        logger.error("Eroare la descărcarea fișierului din Cloud Storage", safeErr, {
-          module: "cloud-storage",
-          tenantId: params.tenantId,
-          statusCode: safeErr.statusCode,
-        });
-        throw safeErr;
       }
     } else {
       const localRoot = this.getLocalStorageRoot();
       const targetPath = path.resolve(localRoot, meta.objectKey);
-      if (!targetPath.startsWith(localRoot + path.sep) || !fs.existsSync(targetPath)) {
+      if (targetPath.startsWith(localRoot + path.sep) && fs.existsSync(targetPath)) {
+        buffer = fs.readFileSync(targetPath);
+      } else if (
+        params.allowPublicListing &&
+        meta.entityType === "properties" &&
+        meta.visibility === "public_listing" &&
+        !StorageMetadataRepository.isDeleted(meta.objectKey)
+      ) {
+        const firestoreMedia = await this.fetchPublicPropertyMediaFromFirestore(meta.objectKey);
+        if (!firestoreMedia) {
+          throw new NotFoundError("Fișier stocat local", params.objectKey);
+        }
+        buffer = firestoreMedia.buffer;
+        meta = {
+          ...meta,
+          mimeType: firestoreMedia.mimeType,
+          sizeBytes: firestoreMedia.buffer.length,
+        };
+      } else {
         throw new NotFoundError("Fișier stocat local", params.objectKey);
       }
-      buffer = fs.readFileSync(targetPath);
     }
 
     if (isStatelessPublicPropertyFallback) {
@@ -868,6 +1202,16 @@ export class CloudStorageService {
       const targetPath = path.resolve(localRoot, meta.objectKey);
       if (targetPath.startsWith(localRoot + path.sep) && fs.existsSync(targetPath)) {
         fs.unlinkSync(targetPath);
+      }
+    }
+
+    this.publicMediaFallbackCache.delete(meta.objectKey);
+    if (meta.entityType === "properties") {
+      const docId = this.buildPublicPropertyMediaDocId(meta.objectKey);
+      if (process.env.NODE_ENV === "test") {
+        PersistentStoreService.delete(COL_PUBLIC_PROPERTY_MEDIA, docId);
+      } else if (PersistentStoreService.isRemoteFirestoreConfigured()) {
+        void PersistentStoreService.remoteDelete(COL_PUBLIC_PROPERTY_MEDIA, docId).catch(() => {});
       }
     }
 

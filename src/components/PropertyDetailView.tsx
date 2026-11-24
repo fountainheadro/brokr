@@ -1462,6 +1462,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         ...localPatch,
       };
 
+      // Ensure any locally uploaded /api/storage/media/ photos are replicated to shared Firestore
+      // so external share pages on other domains/instances load them immediately.
+      const storageMediaUrls = finalStoredPhotos.filter((u) => u.includes("/api/storage/media/"));
+      if (storageMediaUrls.length > 0) {
+        try {
+          const syncHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
+          await fetch("/api/storage/sync-public-media", {
+            method: "POST",
+            headers: syncHeaders,
+            body: JSON.stringify({ urls: storageMediaUrls }),
+          });
+        } catch {
+          // Non-fatal; fresh uploads already sync inside /api/upload-photo
+        }
+      }
+
       // Immediately synchronize the sanitized public share snapshot so external share links
       // reflect the exact shuffled order, deletions, and newly uploaded images right away.
       await publishPublicShareSnapshot(mergedLead, {

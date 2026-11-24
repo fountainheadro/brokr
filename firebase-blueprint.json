@@ -495,12 +495,36 @@
         "timestamp": { "type": "string" }
       },
       "required": ["callSid", "tenantId", "seq", "speaker", "text"]
+    },
+    "PublicPropertyMedia": {
+      "title": "Public Property Media Blob",
+      "description": "Cross-instance web-optimized public property image persisted in Firestore when external GCS credentials are unavailable",
+      "type": "object",
+      "properties": {
+        "objectKey": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 512,
+          "pattern": "^tenants/[a-zA-Z0-9_.\\-]+/properties/[a-zA-Z0-9_.\\-]+/[a-zA-Z0-9_.\\-]+$"
+        },
+        "tenantId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "entityId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "mimeType": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"] },
+        "dataBase64": { "type": "string", "minLength": 16, "maxLength": 820000 },
+        "sizeBytes": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
+      },
+      "required": ["objectKey", "tenantId", "entityId", "mimeType", "dataBase64", "sizeBytes", "updatedAt"]
     }
   },
   "firestore": {
     "public_shares/{shareId}": {
       "schema": { "$ref": "PublicShare" },
       "description": "Strictly sanitized PII-free public share snapshots readable by exact shareId without authentication"
+    },
+    "public_property_media/{mediaId}": {
+      "schema": { "$ref": "PublicPropertyMedia" },
+      "description": "Web-optimized public property listing images readable by deterministic SHA-256 mediaId across instances (never private documents)"
     },
     "platform_shared_leads/{leadId}": {
       "schema": { "$ref": "SharedLead" },

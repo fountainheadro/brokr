@@ -401,6 +401,45 @@ service cloud.firestore {
       allow delete: if isPlatformAdmin() && isValidId(shareId);
     }
 
+    function isValidPublicPropertyMedia(data) {
+      return data.keys().hasAll([
+          'objectKey', 'tenantId', 'entityId', 'mimeType', 'dataBase64', 'sizeBytes', 'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'objectKey', 'tenantId', 'entityId', 'mimeType', 'dataBase64', 'sizeBytes', 'updatedAt'
+        ]) &&
+        data.objectKey is string &&
+        data.objectKey.size() >= 10 &&
+        data.objectKey.size() <= 512 &&
+        data.objectKey.matches('^tenants/[a-zA-Z0-9_.\\-]+/properties/[a-zA-Z0-9_.\\-]+/[a-zA-Z0-9_.\\-]+$') &&
+        data.tenantId is string &&
+        isValidId(data.tenantId) &&
+        data.entityId is string &&
+        isValidId(data.entityId) &&
+        data.mimeType in ['image/jpeg', 'image/png', 'image/webp'] &&
+        data.dataBase64 is string &&
+        data.dataBase64.size() >= 16 &&
+        data.dataBase64.size() <= 820000 &&
+        data.sizeBytes is int &&
+        data.sizeBytes >= 1 &&
+        data.sizeBytes <= 620000 &&
+        data.updatedAt is string &&
+        data.updatedAt.size() <= 64;
+    }
+
+    match /public_property_media/{mediaId} {
+      allow get: if isValidId(mediaId);
+      allow list: if false;
+      allow create, update: if isValidId(mediaId) &&
+        isSignedIn() &&
+        isValidPublicPropertyMedia(request.resource.data) &&
+        (isPlatformAdmin() || isActiveTenantMember(request.resource.data.tenantId));
+      allow delete: if isValidId(mediaId) && (
+        isPlatformAdmin() ||
+        (resource != null && resource.data.tenantId is string && isActiveTenantMember(resource.data.tenantId))
+      );
+    }
+
     match /platform_shared_leads/{leadId} {
       allow get: if isSignedIn() && isValidId(leadId);
       allow list: if isSignedIn();

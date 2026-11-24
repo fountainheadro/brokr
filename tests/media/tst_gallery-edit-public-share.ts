@@ -194,6 +194,30 @@ async function main() {
   assert.ok(coldDl.buffer.length > 0, "Cold multi-instance fallback must still load public property images");
   assert.equal(coldDl.metadata.mimeType, "image/png", "Fallback must verify magic bytes and detect PNG MIME");
 
+  // 4b2. Cross-container / cross-domain simulation (DIFFERENT container: local disk file + RAM cache + metadata ALL missing!)
+  // Must seamlessly recover the uploaded image from shared Firestore `public_property_media`.
+  const fsMod = await import("node:fs");
+  const pathMod = await import("node:path");
+  const localObjPath = pathMod.resolve(CloudStorageService.getLocalStorageRoot(), resolvedObjKey);
+  if (fsMod.existsSync(localObjPath)) {
+    fsMod.unlinkSync(localObjPath);
+  }
+  CloudStorageService.clearPublicMediaFallbackCacheForTests();
+  StorageMetadataRepository.clearAll();
+  const crossContainerDl = await CloudStorageService.downloadObject({
+    objectKey: resolvedObjKey,
+    allowPublicListing: true,
+  });
+  assert.ok(
+    crossContainerDl.buffer.length > 0,
+    "Cross-container fallback MUST load uploaded property photo from shared Firestore even when local container disk has no file"
+  );
+  assert.equal(
+    crossContainerDl.metadata.mimeType,
+    "image/png",
+    "Cross-container fallback must validate image magic bytes"
+  );
+
   // 4c. Security check: private tenant documents MUST NEVER be accessible via allowPublicListing fallback
   let docBlocked = false;
   try {
@@ -205,7 +229,7 @@ async function main() {
     docBlocked = true;
   }
   assert.equal(docBlocked, true, "Private tenant documents must ALWAYS be rejected under allowPublicListing");
-  console.log("  [PASS] 4. Uploaded photos serve via public image pipeline (warm + cold restart) & private docs stay blocked");
+  console.log("  [PASS] 4. Uploaded photos serve via public image pipeline (warm + cold + cross-container Firestore fallback) & private docs stay blocked");
 
   // 5. Verify deleting ALL photos yields an empty gallery (never resurrects stale crmData.imagini)
   const emptiedLead = {
