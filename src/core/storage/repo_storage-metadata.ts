@@ -26,6 +26,14 @@ export class StorageMetadataRepository {
     return meta;
   }
 
+  public static isDeleted(objectKey: string): boolean {
+    const meta = PersistentStoreService.get<StorageObjectMetadata>(
+      COL_STORAGE_OBJECTS,
+      encodeMetaId(objectKey)
+    );
+    return Boolean(meta && meta.deletedAt);
+  }
+
   /**
    * Strict tenant-scoped metadata lookup. Returns null if owned by another tenant or deleted.
    */

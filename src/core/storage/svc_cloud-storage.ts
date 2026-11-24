@@ -682,7 +682,8 @@ export class CloudStorageService {
     tenantId?: string;
     allowPublicListing?: boolean;
   }): Promise<{ buffer: Buffer; metadata: StorageObjectMetadata }> {
-    const meta = StorageMetadataRepository.getByObjectKey(params.objectKey);
+    let meta = StorageMetadataRepository.getByObjectKey(params.objectKey);
+    let isStatelessPublicPropertyFallback = false;
 
     if (params.tenantId) {
       this.assertObjectKeyBelongsToTenant(params.tenantId, params.objectKey);
@@ -690,16 +691,68 @@ export class CloudStorageService {
         throw new NotFoundError("Fișier stocat", params.objectKey);
       }
     } else if (params.allowPublicListing) {
-      if (!meta) {
-        throw new NotFoundError("Fișier stocat", params.objectKey);
-      }
-      if (
-        meta.visibility !== "public_listing" ||
-        meta.entityType !== "properties"
-      ) {
-        throw new ForbiddenError(
-          "Fișierul solicitat este privat și necesită autentificare în cadrul agenției."
-        );
+      if (meta) {
+        if (
+          meta.visibility !== "public_listing" ||
+          meta.entityType !== "properties"
+        ) {
+          throw new ForbiddenError(
+            "Fișierul solicitat este privat și necesită autentificare în cadrul agenției."
+          );
+        }
+      } else {
+        // Never resurrect an object that was explicitly marked deleted
+        if (StorageMetadataRepository.isDeleted(params.objectKey)) {
+          throw new NotFoundError("Fișier stocat", params.objectKey);
+        }
+
+        // Stateless multi-instance / cold-restart fallback STRICTLY for public property images
+        // matching `tenants/{safeTenant}/properties/{safeEntityId}/{safeFileName}` (never `documents`).
+        const rawKey = String(params.objectKey || "").trim();
+        const parts = rawKey.split("/");
+        if (parts.length !== 5 || parts[0] !== "tenants" || parts[2] !== "properties") {
+          throw new NotFoundError("Fișier stocat", params.objectKey);
+        }
+        const safeKey = this.buildTenantObjectKey({
+          tenantId: parts[1],
+          entityType: "properties",
+          entityId: parts[3],
+          fileName: parts[4],
+        });
+        if (safeKey !== rawKey) {
+          throw new NotFoundError("Fișier stocat", params.objectKey);
+        }
+
+        const ext = path.extname(parts[4]).toLowerCase();
+        const guessedMime =
+          ext === ".png"
+            ? "image/png"
+            : ext === ".webp"
+              ? "image/webp"
+              : ext === ".gif"
+                ? "image/gif"
+                : "image/jpeg";
+        const now = new Date().toISOString();
+        meta = {
+          objectKey: safeKey,
+          tenantId: parts[1],
+          entityType: "properties",
+          entityId: parts[3],
+          fileName: parts[4],
+          originalFileName: parts[4],
+          mimeType: guessedMime,
+          sizeBytes: 0,
+          sha256: "",
+          visibility: "public_listing",
+          uploadedByUserId: "system",
+          bucketName: this.getBucketName(),
+          backend: this.getActiveBackendKind(),
+          publicUrl: `/api/storage/media/${safeKey}`,
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+        };
+        isStatelessPublicPropertyFallback = true;
       }
     } else {
       throw new ForbiddenError("Contextul de tenant lipsește pentru accesarea fișierului.");
@@ -749,6 +802,19 @@ export class CloudStorageService {
         throw new NotFoundError("Fișier stocat local", params.objectKey);
       }
       buffer = fs.readFileSync(targetPath);
+    }
+
+    if (isStatelessPublicPropertyFallback) {
+      const magic = detectImageMagicBytes(buffer);
+      if (!magic) {
+        throw new ForbiddenError("Fișierul solicitat nu este o imagine validă.");
+      }
+      meta = {
+        ...meta,
+        mimeType: magic.mime,
+        sizeBytes: buffer.length,
+        sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+      };
     }
 
     return { buffer, metadata: meta };

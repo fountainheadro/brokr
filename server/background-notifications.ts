@@ -40,6 +40,9 @@ const runtimeMirror: NotificationRuntimeMirror = {
   tokens: {},
 };
 
+// In-memory deduplication set used ONLY in single-process local dev without server Firestore ADC.
+const localDispatchedIds = new Set<string>();
+
 interface FirebaseConfig {
   projectId: string;
   appId: string;
@@ -324,6 +327,7 @@ export function clearNotificationMirrorForTests(): void {
   for (const key of Object.keys(runtimeMirror.tokens)) {
     delete runtimeMirror.tokens[key];
   }
+  localDispatchedIds.clear();
   PersistentStoreService.clearCollection(COL_NOTIFICATION_DISPATCHES);
 }
 
@@ -378,16 +382,29 @@ export async function runViewingRemindersTick(options?: {
       const safeDate = `${viewing.date}_${viewing.hour}`.replace(/[^A-Za-z0-9_-]/g, "_");
       const dispatchId = `${safeTenant}__${safeViewing}__${safeDate}__${thresholdKey}`;
 
-      const claimed = await PersistentStoreService.createIfAbsentAsync(
-        COL_NOTIFICATION_DISPATCHES,
-        dispatchId,
-        {
-          tenantId: viewingTenant,
-          viewingId: viewing.id,
-          thresholdKey,
-          sentAt: now.toISOString(),
+      let claimed: boolean;
+      if (process.env.NODE_ENV === "test" || PersistentStoreService.isRemoteFirestoreConfigured()) {
+        claimed = await PersistentStoreService.createIfAbsentAsync(
+          COL_NOTIFICATION_DISPATCHES,
+          dispatchId,
+          {
+            tenantId: viewingTenant,
+            viewingId: viewing.id,
+            thresholdKey,
+            sentAt: now.toISOString(),
+          }
+        );
+      } else {
+        if (localDispatchedIds.has(dispatchId)) {
+          claimed = false;
+        } else {
+          if (localDispatchedIds.size > 5000) {
+            localDispatchedIds.clear();
+          }
+          localDispatchedIds.add(dispatchId);
+          claimed = true;
         }
-      );
+      }
 
       if (!claimed) {
         deduplicatedCount++;

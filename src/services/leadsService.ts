@@ -185,11 +185,25 @@ async function updateOrForkSharedLead(leadId: string, patch: Record<string, any>
     const { isSharedLead: _ignored, ...rest } = shared;
     const forkPayload: Record<string, any> = {
       ...rest,
-      ...patch,
       id: leadId,
       sharedLeadId: shared.id || leadId,
       isSharedLead: false,
     };
+
+    for (const [key, val] of Object.entries(patch || {})) {
+      if (key.includes(".")) {
+        const parts = key.split(".");
+        let curr = forkPayload;
+        for (let i = 0; i < parts.length - 1; i++) {
+          const p = parts[i];
+          curr[p] = curr[p] && typeof curr[p] === "object" ? { ...curr[p] } : {};
+          curr = curr[p];
+        }
+        curr[parts[parts.length - 1]] = val;
+      } else {
+        forkPayload[key] = val;
+      }
+    }
 
     const targetStatus = forkPayload.status;
     if (

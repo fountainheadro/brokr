@@ -6,9 +6,11 @@ import {
   type ShareEntityKind,
 } from "../utils/shareUtils";
 import {
+  extractOrderedPublicImageUrls,
+  getImageIdentityKey,
+  normalizeStoredImageUrl,
   resolvePublicDisplayDescription,
   resolvePublicDisplayTitle,
-  resolvePublicFirstImageUrl,
   shouldUseModifiedAdContent,
 } from "../utils/publicContentUtils";
 import { isSummaryLeadRecord } from "../core/crm/svc_lead-projection";
@@ -135,6 +137,35 @@ function sanitizeExtractedDataForPublicShare(
         cloned.originalDescription = fallbackOrigDesc;
       }
     }
+    // Keep crmData.imagini synchronized with the explicit sanitized gallery so deleted photos
+    // or raw data: URLs never linger in public_shares snapshots.
+    if (cloned.crmData && typeof cloned.crmData === "object" && cloned.crmData.imagini && typeof cloned.crmData.imagini === "object") {
+      const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
+      const hasExplicitImages = Array.isArray(rawLead.images);
+      const allowedIds = hasExplicitImages
+        ? new Set(
+            rawLead.images
+              .map((item: unknown) => normalizeStoredImageUrl(item))
+              .filter((u: string) => Boolean(u && !u.startsWith("data:") && !u.startsWith("blob:")))
+              .map((u: string) => getImageIdentityKey(u))
+              .filter(Boolean)
+          )
+        : null;
+
+      for (const cat of categories) {
+        const list = cloned.crmData.imagini[cat];
+        if (!Array.isArray(list)) continue;
+        cloned.crmData.imagini[cat] = list
+          .map((item: any) => {
+            const rawUrl = typeof item === "string" ? item : item?.original;
+            const norm = normalizeStoredImageUrl(rawUrl);
+            if (!norm || norm.startsWith("data:") || norm.startsWith("blob:")) return null;
+            if (allowedIds !== null && !allowedIds.has(getImageIdentityKey(norm))) return null;
+            return typeof item === "string" ? norm : { ...item, original: norm };
+          })
+          .filter(Boolean);
+      }
+    }
   }
 
   if (Object.keys(cloned).length === 0) return undefined;
@@ -213,16 +244,49 @@ export async function publishPublicShareSnapshot(
         `Proprietate #${shareCode}`,
       500
     ) || `Proprietate #${shareCode}`;
-  const firstImage = resolvePublicFirstImageUrl(lead);
+  const isShareableImageUrl = (u: string): boolean =>
+    Boolean(u && !u.startsWith("data:") && !u.startsWith("blob:") && u.length <= 2048);
+
+  const sanitizedImages: string[] | undefined = Array.isArray(lead.images)
+    ? Array.from(
+        new Map(
+          lead.images
+            .map((item) => normalizeStoredImageUrl(item))
+            .filter(isShareableImageUrl)
+            .map((u) => [getImageIdentityKey(u) || u, u] as const)
+        ).values()
+      ).slice(0, 100)
+    : undefined;
+
+  const orderedPublicImages = extractOrderedPublicImageUrls(lead)
+    .map((u) => normalizeStoredImageUrl(u))
+    .filter(isShareableImageUrl);
+
+  const rawCoverCandidate = normalizeStoredImageUrl(lead.coverImage);
+  const effectiveCoverImage =
+    sanitizedImages !== undefined
+      ? sanitizedImages.length === 0
+        ? ""
+        : isShareableImageUrl(rawCoverCandidate) &&
+            sanitizedImages.some((u) => getImageIdentityKey(u) === getImageIdentityKey(rawCoverCandidate))
+          ? rawCoverCandidate
+          : sanitizedImages[0] || ""
+      : isShareableImageUrl(rawCoverCandidate)
+        ? rawCoverCandidate
+        : orderedPublicImages[0] || "";
+
   const resolvedDesc = resolvePublicDisplayDescription(lead, "");
   const updatedAt = toIsoString(lead.updatedAt);
 
-  const fingerprint = `${docId}|${title}|${firstImage}|${resolvedDesc.length}|${lead.price || ""}|${lead.zone || ""}|${lead.status || ""}|${updatedAt}`;
+  const gallerySignature =
+    sanitizedImages !== undefined
+      ? sanitizedImages.join(",")
+      : orderedPublicImages.join(",");
+  const fingerprint = `${docId}|${title}|${effectiveCoverImage}|${gallerySignature}|${resolvedDesc.length}|${lead.price || ""}|${lead.zone || ""}|${lead.status || ""}|${updatedAt}`;
   if (!options?.force && publishedFingerprintCache.get(docId) === fingerprint) {
     return true;
   }
 
-  const rawImages = Array.isArray(lead.images) ? lead.images.slice(0, 100) : undefined;
   const payload = stripUndefinedDeep({
     shareCode: shareCode.toUpperCase(),
     entityKind,
@@ -240,8 +304,8 @@ export async function publishPublicShareSnapshot(
     parcare: clampStr(lead.parcare, 200),
     sursaIncalzire: clampStr(lead.sursaIncalzire, 200),
     modIncalzire: clampStr(lead.modIncalzire, 200),
-    coverImage: clampStr(lead.coverImage || firstImage, 2048),
-    images: rawImages,
+    coverImage: effectiveCoverImage.slice(0, 2048),
+    images: sanitizedImages ?? orderedPublicImages.slice(0, 100),
     extractedData: sanitizeExtractedDataForPublicShare(lead.extractedData, lead),
     author: clampStr(lead.author, 200),
     agent: clampStr(lead.agent, 200),
@@ -251,7 +315,9 @@ export async function publishPublicShareSnapshot(
   });
 
   try {
-    await setDoc(doc(db, PUBLIC_SHARES_COLLECTION, docId), payload, { merge: true });
+    // Write complete sanitized snapshot without `{ merge: true }` so deleted photos
+    // and cleared `coverImage` values overwrite stale Firestore fields cleanly.
+    await setDoc(doc(db, PUBLIC_SHARES_COLLECTION, docId), payload);
     publishedFingerprintCache.set(docId, fingerprint);
     return true;
   } catch (err) {

@@ -32,6 +32,7 @@ import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { CATEGORIA_OPTIONS, ZONA_OPTIONS } from "../constants";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
+import { getImageIdentityKey, normalizeStoredImageUrl } from "../utils/publicContentUtils";
 import { regeneratePropertyImages } from "../utils/regeneratePropertyImages";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { InlineDetailField } from "./InlineDetailField";
@@ -112,23 +113,33 @@ const deriveInitialPhotos = (lead: Lead): string[] => {
     if (!raw || typeof raw !== "string") return;
     const trimmed = raw.trim();
     if (!trimmed) return;
+    const identity = getImageIdentityKey(trimmed) || trimmed;
+    if (seen.has(identity)) return;
     const norm = getCleanDisplayImageUrl(trimmed) || trimmed;
-    if (!seen.has(norm)) {
-      seen.add(norm);
+    if (norm) {
+      seen.add(identity);
       result.push(norm);
     }
   };
 
+  const coverStr = typeof lead.coverImage === "string" ? lead.coverImage.trim() : "";
+
   if (Array.isArray(lead.images)) {
-    if (lead.coverImage) {
-      pushUnique(lead.coverImage);
+    if (lead.images.length === 0 && !coverStr) {
+      return [];
+    }
+    const explicitIds = new Set(
+      lead.images.map((img) => getImageIdentityKey(img)).filter(Boolean)
+    );
+    if (coverStr && !explicitIds.has(getImageIdentityKey(coverStr))) {
+      pushUnique(coverStr);
     }
     lead.images.forEach((img) => pushUnique(img));
     return result;
   }
 
-  if (lead.coverImage) {
-    pushUnique(lead.coverImage);
+  if (coverStr) {
+    pushUnique(coverStr);
   }
 
   const crmImagini = lead.extractedData?.crmData?.imagini;
@@ -666,8 +677,12 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
     setSavingPhotos(true);
     try {
       const finalPhotos: string[] = [];
+      const seenIds = new Set<string>();
+
       for (let i = 0; i < photosDraft.length; i++) {
         const photo = photosDraft[i];
+        if (!photo || typeof photo !== "string") continue;
+
         if (photo.startsWith("data:")) {
           const authHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
           const res = await fetch("/api/upload-photo", {
@@ -676,7 +691,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
             body: JSON.stringify({
               dataUrl: photo,
               propertyId: lead.propertyId || lead.id,
-              fileName: `lead_${lead.id}_${Date.now()}_${i}.jpg`,
+              fileName: `lead_${lead.propertyId || lead.id}_${Date.now()}_${i}.jpg`,
             }),
           });
           if (!res.ok) {
@@ -684,13 +699,21 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
             throw new Error(errJson?.error || "Eroare la încărcarea fotografiei pe server.");
           }
           const uploadData = await res.json();
-          if (uploadData?.url) {
-            finalPhotos.push(uploadData.url);
+          const uploadedUrl = typeof uploadData?.url === "string" ? uploadData.url.trim() : "";
+          if (uploadedUrl) {
+            const idKey = getImageIdentityKey(uploadedUrl) || uploadedUrl;
+            if (!seenIds.has(idKey)) {
+              seenIds.add(idKey);
+              finalPhotos.push(uploadedUrl);
+            }
           }
         } else {
-          const clean = getCleanDisplayImageUrl(photo) || photo;
-          if (clean && !finalPhotos.includes(clean)) {
-            finalPhotos.push(clean);
+          const canonicalUrl = normalizeStoredImageUrl(photo);
+          if (!canonicalUrl || canonicalUrl.startsWith("blob:")) continue;
+          const idKey = getImageIdentityKey(canonicalUrl) || canonicalUrl;
+          if (!seenIds.has(idKey)) {
+            seenIds.add(idKey);
+            finalPhotos.push(canonicalUrl);
           }
         }
       }
@@ -701,17 +724,22 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
       let nextExtractedData = lead.extractedData;
       if (existingCrm) {
         const prevImagini = (existingCrm.imagini || {}) as Record<string, unknown>;
-        const finalSet = new Set(finalPhotos);
-        const filterCategory = (arr: unknown): Array<{ original: string } | string> => {
+        const finalIdSet = new Set(finalPhotos.map((u) => getImageIdentityKey(u) || u));
+        const filterCategory = (arr: unknown): Array<{ original: string }> => {
           if (!Array.isArray(arr)) return [];
-          return arr.filter((item) => {
-            const u = extractImageUrl(item);
-            const clean = getCleanDisplayImageUrl(u) || u;
-            return Boolean(clean && finalSet.has(clean));
-          });
+          const out: Array<{ original: string }> = [];
+          const localSeen = new Set<string>();
+          for (const item of arr) {
+            const u = normalizeStoredImageUrl(extractImageUrl(item));
+            const idKey = getImageIdentityKey(u) || u;
+            if (!u || !finalIdSet.has(idKey) || localSeen.has(idKey)) continue;
+            localSeen.add(idKey);
+            out.push({ original: u });
+          }
+          return out;
         };
 
-        const updatedImagini: Record<string, Array<{ original: string } | string>> = {
+        const updatedImagini: Record<string, Array<{ original: string }>> = {
           living: filterCategory(prevImagini.living),
           camera: filterCategory(prevImagini.camera),
           bucatarie: filterCategory(prevImagini.bucatarie),
@@ -719,19 +747,19 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
           alteSpatii: filterCategory(prevImagini.alteSpatii),
         };
 
-        const presentSet = new Set<string>();
+        const presentIds = new Set<string>();
         (["living", "camera", "bucatarie", "baie", "alteSpatii"] as const).forEach((cat) => {
           updatedImagini[cat].forEach((item) => {
-            const u = extractImageUrl(item);
-            const clean = getCleanDisplayImageUrl(u) || u;
-            if (clean) presentSet.add(clean);
+            const idKey = getImageIdentityKey(item.original) || item.original;
+            if (idKey) presentIds.add(idKey);
           });
         });
 
         finalPhotos.forEach((imgUrl) => {
-          if (!presentSet.has(imgUrl)) {
+          const idKey = getImageIdentityKey(imgUrl) || imgUrl;
+          if (!presentIds.has(idKey)) {
             updatedImagini.alteSpatii.push({ original: imgUrl });
-            presentSet.add(imgUrl);
+            presentIds.add(idKey);
           }
         });
 
@@ -750,9 +778,27 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
         ...(nextExtractedData ? { extractedData: nextExtractedData } : {}),
       };
 
-      await leadsService.updateLeadData(lead.id, payload);
-      setPhotosDraft(finalPhotos);
-      onUpdateLead(payload);
+      const persisted = await leadsService.updateLeadData(lead.id, payload);
+      const mergedPatch: Partial<Lead> = {
+        ...payload,
+        ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
+        ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
+        ...(persisted?.isSharedLead === false ? { isSharedLead: false } : {}),
+        ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
+      };
+
+      // Immediately sync the public share snapshot so external share links reflect
+      // shuffled order, deletions, and newly uploaded photos right away.
+      await publishPublicShareSnapshot(
+        {
+          ...lead,
+          ...mergedPatch,
+        },
+        { tenantId: tenant?.id, force: true }
+      );
+
+      setPhotosDraft(finalPhotos.map((u) => getCleanDisplayImageUrl(u) || u));
+      onUpdateLead(mergedPatch);
       setEditingPhotos(false);
       toast.success("Fotografiile au fost salvate!");
     } catch (err: any) {

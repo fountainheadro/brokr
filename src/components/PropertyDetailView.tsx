@@ -50,12 +50,18 @@ import {
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { getPublicShareUrl } from "../utils/shareUtils";
-import { resolvePublicDisplayTitle, resolvePublicDisplayDescription } from "../utils/publicContentUtils";
+import {
+  resolvePublicDisplayTitle,
+  resolvePublicDisplayDescription,
+  getImageIdentityKey,
+  normalizeStoredImageUrl,
+} from "../utils/publicContentUtils";
 import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { regeneratePropertyImages } from "../utils/regeneratePropertyImages";
 import { auth } from "../lib/firebase";
+import { getApiAuthHeaders } from "../lib/apiAuth";
 import { ProtectedPublicImage } from "./ProtectedPublicImage";
 
 export interface PropertyDetailViewProps {
@@ -773,20 +779,52 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
   // Base clean proxy URLs come from shared imageUtils; per-slot thumbnails append ?w=...
 
-  // Compile full image list with clean proxy URLs
+  // Compile full image list with clean proxy URLs, respecting explicit user-saved `lead.images` order first
   const allImages = useMemo(() => {
     const images: string[] = [];
+    const seenIds = new Set<string>();
     const addClean = (raw: string | undefined | null) => {
       if (!raw || typeof raw !== "string") return;
-      const clean = getCleanDisplayImageUrl(raw);
-      if (clean && !images.includes(clean)) {
+      const trimmed = raw.trim();
+      if (!trimmed) return;
+      const identity = getImageIdentityKey(trimmed) || trimmed;
+      if (seenIds.has(identity)) return;
+      const clean = getCleanDisplayImageUrl(trimmed);
+      if (clean) {
+        seenIds.add(identity);
         images.push(clean);
       }
     };
 
-    if (lead?.coverImage) {
-      addClean(lead.coverImage);
+    const hasExplicitImagesArray = Array.isArray((lead as any)?.images);
+    const coverStr = typeof lead?.coverImage === "string" ? lead.coverImage.trim() : "";
+
+    // Explicit empty gallery after user deleted all photos
+    if (hasExplicitImagesArray && (lead as any).images.length === 0 && !coverStr) {
+      return [];
     }
+
+    if (hasExplicitImagesArray && (lead as any).images.length > 0) {
+      const explicitIds = new Set(
+        (lead as any).images
+          .map((item: any) => {
+            const url = typeof item === "string" ? item : item?.original;
+            return getImageIdentityKey(url);
+          })
+          .filter(Boolean)
+      );
+      // Only prepend coverImage if it isn't already part of the explicitly ordered images array
+      if (coverStr && !explicitIds.has(getImageIdentityKey(coverStr))) {
+        addClean(coverStr);
+      }
+      (lead as any).images.forEach((item: any) => {
+        const url = typeof item === "string" ? item : item?.original;
+        addClean(url);
+      });
+    } else if (coverStr) {
+      addClean(coverStr);
+    }
+
     const crmImagini = lead?.extractedData?.crmData?.imagini;
     if (crmImagini) {
       const categories = ["living", "camera", "bucatarie", "baie", "alteSpatii"] as const;
@@ -798,12 +836,6 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             addClean(url);
           });
         }
-      });
-    }
-    if (Array.isArray((lead as any)?.images)) {
-      (lead as any).images.forEach((item: any) => {
-        const url = typeof item === "string" ? item : item?.original;
-        addClean(url);
       });
     }
     return images;
@@ -1247,6 +1279,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const [imagesList, setImagesList] = useState<string[]>(allImages);
   const [isEditingPhotos, setIsEditingPhotos] = useState<boolean>(false);
   const [isPhotosDirty, setIsPhotosDirty] = useState<boolean>(false);
+  const [isSavingPhotos, setIsSavingPhotos] = useState<boolean>(false);
   const [isRegeneratingImages, setIsRegeneratingImages] = useState<boolean>(false);
   const [isDraggingOverCard, setIsDraggingOverCard] = useState<boolean>(false);
   const [draggedSlotIndex, setDraggedSlotIndex] = useState<number | null>(null);
@@ -1299,104 +1332,157 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   }, [carouselIndex]);
 
   const handleSavePhotos = async () => {
-    if (!lead?.id) return;
+    if (!lead?.id || isSavingPhotos) return;
+    setIsSavingPhotos(true);
     try {
-      const newCover = imagesList[0] || "";
-      
-      // Update all categories in crmData.imagini to reflect only retained images
+      const finalStoredPhotos: string[] = [];
+      const seenStoredIds = new Set<string>();
+
+      for (let i = 0; i < imagesList.length; i++) {
+        const photo = imagesList[i];
+        if (!photo || typeof photo !== "string") continue;
+
+        if (photo.startsWith("data:")) {
+          const authHeaders = await getApiAuthHeaders({ "Content-Type": "application/json" });
+          const res = await fetch("/api/upload-photo", {
+            method: "POST",
+            headers: authHeaders,
+            body: JSON.stringify({
+              dataUrl: photo,
+              propertyId: lead.propertyId || lead.id,
+              fileName: `prop_${lead.propertyId || lead.id}_${Date.now()}_${i}.jpg`,
+            }),
+          });
+          if (!res.ok) {
+            const errJson = await res.json().catch(() => ({}));
+            throw new Error(errJson?.error || "Eroare la încărcarea fotografiei pe server.");
+          }
+          const uploadData = await res.json();
+          const uploadedUrl = typeof uploadData?.url === "string" ? uploadData.url.trim() : "";
+          if (uploadedUrl) {
+            const idKey = getImageIdentityKey(uploadedUrl) || uploadedUrl;
+            if (!seenStoredIds.has(idKey)) {
+              seenStoredIds.add(idKey);
+              finalStoredPhotos.push(uploadedUrl);
+            }
+          }
+        } else {
+          const canonicalUrl = normalizeStoredImageUrl(photo);
+          if (!canonicalUrl || canonicalUrl.startsWith("blob:")) continue;
+          const idKey = getImageIdentityKey(canonicalUrl) || canonicalUrl;
+          if (!seenStoredIds.has(idKey)) {
+            seenStoredIds.add(idKey);
+            finalStoredPhotos.push(canonicalUrl);
+          }
+        }
+      }
+
+      const newCover = finalStoredPhotos[0] || "";
+      const retainedIdSet = new Set(
+        finalStoredPhotos.map((u) => getImageIdentityKey(u) || u)
+      );
+
+      // Update all categories in crmData.imagini to reflect only retained images (normalized)
       const existingCrmImagini = lead?.extractedData?.crmData?.imagini || {
         living: [],
         camera: [],
         bucatarie: [],
         baie: [],
-        alteSpatii: []
+        alteSpatii: [],
+      };
+
+      const filterAndNormalizeCategory = (arr: unknown) => {
+        if (!Array.isArray(arr)) return [];
+        const out: any[] = [];
+        const localSeen = new Set<string>();
+        for (const item of arr) {
+          const rawUrl = typeof item === "string" ? item : item?.original;
+          const normUrl = normalizeStoredImageUrl(rawUrl);
+          const idKey = getImageIdentityKey(normUrl) || normUrl;
+          if (!normUrl || !retainedIdSet.has(idKey) || localSeen.has(idKey)) continue;
+          localSeen.add(idKey);
+          out.push(typeof item === "string" ? { original: normUrl } : { ...item, original: normUrl });
+        }
+        return out;
       };
 
       const updatedCrmImagini: any = {
-        living: Array.isArray(existingCrmImagini.living)
-          ? existingCrmImagini.living.filter((item: any) => {
-              const url = typeof item === "string" ? item : item?.original;
-              const clean = getCleanDisplayImageUrl(url);
-              return clean && imagesList.includes(clean);
-            })
-          : [],
-        camera: Array.isArray(existingCrmImagini.camera)
-          ? existingCrmImagini.camera.filter((item: any) => {
-              const url = typeof item === "string" ? item : item?.original;
-              const clean = getCleanDisplayImageUrl(url);
-              return clean && imagesList.includes(clean);
-            })
-          : [],
-        bucatarie: Array.isArray(existingCrmImagini.bucatarie)
-          ? existingCrmImagini.bucatarie.filter((item: any) => {
-              const url = typeof item === "string" ? item : item?.original;
-              const clean = getCleanDisplayImageUrl(url);
-              return clean && imagesList.includes(clean);
-            })
-          : [],
-        baie: Array.isArray(existingCrmImagini.baie)
-          ? existingCrmImagini.baie.filter((item: any) => {
-              const url = typeof item === "string" ? item : item?.original;
-              const clean = getCleanDisplayImageUrl(url);
-              return clean && imagesList.includes(clean);
-            })
-          : [],
-        alteSpatii: Array.isArray(existingCrmImagini.alteSpatii)
-          ? existingCrmImagini.alteSpatii.filter((item: any) => {
-              const url = typeof item === "string" ? item : item?.original;
-              const clean = getCleanDisplayImageUrl(url);
-              return clean && imagesList.includes(clean);
-            })
-          : []
+        living: filterAndNormalizeCategory(existingCrmImagini.living),
+        camera: filterAndNormalizeCategory(existingCrmImagini.camera),
+        bucatarie: filterAndNormalizeCategory(existingCrmImagini.bucatarie),
+        baie: filterAndNormalizeCategory(existingCrmImagini.baie),
+        alteSpatii: filterAndNormalizeCategory(existingCrmImagini.alteSpatii),
       };
 
       // Collect all remaining images across categories
-      const allFoundUrls = new Set<string>();
-      (["living", "camera", "bucatarie", "baie", "alteSpatii"] as const).forEach(cat => {
+      const allFoundIds = new Set<string>();
+      (["living", "camera", "bucatarie", "baie", "alteSpatii"] as const).forEach((cat) => {
         updatedCrmImagini[cat]?.forEach((item: any) => {
           const u = typeof item === "string" ? item : item?.original;
-          const clean = getCleanDisplayImageUrl(u);
-          if (clean) allFoundUrls.add(clean);
+          const idKey = getImageIdentityKey(u) || u;
+          if (idKey) allFoundIds.add(idKey);
         });
       });
 
-      // Ensure any newly added image in imagesList is preserved in alteSpatii
-      imagesList.forEach(img => {
-        if (!allFoundUrls.has(img)) {
+      // Ensure any newly uploaded/added image in finalStoredPhotos is preserved in alteSpatii
+      finalStoredPhotos.forEach((img) => {
+        const idKey = getImageIdentityKey(img) || img;
+        if (!allFoundIds.has(idKey)) {
           updatedCrmImagini.alteSpatii.push({ original: img });
-          allFoundUrls.add(img);
+          allFoundIds.add(idKey);
         }
       });
 
-      const updates: any = {
-        coverImage: newCover,
-        images: imagesList,
-        "extractedData.crmData.imagini": updatedCrmImagini
-      };
-
-      await leadsService.updateLeadData(lead.id, updates);
-      
-      // Notify parent component optimistically so allImages updates immediately
-      if (onUpdateLead) {
-        onUpdateLead({
-          coverImage: newCover,
-          images: imagesList,
-          extractedData: {
+      const nextExtractedData = lead.extractedData?.crmData
+        ? ({
             ...lead.extractedData,
             crmData: {
-              ...(lead.extractedData?.crmData as any),
-              imagini: updatedCrmImagini
-            }
-          } as any
-        });
+              ...(lead.extractedData.crmData as any),
+              imagini: updatedCrmImagini,
+            },
+          } as any)
+        : lead.extractedData;
+
+      const payload: Partial<Lead> = {
+        coverImage: newCover,
+        images: finalStoredPhotos,
+        ...(nextExtractedData ? { extractedData: nextExtractedData } : {}),
+      };
+
+      const persisted = await leadsService.updateLeadData(lead.id, payload);
+
+      const localPatch: Partial<Lead> = {
+        ...payload,
+        ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
+        ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
+      };
+
+      const mergedLead: Lead = {
+        ...lead,
+        ...localPatch,
+      };
+
+      // Immediately synchronize the sanitized public share snapshot so external share links
+      // reflect the exact shuffled order, deletions, and newly uploaded images right away.
+      await publishPublicShareSnapshot(mergedLead, {
+        tenantId: tenant?.id,
+        force: true,
+      });
+
+      // Notify parent component so allImages and thumbnails update immediately
+      if (onUpdateLead) {
+        onUpdateLead(localPatch);
       }
 
+      setImagesList(finalStoredPhotos.map((u) => getCleanDisplayImageUrl(u) || u));
       setIsEditingPhotos(false);
       setIsPhotosDirty(false);
       toast.success("Fotografiile au fost salvate cu succes!");
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to save photos:", err);
-      toast.error("Eroare la salvarea fotografiilor.");
+      toast.error(err?.message || "Eroare la salvarea fotografiilor.");
+    } finally {
+      setIsSavingPhotos(false);
     }
   };
 
@@ -2751,6 +2837,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   onStartEdit={() => setIsEditingPhotos(true)}
                   onCancel={handleCancelPhotos}
                   onSave={handleSavePhotos}
+                  disabled={isSavingPhotos}
                 />
               </div>
 

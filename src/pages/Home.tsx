@@ -895,13 +895,16 @@ export const Home: React.FC = () => {
       if (path === 'crmData.descriere.titlu') {
         await leadsService.updateLeadData(leadId, { title: val });
       }
-      await leadsService.updateNestedField(leadId, `extractedData.${path}`, val);
+      const persisted = await leadsService.updateNestedField(leadId, `extractedData.${path}`, val);
+      if (persisted) {
+        void publishPublicShareSnapshot(persisted, { tenantId: tenant?.id, force: true });
+      }
       console.log(`[Home] Firestore write success for ${path}`);
     } catch (e) {
       console.error('[Home] Firestore write failed:', e);
       // Optional: Rollback if needed, but usually next Firestore sync handles it
     }
-  }, []);
+  }, [tenant?.id]);
 
   useEffect(() => {
     if (user) {

@@ -29,6 +29,8 @@ import {
   extractOrderedPublicImageUrls,
   resolvePublicFirstImageUrl,
   formatOpenGraphDescription,
+  getImageIdentityKey,
+  normalizeStoredImageUrl,
 } from "./src/utils/publicContentUtils";
 import {
   createPublicImageToken,
@@ -1571,6 +1573,13 @@ Returnează un JSON strict cu următoarele chei:
       if (preferredTenantId && !isGlobalLeadCode) {
         addCandidateKeys(preferredTenantId);
         addCandidateKeys("global");
+      } else if (!isGlobalLeadCode) {
+        // Non-global entity codes (Properties P..., Cereri C.../R...) belong to an agency tenant;
+        // check tenant snapshots before legacy `global__` snapshots so updated gallery photos are never shadowed.
+        for (const t of TenantResolutionService.getAllTenants()) {
+          addCandidateKeys(t.id);
+        }
+        addCandidateKeys("global");
       } else {
         addCandidateKeys("global");
         if (preferredTenantId) {
@@ -1711,18 +1720,19 @@ Returnează un JSON strict cu următoarele chei:
       const publicTokenTtlMs = 4 * 60 * 60 * 1000;
       const tokenUrlBySource = new Map<string, string>();
       const tokenizeImageUrl = (rawUrl: string): string => {
-        const trimmed = rawUrl.trim();
-        const existing = tokenUrlBySource.get(trimmed);
+        const normalizedSource = normalizeStoredImageUrl(rawUrl) || rawUrl.trim();
+        const dedupKey = getImageIdentityKey(normalizedSource) || normalizedSource;
+        const existing = tokenUrlBySource.get(dedupKey);
         if (existing) return existing;
         const token = createPublicImageToken({
-          sourceUrl: trimmed,
+          sourceUrl: normalizedSource,
           propertyId: propCode,
           viewerSid,
           viewerStamp,
           ttlMs: publicTokenTtlMs,
         });
         const tokenized = `/api/public-image?token=${encodeURIComponent(token)}`;
-        tokenUrlBySource.set(trimmed, tokenized);
+        tokenUrlBySource.set(dedupKey, tokenized);
         return tokenized;
       };
 
@@ -1829,7 +1839,8 @@ Returnează un JSON strict cu următoarele chei:
           const parsedAbs = new URL(sourceUrl);
           if (
             parsedAbs.pathname.startsWith("/uploads/") ||
-            parsedAbs.pathname.startsWith("/api/storage/media/")
+            parsedAbs.pathname.startsWith("/api/storage/media/") ||
+            parsedAbs.pathname.startsWith("/api/storage/public-shares/")
           ) {
             localPathCandidate = parsedAbs.pathname;
           }
@@ -1844,16 +1855,65 @@ Returnează un JSON strict cu următoarele chei:
           rawBuffer = Buffer.from(parts[1], "base64");
         }
       } else if (localPathCandidate.startsWith("/api/storage/media/")) {
-        const objectKey = localPathCandidate.replace(/^\/api\/storage\/media\//, "").split("?")[0];
+        const rawSuffix = localPathCandidate
+          .replace(/^\/api\/storage\/media\//, "")
+          .split("?")[0]
+          .split("#")[0];
+        const decodedParts = rawSuffix
+          .split("/")
+          .filter(Boolean)
+          .map((seg) => {
+            try {
+              return decodeURIComponent(seg);
+            } catch {
+              return seg;
+            }
+          });
+        const objectKey =
+          decodedParts[0] === "tenants"
+            ? decodedParts.join("/")
+            : decodedParts.length === 4 && decodedParts[1] === "properties"
+              ? `tenants/${decodedParts.join("/")}`
+              : decodedParts.join("/");
         const { buffer } = await CloudStorageService.downloadObject({
           objectKey,
           allowPublicListing: true,
         });
         rawBuffer = buffer;
+      } else if (localPathCandidate.startsWith("/api/storage/public-shares/")) {
+        const rawSuffix = localPathCandidate
+          .replace(/^\/api\/storage\/public-shares\//, "")
+          .split("?")[0]
+          .split("#")[0];
+        const decodedParts = rawSuffix
+          .split("/")
+          .filter(Boolean)
+          .map((seg) => {
+            try {
+              return decodeURIComponent(seg);
+            } catch {
+              return seg;
+            }
+          });
+        const rawKey = `public/shares/${decodedParts.join("/")}`;
+        const found = await CloudStorageService.getRawObject(rawKey);
+        if (found?.buffer && found.buffer.length > 0) {
+          rawBuffer = found.buffer;
+        }
       } else if (localPathCandidate.startsWith("/uploads/")) {
-        const relName = path.basename(localPathCandidate.split("?")[0]);
-        const localPath = path.join(uploadsDir, relName);
-        if (fs.existsSync(localPath)) {
+        const rawRel = localPathCandidate
+          .replace(/^\/uploads\//, "")
+          .split("?")[0]
+          .split("#")[0];
+        let decodedRel = rawRel;
+        try {
+          decodedRel = decodeURIComponent(rawRel);
+        } catch {
+          // keep raw
+        }
+        const relName = path.basename(decodedRel);
+        const localPath = path.resolve(uploadsDir, relName);
+        if (localPath.startsWith(uploadsDir + path.sep) && fs.existsSync(localPath)) {
           rawBuffer = fs.readFileSync(localPath);
         }
       } else if (/^https?:\/\//i.test(sourceUrl)) {
@@ -1952,7 +2012,7 @@ Returnează un JSON strict cu următoarele chei:
   ): Promise<any> {
     const cacheKey = `${preferredTenantId || "global"}:${id}`;
     const hit = ogPropertyShortCache.get(cacheKey);
-    if (hit && Date.now() - hit.timestamp < 60_000) {
+    if (hit && Date.now() - hit.timestamp < 10_000) {
       return hit.property;
     }
     const property = await fetchPropertyById(id, { preferredTenantId });
@@ -2043,7 +2103,22 @@ Returnează un JSON strict cu următoarele chei:
     const storageMatch = rawUrl.match(/\/api\/storage\/media\/([^?#]+)/);
     if (storageMatch && storageMatch[1]) {
       try {
-        const objectKey = decodeURIComponent(storageMatch[1]);
+        const decodedParts = storageMatch[1]
+          .split("/")
+          .filter(Boolean)
+          .map((seg) => {
+            try {
+              return decodeURIComponent(seg);
+            } catch {
+              return seg;
+            }
+          });
+        const objectKey =
+          decodedParts[0] === "tenants"
+            ? decodedParts.join("/")
+            : decodedParts.length === 4 && decodedParts[1] === "properties"
+              ? `tenants/${decodedParts.join("/")}`
+              : decodedParts.join("/");
         const { buffer, metadata } = await CloudStorageService.downloadObject({
           objectKey,
           allowPublicListing: true,

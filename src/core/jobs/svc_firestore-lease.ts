@@ -64,6 +64,7 @@ function sanitizeLockKey(raw: string): string {
  */
 export class FirestoreLeaseService {
   private static localLockChains = new Map<string, Promise<unknown>>();
+  private static localLeases = new Map<string, WorkerLease>();
 
   private static async withLocalLock<T>(lockKey: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.localLockChains.get(lockKey) || Promise.resolve();
@@ -143,7 +144,7 @@ export class FirestoreLeaseService {
         "worker_lease_commit",
         { silentOnStatuses: [409, 412] }
       );
-      PersistentStoreService.set(COL_WORKER_LEASES, safeKey, nextLease);
+      this.localLeases.set(safeKey, structuredClone(nextLease));
       return true;
     } catch (err: any) {
       if (err?.statusCode === 409 || err?.statusCode === 412) {
@@ -237,8 +238,8 @@ export class FirestoreLeaseService {
         return { acquired: true, lease: firstLease };
       }
 
-      // Local / Test deterministic atomic path serialized by `withLocalLock`
-      const current = PersistentStoreService.get<WorkerLease>(COL_WORKER_LEASES, safeKey);
+      // Local / Test / Single-process dev deterministic atomic path serialized by `withLocalLock`
+      const current = this.localLeases.get(safeKey) || null;
       if (current && !current.releasedAt && current.leaseExpiresAtMs > nowMs && current.ownerId !== ownerId) {
         return {
           acquired: false,
@@ -260,7 +261,7 @@ export class FirestoreLeaseService {
         updatedAt: nowIso,
         releasedAt: null,
       };
-      PersistentStoreService.set(COL_WORKER_LEASES, safeKey, nextLease);
+      this.localLeases.set(safeKey, structuredClone(nextLease));
       return { acquired: true, lease: nextLease };
     });
   }
@@ -283,7 +284,8 @@ export class FirestoreLeaseService {
       const remote = await this.remoteGetLeaseWithUpdateTime(safeKey);
       current = remote?.lease || null;
     } else {
-      current = PersistentStoreService.get<WorkerLease>(COL_WORKER_LEASES, safeKey);
+      const local = this.localLeases.get(safeKey);
+      current = local ? structuredClone(local) : null;
     }
 
     if (
@@ -341,7 +343,7 @@ export class FirestoreLeaseService {
         return renewed;
       }
 
-      const current = PersistentStoreService.get<WorkerLease>(COL_WORKER_LEASES, safeKey);
+      const current = this.localLeases.get(safeKey) || null;
       if (
         !current ||
         current.releasedAt ||
@@ -357,7 +359,7 @@ export class FirestoreLeaseService {
         leaseExpiresAtMs: expiresAtMs,
         updatedAt: nowIso,
       };
-      PersistentStoreService.set(COL_WORKER_LEASES, safeKey, renewed);
+      this.localLeases.set(safeKey, structuredClone(renewed));
       return renewed;
     });
   }
@@ -398,7 +400,7 @@ export class FirestoreLeaseService {
         });
       }
 
-      const current = PersistentStoreService.get<WorkerLease>(COL_WORKER_LEASES, safeKey);
+      const current = this.localLeases.get(safeKey) || null;
       if (
         !current ||
         current.ownerId !== params.ownerId ||
@@ -414,7 +416,7 @@ export class FirestoreLeaseService {
         leaseExpiresAtMs: nowMs,
         updatedAt: nowIso,
       };
-      PersistentStoreService.set(COL_WORKER_LEASES, safeKey, released);
+      this.localLeases.set(safeKey, structuredClone(released));
       return true;
     });
   }
@@ -454,11 +456,13 @@ export class FirestoreLeaseService {
   }
 
   public static listLeases(): WorkerLease[] {
-    const all = PersistentStoreService.getAll<WorkerLease>(COL_WORKER_LEASES);
-    return Object.values(all).sort((a, b) => b.acquiredAtMs - a.acquiredAtMs);
+    return Array.from(this.localLeases.values())
+      .map((l) => structuredClone(l))
+      .sort((a, b) => b.acquiredAtMs - a.acquiredAtMs);
   }
 
   public static clearForTests(): void {
+    this.localLeases.clear();
     PersistentStoreService.clearCollection(COL_WORKER_LEASES);
   }
 }
