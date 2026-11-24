@@ -67,9 +67,9 @@ const pendingProtectedBuilds = new Map<
 const PROTECTED_CACHE_MAX = 300;
 const PROTECTED_CACHE_TTL_MS = 15 * 60 * 1000;
 
-// Bounded concurrency for ImageMagick/Jimp transforms so opening a 20+ photo lightbox
-// never starves CPU or causes subprocess timeouts.
-const MAX_CONCURRENT_TRANSFORMS = 4;
+// Bounded concurrency for ImageMagick/Jimp transforms so opening a 20+ photo gallery
+// on small hosting containers never spikes RAM/CPU or triggers proxy 502 timeouts.
+const MAX_CONCURRENT_TRANSFORMS = 2;
 let activeTransforms = 0;
 const transformWaitQueue: Array<() => void> = [];
 

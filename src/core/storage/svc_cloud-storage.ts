@@ -851,38 +851,83 @@ export class CloudStorageService {
     const sha256 = crypto.createHash("sha256").update(input.buffer).digest("hex");
 
     if (backend === "gcs" || backend === "gcs_emulator") {
+      const canFallbackPublicPropertyToFirestore =
+        backend === "gcs" &&
+        input.entityType === "properties" &&
+        visibility === "public_listing" &&
+        process.env.NODE_ENV !== "test" &&
+        PersistentStoreService.isRemoteFirestoreConfigured();
+
+      const tryPersistPublicToFirestore = async (): Promise<boolean> => {
+        if (!canFallbackPublicPropertyToFirestore) return false;
+        try {
+          return await this.persistPublicPropertyMediaToFirestore({
+            objectKey,
+            tenantId: input.tenantId,
+            entityId: input.entityId,
+            buffer: input.buffer,
+            mimeType,
+          });
+        } catch (syncErr: any) {
+          logger.warn("Sincronizarea imaginii publice în Firestore a eșuat", {
+            module: "cloud-storage",
+            tenantId: input.tenantId,
+            reason: syncErr?.message || String(syncErr),
+          });
+          return false;
+        }
+      };
+
       const token = await this.getStorageAccessToken();
       if (!token) {
-        throw new AppError({
-          message: "Nu s-a putut obține tokenul OAuth2 pentru Cloud Storage.",
-          code: "INTERNAL_ERROR",
-          statusCode: 500,
-        });
-      }
+        if (await tryPersistPublicToFirestore()) {
+          logger.warn(
+            "Tokenul Cloud Storage lipsește; imaginea publică a fost salvată în Firestore partajat.",
+            { module: "cloud-storage", tenantId: input.tenantId }
+          );
+        } else {
+          throw new AppError({
+            message: "Nu s-a putut obține tokenul OAuth2 pentru Cloud Storage.",
+            code: "INTERNAL_ERROR",
+            statusCode: 500,
+          });
+        }
+      } else {
+        const uploadUrl = `${this.getUploadBaseEndpoint()}/b/${encodeURIComponent(
+          bucketName
+        )}/o?uploadType=media&name=${encodeURIComponent(objectKey)}`;
 
-      const uploadUrl = `${this.getUploadBaseEndpoint()}/b/${encodeURIComponent(
-        bucketName
-      )}/o?uploadType=media&name=${encodeURIComponent(objectKey)}`;
-
-      try {
-        await axios.post(uploadUrl, input.buffer, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": mimeType,
-            "Content-Length": String(input.buffer.length),
-            ...(backend === "gcs" ? GcpAuthService.getQuotaProjectHeaders() : {}),
-          },
-          maxBodyLength: Infinity,
-          timeout: 20_000,
-        });
-      } catch (err: unknown) {
-        const safeErr = GcpAuthService.sanitizeGcpHttpError(err, "Cloud Storage", "uploadObject");
-        logger.error("Eroare la încărcarea fișierului în Cloud Storage", safeErr, {
-          module: "cloud-storage",
-          tenantId: input.tenantId,
-          statusCode: safeErr.statusCode,
-        });
-        throw safeErr;
+        try {
+          await axios.post(uploadUrl, input.buffer, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": mimeType,
+              "Content-Length": String(input.buffer.length),
+              ...(backend === "gcs" ? GcpAuthService.getQuotaProjectHeaders() : {}),
+            },
+            maxBodyLength: Infinity,
+            timeout: 20_000,
+          });
+          // Best-effort mirror to Firestore so secondary non-GCS deployments (e.g. external share host) can serve immediately
+          if (canFallbackPublicPropertyToFirestore) {
+            await tryPersistPublicToFirestore();
+          }
+        } catch (err: unknown) {
+          if (await tryPersistPublicToFirestore()) {
+            logger.warn(
+              "Încărcarea în Cloud Storage a eșuat; imaginea publică a fost salvată în Firestore partajat.",
+              { module: "cloud-storage", tenantId: input.tenantId }
+            );
+          } else {
+            const safeErr = GcpAuthService.sanitizeGcpHttpError(err, "Cloud Storage", "uploadObject");
+            logger.error("Eroare la încărcarea fișierului în Cloud Storage", safeErr, {
+              module: "cloud-storage",
+              tenantId: input.tenantId,
+              statusCode: safeErr.statusCode,
+            });
+            throw safeErr;
+          }
+        }
       }
     } else {
       const canPersistPublicPropertyToFirestore =
@@ -1059,57 +1104,66 @@ export class CloudStorageService {
     let buffer: Buffer;
 
     if (backend === "gcs" || backend === "gcs_emulator") {
+      const canFallbackPublicProperty =
+        params.allowPublicListing &&
+        meta.entityType === "properties" &&
+        meta.visibility === "public_listing" &&
+        !StorageMetadataRepository.isDeleted(meta.objectKey);
+
+      const tryFetchFirestorePublicFallback = async (): Promise<boolean> => {
+        if (!canFallbackPublicProperty) return false;
+        const firestoreMedia = await this.fetchPublicPropertyMediaFromFirestore(meta!.objectKey);
+        if (!firestoreMedia) return false;
+        buffer = firestoreMedia.buffer;
+        meta = {
+          ...meta!,
+          mimeType: firestoreMedia.mimeType,
+          sizeBytes: firestoreMedia.buffer.length,
+        };
+        return true;
+      };
+
       const token = await this.getStorageAccessToken();
       if (!token) {
-        throw new AppError({
-          message: "Credențialele Cloud Storage nu sunt disponibile.",
-          code: "INTERNAL_ERROR",
-          statusCode: 500,
-        });
-      }
-      const dlUrl = `${this.getJsonBaseEndpoint()}/b/${encodeURIComponent(
-        meta.bucketName
-      )}/o/${encodeURIComponent(meta.objectKey)}?alt=media`;
-      try {
-        const res = await axios.get(dlUrl, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            ...(backend === "gcs" ? GcpAuthService.getQuotaProjectHeaders() : {}),
-          },
-          responseType: "arraybuffer",
-          timeout: 20_000,
-        });
-        buffer = Buffer.from(res.data);
-      } catch (err: any) {
-        if (err?.response?.status === 404) {
-          if (
-            params.allowPublicListing &&
-            meta.entityType === "properties" &&
-            meta.visibility === "public_listing" &&
-            !StorageMetadataRepository.isDeleted(meta.objectKey)
-          ) {
-            const firestoreMedia = await this.fetchPublicPropertyMediaFromFirestore(meta.objectKey);
-            if (firestoreMedia) {
-              buffer = firestoreMedia.buffer;
-              meta = {
-                ...meta,
-                mimeType: firestoreMedia.mimeType,
-                sizeBytes: firestoreMedia.buffer.length,
-              };
-            } else {
-              throw new NotFoundError("Fișier Cloud Storage", params.objectKey);
-            }
-          } else {
-            throw new NotFoundError("Fișier Cloud Storage", params.objectKey);
-          }
+        if (backend === "gcs" && (await tryFetchFirestorePublicFallback())) {
+          // Served cleanly from shared Firestore public_property_media fallback
         } else {
-          const safeErr = GcpAuthService.sanitizeGcpHttpError(err, "Cloud Storage", "downloadObject");
-          logger.error("Eroare la descărcarea fișierului din Cloud Storage", safeErr, {
-            module: "cloud-storage",
-            tenantId: params.tenantId,
-            statusCode: safeErr.statusCode,
+          throw new AppError({
+            message: "Credențialele Cloud Storage nu sunt disponibile.",
+            code: "INTERNAL_ERROR",
+            statusCode: 500,
           });
-          throw safeErr;
+        }
+      } else {
+        const dlUrl = `${this.getJsonBaseEndpoint()}/b/${encodeURIComponent(
+          meta.bucketName
+        )}/o/${encodeURIComponent(meta.objectKey)}?alt=media`;
+        try {
+          const res = await axios.get(dlUrl, {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              ...(backend === "gcs" ? GcpAuthService.getQuotaProjectHeaders() : {}),
+            },
+            responseType: "arraybuffer",
+            timeout: 20_000,
+          });
+          buffer = Buffer.from(res.data);
+        } catch (err: any) {
+          const isNotFound = err?.response?.status === 404;
+          const allowFirestoreFallback = backend === "gcs" ? true : isNotFound;
+          if (allowFirestoreFallback && (await tryFetchFirestorePublicFallback())) {
+            // Served cleanly from shared Firestore public_property_media fallback
+          } else if (isNotFound) {
+            throw new NotFoundError("Fișier Cloud Storage", params.objectKey);
+          } else {
+            const safeErr = GcpAuthService.sanitizeGcpHttpError(err, "Cloud Storage", "downloadObject");
+            logger.error("Eroare la descărcarea fișierului din Cloud Storage", safeErr, {
+              module: "cloud-storage",
+              tenantId: params.tenantId,
+              statusCode: safeErr.statusCode,
+            });
+            throw safeErr;
+          }
         }
       }
     } else {
