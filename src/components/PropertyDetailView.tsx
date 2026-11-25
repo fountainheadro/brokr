@@ -2003,8 +2003,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
             {/* Mosaic Photo Gallery (no container card, no header) */}
             {allImages.length > 0 && (
-              <div id="photos" className="w-full h-[50vh] lg:h-[420px] rounded-xl overflow-hidden grid grid-cols-4 grid-rows-1 gap-2 bg-gray-100 select-none scroll-mt-[104px]">
-                {/* Col 1 (50% width) - 1st photo */}
+              <div
+                id="photos"
+                className={`w-full h-[50vh] lg:h-[420px] rounded-xl overflow-hidden grid ${
+                  isPublicShared ? "grid-cols-3 md:grid-cols-4" : "grid-cols-4"
+                } grid-rows-1 gap-2 bg-gray-100 select-none scroll-mt-[104px]`}
+              >
+                {/* Col 1 (66.7% width on mobile public share, 50% on desktop) - 1st photo */}
                 <div 
                   onClick={() => openLightboxAt(0)}
                   className="col-span-2 relative h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
@@ -2029,7 +2034,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                   )}
                 </div>
 
-                {/* Col 2 (25% width) - 2 equal 50% height stacked photos aligned with Col 1 bottom */}
+                {/* Col 2 (33.3% width on mobile public share, 25% on desktop) - 2 equal 50% height stacked photos aligned with Col 1 bottom */}
                 <div className="col-span-1 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 h-full min-h-0">
                   <div 
                     onClick={() => openLightboxAt(1)}
@@ -2074,11 +2079,27 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                         referrerPolicy="no-referrer"
                       />
                     )}
+                    {isPublicShared && (
+                      <div className="flex md:hidden absolute inset-0 bg-black/55 group-hover:bg-black/65 transition-colors flex-col items-center justify-center text-center p-2 cursor-pointer z-10">
+                        <span className="text-white text-xs sm:text-sm font-semibold underline underline-offset-4 decoration-2 font-sans tracking-wide leading-tight">
+                          Toate imaginile ({allImages.length})
+                        </span>
+                        {allImages.length > 3 && (
+                          <span className="text-gray-200 text-[11px] sm:text-xs mt-1 font-normal font-sans">
+                            +{allImages.length - 2} imagini
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                {/* Col 3 (25% width) - 2 equal 50% height stacked photos aligned with Col 1 bottom, last photo acts as open lightbox link */}
-                <div className="col-span-1 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 h-full min-h-0">
+                {/* Col 3 (hidden on mobile public share; 25% width on desktop) - 2 equal 50% height stacked photos aligned with Col 1 bottom, last photo acts as open lightbox link */}
+                <div
+                  className={`${
+                    isPublicShared ? "hidden md:grid" : "grid"
+                  } col-span-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-2 h-full min-h-0`}
+                >
                   <div 
                     onClick={() => openLightboxAt(3)}
                     className="relative w-full h-full min-h-0 overflow-hidden cursor-pointer group bg-gray-200"
