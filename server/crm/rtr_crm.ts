@@ -7,6 +7,11 @@ import {
 import { createErrorResponse, createSuccessResponse } from "../../src/core/api/api_response";
 import { backfillTenantLeadSummaries } from "../migration/job_backfill-summaries";
 import { reconcileTenantLeadSummaries } from "../migration/job_reconcile-summaries";
+import {
+  invalidateEntityPublicShareCaches,
+  schedulePublicShareImagePrewarm,
+  schedulePublicSharePrewarmFromRecord,
+} from "../cache/svc_share-cache-invalidator";
 
 export const crmRouter = Router();
 
@@ -133,6 +138,7 @@ crmRouter.delete("/leads", async (req: Request, res: Response) => {
       return;
     }
     await CrmTenantStoreService.clearTenantCollection(ctx.tenantId, "leads");
+    invalidateEntityPublicShareCaches(null, ctx.tenantId);
     res.json(createSuccessResponse({ cleared: true, tenantId: ctx.tenantId }));
   } catch (err: any) {
     const status = err?.statusCode || 500;
@@ -265,6 +271,62 @@ crmRouter.get("/admin/reconcile-summaries", async (req: Request, res: Response) 
 });
 
 /**
+ * POST /api/crm/public-cache/invalidate
+ * Instantly busts server-side public share RAM cache after client-side Firestore edits
+ * so /share/:id always reflects newly saved title/description/gallery changes immediately.
+ */
+crmRouter.post("/public-cache/invalidate", async (req: Request, res: Response) => {
+  if (!assertNoTenantSpoofing(req, res)) return;
+  const ctx = req.tenantContext!;
+  const rawIds = Array.isArray(req.body?.ids) ? req.body.ids : [];
+  const ids = rawIds
+    .filter((item: unknown): item is string => typeof item === "string" && item.trim().length > 0)
+    .slice(0, 20);
+  const result =
+    ids.length > 0
+      ? invalidateEntityPublicShareCaches(ids, ctx.tenantId)
+      : { propertyCacheRemoved: 0, ogCacheRemoved: 0, imageCacheRemoved: 0 };
+
+  const warmImages = Array.isArray(req.body?.warmImages) ? req.body.warmImages : [];
+  const shareCode =
+    typeof req.body?.shareCode === "string" && req.body.shareCode.trim()
+      ? req.body.shareCode.trim()
+      : ids[0] || "";
+  const prewarmed =
+    warmImages.length > 0 && shareCode
+      ? schedulePublicShareImagePrewarm(shareCode, warmImages)
+      : 0;
+
+  res.json(
+    createSuccessResponse({
+      invalidated: result.propertyCacheRemoved,
+      ogCacheRemoved: result.ogCacheRemoved,
+      imageCacheRemoved: result.imageCacheRemoved,
+      prewarmed,
+    })
+  );
+});
+
+/**
+ * POST /api/crm/public-cache/prewarm
+ * Non-blocking endpoint invoked on share-link copy or property save to pre-generate
+ * the hero (w=1280) + 4 mosaic (w=640) WebP variants before the first external visitor opens /share/:id.
+ */
+crmRouter.post("/public-cache/prewarm", async (req: Request, res: Response) => {
+  if (!assertNoTenantSpoofing(req, res)) return;
+  const shareCode =
+    typeof req.body?.shareCode === "string" && req.body.shareCode.trim()
+      ? req.body.shareCode.trim()
+      : "";
+  const images = Array.isArray(req.body?.images) ? req.body.images : [];
+  const prewarmed =
+    shareCode && images.length > 0
+      ? schedulePublicShareImagePrewarm(shareCode, images)
+      : 0;
+  res.json(createSuccessResponse({ prewarmed }));
+});
+
+/**
  * GET /api/crm/:collection
  * Lists all documents in a collection strictly for req.tenantContext.tenantId.
  */
@@ -336,6 +398,19 @@ crmRouter.post("/:collection", async (req: Request, res: Response) => {
       payload.userId = ctx.userId;
     }
     const created = await CrmTenantStoreService.create(ctx.tenantId, col, payload, ctx.userId);
+    if (col === "leads") {
+      invalidateEntityPublicShareCaches(
+        [
+          created?.id,
+          (created as any)?.propertyId,
+          (created as any)?.sourcePropertyId,
+          payload?.propertyId,
+          payload?.sourcePropertyId,
+        ].filter(Boolean),
+        ctx.tenantId
+      );
+      schedulePublicSharePrewarmFromRecord(created as any, created?.id);
+    }
     res.status(201).json(createSuccessResponse(created));
   } catch (err: any) {
     const status = err?.statusCode || 400;
@@ -358,6 +433,20 @@ crmRouter.patch("/:collection/:id", async (req: Request, res: Response) => {
       req.params.id,
       req.body || {}
     );
+    if (col === "leads") {
+      invalidateEntityPublicShareCaches(
+        [
+          req.params.id,
+          updated?.id,
+          (updated as any)?.propertyId,
+          (updated as any)?.sourcePropertyId,
+          req.body?.propertyId,
+          req.body?.sourcePropertyId,
+        ].filter(Boolean),
+        ctx.tenantId
+      );
+      schedulePublicSharePrewarmFromRecord(updated as any, req.params.id);
+    }
     res.json(createSuccessResponse(updated));
   } catch (err: any) {
     const status = err?.statusCode || 400;
@@ -374,7 +463,22 @@ crmRouter.delete("/:collection/:id", async (req: Request, res: Response) => {
   try {
     const ctx = req.tenantContext!;
     const col = CrmTenantStoreService.assertValidCollection(req.params.collection);
+    const existingLead =
+      col === "leads"
+        ? await CrmTenantStoreService.getById(ctx.tenantId, "leads", req.params.id).catch(() => null)
+        : null;
     await CrmTenantStoreService.delete(ctx.tenantId, col, req.params.id);
+    if (col === "leads") {
+      invalidateEntityPublicShareCaches(
+        [
+          req.params.id,
+          existingLead?.id,
+          existingLead?.propertyId,
+          existingLead?.sourcePropertyId,
+        ].filter(Boolean),
+        ctx.tenantId
+      );
+    }
     res.json(createSuccessResponse({ deleted: true, id: req.params.id }));
   } catch (err: any) {
     const status = err?.statusCode || 400;

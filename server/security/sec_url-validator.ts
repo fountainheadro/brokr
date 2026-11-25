@@ -4,6 +4,7 @@ import http2 from "node:http2";
 import zlib from "node:zlib";
 import axios, { AxiosRequestConfig, AxiosResponse } from "axios";
 import { logger } from "../../src/core/logger/logger";
+import { DailyQuotaTracker } from "../monitoring/svc_daily-quota-tracker";
 
 export const DEFAULT_MAX_EXTERNAL_BYTES = 15 * 1024 * 1024; // 15 MB
 
@@ -144,6 +145,9 @@ export async function safeAxiosGet<T = any>(
   const maxBytes = config.maxContentLength ?? DEFAULT_MAX_EXTERNAL_BYTES;
 
   for (let hop = 0; hop <= maxHops; hop++) {
+    if (hop === 0) {
+      DailyQuotaTracker.recordCrawlerRequest(1);
+    }
     const response = await axios.get<T>(currentUrl, {
       ...config,
       maxContentLength: maxBytes,
@@ -209,6 +213,10 @@ export async function safeHttp2Get(
         data: options.responseType === "json" && typeof ax.data === "string" ? JSON.parse(ax.data) : ax.data,
         finalUrl: currentUrl,
       };
+    }
+
+    if (hop === 0) {
+      DailyQuotaTracker.recordCrawlerRequest(1);
     }
 
     const reqHeaders: Record<string, string> = {

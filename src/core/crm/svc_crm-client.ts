@@ -25,6 +25,10 @@ let activeCrmPreviewMode = false;
  * so real-time Cloud Firestore `onSnapshot` listeners attach directly to `/tenants/{tenantId}/{col}`
  * via the ref-counted Centralized Client Data Hub with zero 4-second polling storms.
  */
+export function getActiveCrmTenantId(): string | null {
+  return activeCrmTenantId;
+}
+
 export function setActiveCrmTenantContext(tenantId: string | null, isPreviewMode = false): void {
   const changed = activeCrmTenantId !== tenantId || activeCrmPreviewMode !== isPreviewMode;
   activeCrmTenantId = tenantId;
@@ -92,6 +96,28 @@ export function emitCrmCollectionUpdated(collectionName: string): void {
   if (typeof window !== "undefined") {
     window.dispatchEvent(new CustomEvent(CRM_UPDATE_EVENT, { detail: { collectionName } }));
   }
+}
+
+function collectEntityAliasIds(record: Record<string, any> | null | undefined, fallbackId?: string): string[] {
+  return Array.from(
+    new Set(
+      [
+        fallbackId,
+        record?.id,
+        record?.propertyId,
+        record?.sourcePropertyId,
+        record?.contactId,
+        record?.clientId,
+        record?.staffId,
+        record?.personalId,
+        record?.activityId,
+        record?.tourId,
+        record?.documentId,
+      ]
+        .map((v) => String(v || "").trim())
+        .filter(Boolean)
+    )
+  );
 }
 
 async function buildAuthHeaders(): Promise<Record<string, string>> {
@@ -206,20 +232,32 @@ export const crmApiClient = {
     if (!res.ok || !json.success) {
       throw new Error(json?.error?.message || `Eroare creare în ${collectionName}`);
     }
+    const hydrated = hydrateEntityTimestamps(json.data) as T & { id: string };
+    const extraIds = collectEntityAliasIds(hydrated, hydrated?.id);
     emitCrmCollectionUpdated(collectionName);
-    clientDataHub.notifyMutation(collectionName, json.data?.id);
+    clientDataHub.notifyMutation(collectionName, hydrated?.id, {
+      updatedDoc: hydrated,
+      extraIds,
+    });
     if (collectionName === "activities") {
       emitCrmCollectionUpdated("tours");
       emitCrmCollectionUpdated("viewings");
-      clientDataHub.notifyMutation("viewings");
+      clientDataHub.notifyMutation("tours", hydrated?.id ? `tour_${hydrated.id}` : undefined);
+      clientDataHub.notifyMutation("viewings", hydrated?.id ? `view_${hydrated.id}` : undefined);
     } else if (collectionName === "staff") {
       emitCrmCollectionUpdated("personal");
-      clientDataHub.notifyMutation("personal");
+      clientDataHub.notifyMutation("personal", hydrated?.id, {
+        updatedDoc: hydrated,
+        extraIds,
+      });
     } else if (collectionName === "personal") {
       emitCrmCollectionUpdated("staff");
-      clientDataHub.notifyMutation("staff");
+      clientDataHub.notifyMutation("staff", hydrated?.id, {
+        updatedDoc: hydrated,
+        extraIds,
+      });
     }
-    return hydrateEntityTimestamps(json.data) as T & { id: string };
+    return hydrated;
   },
 
   async update<T = Record<string, any>>(
@@ -240,17 +278,39 @@ export const crmApiClient = {
     if (!res.ok || !json.success) {
       throw new Error(json?.error?.message || `Eroare actualizare în ${collectionName}`);
     }
+    const hydrated = hydrateEntityTimestamps(json.data) as T & { id?: string };
+    const targetId = hydrated?.id || id;
+    const extraIds = collectEntityAliasIds(hydrated, id);
     emitCrmCollectionUpdated(collectionName);
-    clientDataHub.notifyMutation(collectionName, id);
-    if (collectionName === "staff") {
+    clientDataHub.notifyMutation(collectionName, targetId, {
+      updatedDoc: hydrated,
+      extraIds,
+    });
+    if (collectionName === "activities") {
+      emitCrmCollectionUpdated("tours");
+      emitCrmCollectionUpdated("viewings");
+      clientDataHub.notifyMutation("tours", `tour_${targetId}`);
+      clientDataHub.notifyMutation("viewings", `view_${targetId}`);
+    } else if (collectionName === "viewings" && targetId.startsWith("view_")) {
+      const mirroredActId = targetId.slice("view_".length);
+      emitCrmCollectionUpdated("activities");
+      emitCrmCollectionUpdated("tours");
+      clientDataHub.notifyMutation("activities", mirroredActId);
+      clientDataHub.notifyMutation("tours", `tour_${mirroredActId}`);
+    } else if (collectionName === "staff") {
       emitCrmCollectionUpdated("personal");
-      clientDataHub.notifyMutation("personal", id);
-    }
-    if (collectionName === "personal") {
+      clientDataHub.notifyMutation("personal", targetId, {
+        updatedDoc: hydrated,
+        extraIds,
+      });
+    } else if (collectionName === "personal") {
       emitCrmCollectionUpdated("staff");
-      clientDataHub.notifyMutation("staff", id);
+      clientDataHub.notifyMutation("staff", targetId, {
+        updatedDoc: hydrated,
+        extraIds,
+      });
     }
-    return hydrateEntityTimestamps(json.data) as T;
+    return hydrated;
   },
 
   async remove(collectionName: string, id: string): Promise<void> {
@@ -267,14 +327,24 @@ export const crmApiClient = {
       throw new Error(json?.error?.message || `Eroare ștergere în ${collectionName}`);
     }
     emitCrmCollectionUpdated(collectionName);
-    clientDataHub.notifyMutation(collectionName, id);
-    if (collectionName === "staff") {
+    clientDataHub.notifyMutation(collectionName, id, { deleted: true });
+    if (collectionName === "activities") {
+      emitCrmCollectionUpdated("tours");
+      emitCrmCollectionUpdated("viewings");
+      clientDataHub.notifyMutation("tours", `tour_${id}`, { deleted: true });
+      clientDataHub.notifyMutation("viewings", `view_${id}`, { deleted: true });
+    } else if (collectionName === "viewings" && id.startsWith("view_")) {
+      const mirroredActId = id.slice("view_".length);
+      emitCrmCollectionUpdated("activities");
+      emitCrmCollectionUpdated("tours");
+      clientDataHub.notifyMutation("activities", mirroredActId, { deleted: true });
+      clientDataHub.notifyMutation("tours", `tour_${mirroredActId}`, { deleted: true });
+    } else if (collectionName === "staff") {
       emitCrmCollectionUpdated("personal");
-      clientDataHub.notifyMutation("personal", id);
-    }
-    if (collectionName === "personal") {
+      clientDataHub.notifyMutation("personal", id, { deleted: true });
+    } else if (collectionName === "personal") {
       emitCrmCollectionUpdated("staff");
-      clientDataHub.notifyMutation("staff", id);
+      clientDataHub.notifyMutation("staff", id, { deleted: true });
     }
   },
 
@@ -368,9 +438,14 @@ export const crmApiClient = {
     let active = true;
     let inFlight = false;
     let unsubFirestore: (() => void) | null = null;
-    let fallbackTimer: ReturnType<typeof setInterval> | null = null;
+    let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+    let visibilityHandler: (() => void) | null = null;
     let tenantWaitTimer: ReturnType<typeof setTimeout> | null = null;
     let usingLiveSnapshot = false;
+    let fallbackStep = 0;
+    let lastFallbackPullAt = 0;
+    const FALLBACK_DELAYS_MS = [30_000, 60_000, 120_000, 180_000];
+    const QUOTA_BACKOFF_MS = 300_000;
 
     const deliver = (items: T[]) => {
       if (!active) return;
@@ -384,9 +459,10 @@ export const crmApiClient = {
       }
     };
 
-    const pullViaApi = async () => {
-      if (!active || inFlight || !auth.currentUser) return;
+    const pullViaApi = async (): Promise<"ok" | "quota" | "error"> => {
+      if (!active || inFlight || !auth.currentUser) return "ok";
       inFlight = true;
+      lastFallbackPullAt = Date.now();
       try {
         const items = await crmApiClient.list<T>(collectionName, {
           propertyId: options?.propertyId,
@@ -394,8 +470,14 @@ export const crmApiClient = {
           limit: options?.limit,
         });
         deliver(items);
-      } catch (err) {
+        return "ok";
+      } catch (err: any) {
+        const msg = String(err?.message || "").toLowerCase();
+        if (err?.status === 429 || msg.includes("429") || msg.includes("quota")) {
+          return "quota";
+        }
         console.warn(`[crmApiClient] Sync error for ${collectionName}:`, err);
+        return "error";
       } finally {
         inFlight = false;
       }
@@ -403,19 +485,58 @@ export const crmApiClient = {
 
     const stopFallbackPolling = () => {
       if (fallbackTimer) {
-        clearInterval(fallbackTimer);
+        clearTimeout(fallbackTimer);
         fallbackTimer = null;
       }
+      if (visibilityHandler && typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", visibilityHandler);
+        visibilityHandler = null;
+      }
+      fallbackStep = 0;
+    };
+
+    const scheduleFallbackTick = (overrideDelayMs?: number) => {
+      if (!active || usingLiveSnapshot) return;
+      if (fallbackTimer) {
+        clearTimeout(fallbackTimer);
+        fallbackTimer = null;
+      }
+      const delayMs =
+        overrideDelayMs ??
+        FALLBACK_DELAYS_MS[Math.min(fallbackStep, FALLBACK_DELAYS_MS.length - 1)];
+      fallbackTimer = setTimeout(async () => {
+        fallbackTimer = null;
+        if (!active || usingLiveSnapshot) return;
+        if (typeof document !== "undefined" && document.hidden) {
+          scheduleFallbackTick(FALLBACK_DELAYS_MS[FALLBACK_DELAYS_MS.length - 1]);
+          return;
+        }
+        const outcome = await pullViaApi();
+        if (outcome === "quota") {
+          fallbackStep = FALLBACK_DELAYS_MS.length - 1;
+          scheduleFallbackTick(QUOTA_BACKOFF_MS);
+        } else {
+          fallbackStep = Math.min(fallbackStep + 1, FALLBACK_DELAYS_MS.length - 1);
+          scheduleFallbackTick();
+        }
+      }, delayMs);
     };
 
     const startFallbackPolling = () => {
       if (fallbackTimer || !active) return;
-      // Gentle 30s fallback ONLY when live onSnapshot isn't active (e.g. preview mode)
-      fallbackTimer = setInterval(() => {
-        if (!usingLiveSnapshot) {
-          void pullViaApi();
-        }
-      }, 30_000);
+      if (!visibilityHandler && typeof document !== "undefined") {
+        visibilityHandler = () => {
+          if (!active || usingLiveSnapshot || document.hidden) return;
+          if (Date.now() - lastFallbackPullAt >= 60_000) {
+            fallbackStep = 0;
+            void pullViaApi().then((outcome) => {
+              scheduleFallbackTick(outcome === "quota" ? QUOTA_BACKOFF_MS : undefined);
+            });
+          }
+        };
+        document.addEventListener("visibilitychange", visibilityHandler);
+      }
+      scheduleFallbackTick();
     };
 
     const detachFirestore = () => {

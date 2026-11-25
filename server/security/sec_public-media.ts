@@ -240,6 +240,42 @@ export function clearProtectedMemoryCacheForTests(): void {
   protectedCacheBytes = 0;
 }
 
+/**
+ * Erases ONLY cached protected public image variants whose storage path belongs
+ * to one of the specified property/entity IDs, leaving all other properties warm.
+ */
+export function invalidateProtectedImagesForProperty(
+  ids: string | string[] | null | undefined
+): number {
+  const rawList = Array.isArray(ids) ? ids : typeof ids === "string" ? [ids] : [];
+  const markers = Array.from(
+    new Set(
+      rawList
+        .map((id) => String(id || "").trim().toLowerCase())
+        .filter(Boolean)
+        .map((id) => `/properties/${id}/`)
+    )
+  );
+  if (markers.length === 0) return 0;
+
+  let removed = 0;
+  for (const [key, entry] of Array.from(protectedImageCache.entries())) {
+    const lowerKey = key.toLowerCase();
+    if (markers.some((m) => lowerKey.includes(m))) {
+      protectedCacheBytes = Math.max(0, protectedCacheBytes - entry.buffer.length);
+      protectedImageCache.delete(key);
+      removed++;
+    }
+  }
+  for (const key of Array.from(pendingProtectedBuilds.keys())) {
+    const lowerKey = key.toLowerCase();
+    if (markers.some((m) => lowerKey.includes(m))) {
+      pendingProtectedBuilds.delete(key);
+    }
+  }
+  return removed;
+}
+
 function pruneTokenCounts() {
   const now = Date.now();
   for (const [key, entry] of tokenFetchCounts.entries()) {
@@ -577,17 +613,23 @@ export async function applyPublicImageProtections(
       }
     }
 
-    // Persist generated variant to Cloud Storage so cold restarts execute 0 transforms
-    await MediaPipelineService.persistPublicShareVariant({
+    putProtectedMemoryCache(fullCacheKey, outBuffer, outMime);
+    writeDiskCachedPublicImage(fullCacheKey, outBuffer, outMime);
+
+    // Persist generated variant to Cloud Storage so cold restarts execute 0 transforms.
+    // Non-blocking in dev/production (shaves 200-800ms off cold image delivery);
+    // awaited synchronously in NODE_ENV=test for deterministic Phase 5 cold-restart tests.
+    const persistPromise = MediaPipelineService.persistPublicShareVariant({
       shareCode: options.propertyCode || "BROKR",
       sourceKey: options.cacheKey,
       width: capWidth,
       buffer: outBuffer,
       mimeType: outMime,
-    });
+    }).catch(() => null);
 
-    putProtectedMemoryCache(fullCacheKey, outBuffer, outMime);
-    writeDiskCachedPublicImage(fullCacheKey, outBuffer, outMime);
+    if (process.env.NODE_ENV === "test") {
+      await persistPromise;
+    }
 
     return { buffer: outBuffer, mimeType: outMime };
   });

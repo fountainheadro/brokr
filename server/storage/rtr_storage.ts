@@ -13,6 +13,8 @@ import {
   CACHE_CONTROL_PUBLIC_IMMUTABLE,
   MediaPipelineService,
 } from "../media/svc_media-pipeline";
+import { invalidateEntityPublicShareCaches } from "../cache/svc_share-cache-invalidator";
+import { DailyQuotaTracker } from "../monitoring/svc_daily-quota-tracker";
 
 export const storageRouter = Router();
 
@@ -69,6 +71,7 @@ storageRouter.get(
         res.setHeader("Vary", "Accept");
         res.setHeader("Cache-Control", variant.cacheControl);
         res.setHeader("X-Media-Variant-Cache", variant.fromStorage ? "HIT" : "MISS");
+        DailyQuotaTracker.recordMediaEgress(variant.buffer.length);
         res.send(variant.buffer);
         return;
       }
@@ -81,6 +84,7 @@ storageRouter.get(
         "Cache-Control",
         isImmutableOriginal ? CACHE_CONTROL_PUBLIC_IMMUTABLE : "public, max-age=86400"
       );
+      DailyQuotaTracker.recordMediaEgress(buffer.length);
       res.send(buffer);
     } catch (err: any) {
       const status = err?.statusCode || 404;
@@ -124,6 +128,7 @@ storageRouter.get(
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Access-Control-Allow-Origin", "*");
       res.setHeader("Cache-Control", CACHE_CONTROL_PUBLIC_IMMUTABLE);
+      DailyQuotaTracker.recordMediaEgress(found.buffer.length);
       res.send(found.buffer);
     } catch (err: any) {
       const status = err?.statusCode || 400;
@@ -163,6 +168,7 @@ storageRouter.get("/signed", async (req: Request, res: Response) => {
       "Cache-Control",
       metadata.visibility === "private" ? CACHE_CONTROL_PRIVATE : "public, max-age=3600"
     );
+    DailyQuotaTracker.recordMediaEgress(buffer.length);
     res.send(buffer);
   } catch (err: any) {
     const status = err?.statusCode || 403;
@@ -190,6 +196,7 @@ storageRouter.post(
         .slice(0, 60);
 
       let syncedCount = 0;
+      const touchedEntityIds = new Set<string>();
       for (const rawUrl of urls) {
         let pathname = rawUrl.trim();
         if (/^https?:\/\//i.test(pathname)) {
@@ -225,6 +232,10 @@ storageRouter.post(
         if (!objectKey.startsWith(`tenants/${ctx.tenantId}/properties/`)) {
           continue;
         }
+        const keySegments = objectKey.split("/");
+        if (keySegments[3]) {
+          touchedEntityIds.add(keySegments[3]);
+        }
         try {
           const ok = await CloudStorageService.syncLocalPublicPropertyObjectToFirestore({
             tenantId: ctx.tenantId,
@@ -234,6 +245,10 @@ storageRouter.post(
         } catch {
           // Best-effort per object
         }
+      }
+
+      if (touchedEntityIds.size > 0) {
+        invalidateEntityPublicShareCaches(Array.from(touchedEntityIds), ctx.tenantId);
       }
 
       res.json(createSuccessResponse({ syncedCount, checkedCount: urls.length }));

@@ -145,7 +145,11 @@ export const SharedProperty: React.FC = () => {
         }
 
         if (isMounted) {
-          setError("Proprietatea nu a fost găsită sau a expirat.");
+          if (res.status === 503 || res.status === 429) {
+            setError("Serviciul de date este temporar indisponibil. Te rugăm să reîncerci în câteva momente.");
+          } else {
+            setError("Proprietatea nu a fost găsită sau a expirat.");
+          }
           setLoading(false);
         }
       } catch (err: any) {

@@ -21,6 +21,10 @@ import { AutomationConfigRepository } from "../../src/core/automation/repo_autom
 import { PersistentStoreService } from "../../src/core/database/svc_persistent-store";
 import { SharedLeadStoreService } from "../../src/core/crm/svc_shared-leads-store";
 import {
+  invalidateEntityPublicShareCaches,
+  schedulePublicSharePrewarmFromRecord,
+} from "../cache/svc_share-cache-invalidator";
+import {
   backfillAllLeadSummaries,
   backfillTenantLeadSummaries,
 } from "../migration/job_backfill-summaries";
@@ -916,6 +920,19 @@ platformRouter.get("/observability/metrics", (_req: Request, res: Response) => {
 platformRouter.post("/shared-leads", async (req: Request, res: Response) => {
   try {
     const result = await SharedLeadStoreService.upsertSharedLead(req.body || {});
+    invalidateEntityPublicShareCaches(
+      [
+        result?.canonical?.id,
+        result?.canonical?.propertyId,
+        (result?.canonical as any)?.sourcePropertyId,
+        result?.summary?.id,
+        result?.summary?.propertyId,
+        req.body?.id,
+        req.body?.propertyId,
+        req.body?.sourcePropertyId,
+      ].filter(Boolean)
+    );
+    schedulePublicSharePrewarmFromRecord(result?.canonical as any, result?.canonical?.id);
     res.status(201).json(createSuccessResponse(result));
   } catch (err: any) {
     const status = err?.statusCode || 400;
@@ -932,6 +949,7 @@ platformRouter.post("/shared-leads", async (req: Request, res: Response) => {
 platformRouter.delete("/shared-leads/:id", async (req: Request, res: Response) => {
   try {
     await SharedLeadStoreService.deleteSharedLead(req.params.id);
+    invalidateEntityPublicShareCaches([req.params.id]);
     res.json(createSuccessResponse({ deleted: true, id: req.params.id }));
   } catch (err: any) {
     const status = err?.statusCode || 400;
@@ -948,6 +966,7 @@ platformRouter.delete("/shared-leads/:id", async (req: Request, res: Response) =
 platformRouter.delete("/shared-leads", async (_req: Request, res: Response) => {
   try {
     const deletedCount = await SharedLeadStoreService.clearAllSharedLeads();
+    invalidateEntityPublicShareCaches(null);
     res.json(createSuccessResponse({ deletedCount }));
   } catch (err: any) {
     const status = err?.statusCode || 500;

@@ -104,19 +104,44 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Register automated synchronization to back-end cache for offline push execution
   useEffect(() => {
     let unsubViewings: (() => void) | null = null;
+    let lastSyncedSignature = "";
 
     const unsubAuth = auth.onAuthStateChanged((user) => {
+      if (unsubViewings) {
+        unsubViewings();
+        unsubViewings = null;
+      }
+      lastSyncedSignature = "";
+
       if (user) {
         unsubViewings = viewingsService.subscribeToAllViewings((vList) => {
+          const dedupedById = new Map<
+            string,
+            { id: string; date: string; hour: string; agentId: string; contactName: string }
+          >();
+          for (const v of vList) {
+            if (!v?.id || !v.date || !v.hour) continue;
+            dedupedById.set(String(v.id), {
+              id: String(v.id),
+              date: String(v.date),
+              hour: String(v.hour),
+              agentId: v.agentId || user.uid,
+              contactName: v.contactName || 'clientul',
+            });
+          }
+
+          const normalizedViewings = Array.from(dedupedById.values()).sort((a, b) =>
+            a.id.localeCompare(b.id)
+          );
+          const signature = JSON.stringify({ userId: user.uid, viewings: normalizedViewings });
+          if (signature === lastSyncedSignature) {
+            return;
+          }
+          lastSyncedSignature = signature;
+
           const syncPayload = {
             userId: user.uid,
-            viewings: vList.map(v => ({
-              id: v.id,
-              date: v.date,
-              hour: v.hour,
-              agentId: v.agentId || user.uid,
-              contactName: v.contactName || 'clientul'
-            }))
+            viewings: normalizedViewings,
           };
 
           user.getIdToken().then((idToken) => {
@@ -131,19 +156,21 @@ export const NotificationProvider: React.FC<{ children: React.ReactNode }> = ({ 
               body: JSON.stringify(syncPayload)
             });
           })
-          .then(res => res.json())
+          .then(async (res) => {
+            if (!res.ok) {
+              lastSyncedSignature = "";
+              throw new Error(`HTTP ${res.status}`);
+            }
+            return res.json();
+          })
           .then(data => {
             console.log('[PWA Sync] Sync of upcoming viewings completed:', data);
           })
           .catch(err => {
+            lastSyncedSignature = "";
             console.warn('[PWA Sync] Failed to synchronize viewings to local cache server:', err);
           });
         });
-      } else {
-        if (unsubViewings) {
-          unsubViewings();
-          unsubViewings = null;
-        }
       }
     });
 

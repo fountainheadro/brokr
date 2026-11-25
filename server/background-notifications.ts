@@ -8,6 +8,7 @@ import { requireTenantContext } from "./middleware/mw_tenant-context";
 import { CrmTenantStoreService } from "../src/core/crm/svc_crm-tenant-store";
 import { PersistentStoreService } from "../src/core/database/svc_persistent-store";
 import { FirestoreLeaseService } from "../src/core/jobs/svc_firestore-lease";
+import { DailyQuotaTracker } from "./monitoring/svc_daily-quota-tracker";
 
 export const FCM_MESSAGING_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
 
@@ -128,6 +129,7 @@ async function sendFCMPushNotification(
         }
       );
 
+      DailyQuotaTracker.recordFcmPush(1);
       logger.info("FCM push delivered successfully", {
         module: "background-notifications",
         action: "fcm_send_success",
@@ -498,6 +500,20 @@ export async function runViewingRemindersTick(options?: {
 
   if (options?.bypassLease) {
     return executeTick(undefined);
+  }
+
+  // Zero-read fast path: skip Firestore lease acquisition completely when there are no
+  // scheduled viewings or registered device tokens to evaluate on this tick.
+  if (
+    Object.keys(runtimeMirror.viewings).length === 0 ||
+    Object.keys(runtimeMirror.tokens).length === 0
+  ) {
+    return {
+      executed: true,
+      evaluatedViewings: Object.keys(runtimeMirror.viewings).length,
+      dispatchedCount: 0,
+      deduplicatedCount: 0,
+    };
   }
 
   const leaseRes = await FirestoreLeaseService.withLease(

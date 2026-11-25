@@ -122,6 +122,26 @@ async function fetchAndDecodeWithRetries(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      // Fast path: reuse the in-flight fetch started immediately in SSR HTML <head>
+      // while the browser was downloading and parsing the JS bundle.
+      if (attempt === 1 && isProtectedEndpoint && typeof window !== "undefined") {
+        const prefetchMap = (window as any).__BROKR_PREFETCHED_PUBLIC_IMAGES__ as
+          | Record<string, Promise<Blob>>
+          | undefined;
+        const prefetchedPromise = prefetchMap?.[src];
+        if (prefetchedPromise) {
+          delete prefetchMap[src];
+          try {
+            const blob = await prefetchedPromise;
+            if (blob && blob.size > 0) {
+              return await decodeBlobToEntry(blob);
+            }
+          } catch {
+            // Fall through cleanly to normal retried fetch
+          }
+        }
+      }
+
       const entry = await withFetchSlot(priority, async () => {
         const controller =
           typeof AbortController !== "undefined" ? new AbortController() : null;

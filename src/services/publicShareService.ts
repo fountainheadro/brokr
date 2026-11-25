@@ -1,5 +1,6 @@
-import { doc, setDoc } from "firebase/firestore";
+import { deleteDoc, doc, setDoc } from "firebase/firestore";
 import { auth, db } from "../lib/firebase";
+import { recordClientFirestoreOps } from "../utils/clientQuotaTelemetry";
 import {
   detectShareEntityKind,
   resolveShareCode,
@@ -209,7 +210,120 @@ export function buildPublicShareDocId(
   return `${prefix}__${cleanCode}`.slice(0, 128);
 }
 
+const FINGERPRINT_STORAGE_KEY = "brokr_public_share_fingerprints_v1";
+const MAX_STORED_FINGERPRINTS = 1500;
 const publishedFingerprintCache = new Map<string, string>();
+let fingerprintsHydratedFromStorage = false;
+
+function hydrateFingerprintCacheFromStorage(): void {
+  if (fingerprintsHydratedFromStorage) return;
+  fingerprintsHydratedFromStorage = true;
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    const raw = window.localStorage.getItem(FINGERPRINT_STORAGE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof k === "string" && typeof v === "string") {
+          publishedFingerprintCache.set(k, v);
+        }
+      }
+    }
+  } catch {
+    // Ignore storage read errors (private browsing / quota)
+  }
+}
+
+function persistFingerprintCacheToStorage(): void {
+  if (typeof window === "undefined" || !window.localStorage) return;
+  try {
+    while (publishedFingerprintCache.size > MAX_STORED_FINGERPRINTS) {
+      const oldestKey = publishedFingerprintCache.keys().next().value;
+      if (!oldestKey) break;
+      publishedFingerprintCache.delete(oldestKey);
+    }
+    const obj: Record<string, string> = {};
+    for (const [k, v] of publishedFingerprintCache.entries()) {
+      obj[k] = v;
+    }
+    window.localStorage.setItem(FINGERPRINT_STORAGE_KEY, JSON.stringify(obj));
+  } catch {
+    // Ignore storage write errors
+  }
+}
+
+const PREWARM_DEBOUNCE_MS = 15 * 60 * 1000; // 15 min per shareCode in browser session
+const lastPrewarmAtByKey = new Map<string, number>();
+
+async function notifyServerPublicShareCacheInvalidation(
+  ids: Array<string | undefined>,
+  prewarm?: { shareCode?: string; warmImages?: string[] }
+): Promise<void> {
+  if (typeof window === "undefined" || typeof fetch !== "function" || !auth.currentUser) return;
+  const cleanIds = Array.from(
+    new Set(ids.map((v) => String(v || "").trim()).filter((v) => v.length > 0))
+  );
+  if (cleanIds.length === 0) return;
+  const warmImages = (prewarm?.warmImages || []).slice(0, 5);
+  try {
+    const token = await auth.currentUser.getIdToken();
+    if (!token) return;
+    await fetch("/api/crm/public-cache/invalidate", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        ids: cleanIds,
+        shareCode: prewarm?.shareCode || cleanIds[0],
+        warmImages,
+      }),
+    });
+    if (prewarm?.shareCode && warmImages.length > 0) {
+      lastPrewarmAtByKey.set(prewarm.shareCode.toUpperCase(), Date.now());
+    }
+  } catch {
+    // Best-effort cache bust
+  }
+}
+
+async function triggerServerPublicSharePrewarm(
+  shareCode: string,
+  warmImages: string[]
+): Promise<void> {
+  if (
+    typeof window === "undefined" ||
+    typeof fetch !== "function" ||
+    !auth.currentUser ||
+    !shareCode ||
+    warmImages.length === 0
+  ) {
+    return;
+  }
+  const key = shareCode.toUpperCase();
+  const lastAt = lastPrewarmAtByKey.get(key) || 0;
+  if (Date.now() - lastAt < PREWARM_DEBOUNCE_MS) return;
+  lastPrewarmAtByKey.set(key, Date.now());
+  try {
+    const token = await auth.currentUser.getIdToken();
+    if (!token) return;
+    await fetch("/api/crm/public-cache/prewarm", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        shareCode: key,
+        images: warmImages.slice(0, 5),
+      }),
+    });
+  } catch {
+    // Best-effort pre-warm
+  }
+}
 
 /**
  * Publishes a strictly sanitized, PII-free public share snapshot to Firestore `public_shares/{shareId}`.
@@ -218,12 +332,14 @@ const publishedFingerprintCache = new Map<string, string>();
  */
 export async function publishPublicShareSnapshot(
   lead: Partial<Lead> | null | undefined,
-  options?: { tenantId?: string | null; force?: boolean }
+  options?: { tenantId?: string | null; force?: boolean; skipServerInvalidate?: boolean }
 ): Promise<boolean> {
   if (!lead || !auth.currentUser) return false;
   // Never overwrite an existing full public_shares snapshot with a slim summary projection
   // that intentionally omits `images[]` and `extractedData`.
   if (isSummaryLeadRecord(lead)) return false;
+
+  hydrateFingerprintCacheFromStorage();
 
   const shareCode = resolveShareCode(lead);
   if (!shareCode || !/^[a-zA-Z0-9_-]{1,64}$/.test(shareCode)) {
@@ -282,8 +398,15 @@ export async function publishPublicShareSnapshot(
     sanitizedImages !== undefined
       ? sanitizedImages.join(",")
       : orderedPublicImages.join(",");
-  const fingerprint = `${docId}|${title}|${effectiveCoverImage}|${gallerySignature}|${resolvedDesc.length}|${lead.price || ""}|${lead.zone || ""}|${lead.status || ""}|${updatedAt}`;
+  const descSignature = resolvedDesc.slice(0, 240) + "|" + resolvedDesc.length;
+  const fingerprint = `${docId}|${title}|${effectiveCoverImage}|${gallerySignature}|${descSignature}|${lead.price || ""}|${lead.zone || ""}|${lead.transactionType || ""}|${lead.categoria || ""}|${lead.mobilare || ""}|${lead.parcare || ""}|${lead.sursaIncalzire || ""}|${lead.modIncalzire || ""}|${lead.status || ""}|${updatedAt}`;
+  const warmImages = (sanitizedImages ?? orderedPublicImages).slice(0, 5);
   if (!options?.force && publishedFingerprintCache.get(docId) === fingerprint) {
+    // Even if snapshot content didn't change (e.g., agent clicked Copy Share Link),
+    // ensure the 5 mosaic WebP variants are pre-warmed on the server (debounced 15m).
+    if (!options?.skipServerInvalidate && warmImages.length > 0) {
+      void triggerServerPublicSharePrewarm(shareCode, warmImages);
+    }
     return true;
   }
 
@@ -318,12 +441,65 @@ export async function publishPublicShareSnapshot(
     // Write complete sanitized snapshot without `{ merge: true }` so deleted photos
     // and cleared `coverImage` values overwrite stale Firestore fields cleanly.
     await setDoc(doc(db, PUBLIC_SHARES_COLLECTION, docId), payload);
+    recordClientFirestoreOps({ writes: 1 });
     publishedFingerprintCache.set(docId, fingerprint);
+    persistFingerprintCacheToStorage();
+    if (!options?.skipServerInvalidate) {
+      const invalidatePromise = notifyServerPublicShareCacheInvalidation(
+        [shareCode, lead.id, lead.propertyId, lead.sourcePropertyId],
+        { shareCode, warmImages }
+      );
+      if (options?.force) {
+        await invalidatePromise;
+      } else {
+        void invalidatePromise;
+      }
+    }
     return true;
   } catch (err) {
     console.warn(`[publicShareService] Failed to publish public share snapshot ${docId}:`, err);
     return false;
   }
+}
+
+/**
+ * Deletes the public share snapshot for a removed lead/cerere/property and erases
+ * strictly that single entity's server-side caches so deleted listings never linger on `/share/:id`.
+ */
+export async function deletePublicShareSnapshot(
+  lead: Partial<Lead> | null | undefined,
+  options?: { tenantId?: string | null }
+): Promise<void> {
+  if (!lead || !auth.currentUser) return;
+  hydrateFingerprintCacheFromStorage();
+
+  const shareCode = resolveShareCode(lead);
+  const entityKind = detectShareEntityKind(lead);
+  const candidateDocIds = new Set<string>();
+  if (shareCode && /^[a-zA-Z0-9_-]{1,64}$/.test(shareCode)) {
+    const primary = buildPublicShareDocId(shareCode, entityKind, options?.tenantId);
+    if (primary) candidateDocIds.add(primary);
+    const globalDoc = buildPublicShareDocId(shareCode, "lead", null);
+    if (globalDoc) candidateDocIds.add(globalDoc);
+  }
+
+  for (const docId of candidateDocIds) {
+    publishedFingerprintCache.delete(docId);
+    try {
+      await deleteDoc(doc(db, PUBLIC_SHARES_COLLECTION, docId));
+      recordClientFirestoreOps({ deletes: 1 });
+    } catch {
+      // Best-effort cleanup (doc may not exist or rules may only allow owner tenant)
+    }
+  }
+  persistFingerprintCacheToStorage();
+
+  await notifyServerPublicShareCacheInvalidation([
+    shareCode,
+    lead.id,
+    lead.propertyId,
+    lead.sourcePropertyId,
+  ]);
 }
 
 let batchSyncInFlight = false;
@@ -339,6 +515,7 @@ export async function syncPublicShareSnapshotsBatch(
   if (!auth.currentUser || batchSyncInFlight || !Array.isArray(leads) || leads.length === 0) {
     return;
   }
+  hydrateFingerprintCacheFromStorage();
   batchSyncInFlight = true;
   try {
     const maxCount = options?.maxPerRun ?? 40;
@@ -351,7 +528,10 @@ export async function syncPublicShareSnapshotsBatch(
       const entityKind = detectShareEntityKind(lead);
       const docId = buildPublicShareDocId(code, entityKind, options?.tenantId);
       if (!docId || publishedFingerprintCache.has(docId)) continue;
-      await publishPublicShareSnapshot(lead, { tenantId: options?.tenantId });
+      await publishPublicShareSnapshot(lead, {
+        tenantId: options?.tenantId,
+        skipServerInvalidate: true,
+      });
       processed++;
     }
   } finally {

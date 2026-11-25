@@ -1,6 +1,6 @@
 import { ExtractionResult } from './geminiService';
 import { entityIdService } from './entityIdService';
-import { crmApiClient } from '../core/crm/svc_crm-client';
+import { crmApiClient, getActiveCrmTenantId } from '../core/crm/svc_crm-client';
 import {
   toCanonicalLeadStatus,
   toDisplayLeadStatus,
@@ -10,6 +10,7 @@ import { automationSettingsService } from './automationSettingsService';
 import { buildTitleFromAutomationRule } from '../utils/titleAutomationEngine';
 import { platformAutoCrawlService } from './platformAutoCrawlService';
 import { isAgencyLeadId, isDailyLeadId } from '../utils/leadIdUtils';
+import { deletePublicShareSnapshot, publishPublicShareSnapshot } from './publicShareService';
 
 export { toCanonicalLeadStatus, toDisplayLeadStatus, type CanonicalLeadStatus };
 
@@ -172,6 +173,18 @@ function getLeadTimeMs(lead: Lead): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
+async function syncLeadPublicShareAfterSave(persisted: Lead | null | undefined): Promise<void> {
+  if (!persisted) return;
+  try {
+    await publishPublicShareSnapshot(persisted, {
+      tenantId: getActiveCrmTenantId(),
+      force: true,
+    });
+  } catch {
+    // Non-fatal: canonical Firestore write already succeeded
+  }
+}
+
 async function updateOrForkSharedLead(leadId: string, patch: Record<string, any>): Promise<Lead> {
   try {
     return await crmApiClient.update<Lead>(LEADS_COLLECTION, leadId, patch);
@@ -276,24 +289,32 @@ export const leadsService = {
       }
     }
 
-    return crmApiClient.create<Lead>(LEADS_COLLECTION, {
+    const created = await crmApiClient.create<Lead>(LEADS_COLLECTION, {
       ...leadData,
       title: finalTitle,
       extractedData: finalExtractedData,
       propertyId,
     });
+    await syncLeadPublicShareAfterSave(created);
+    return created;
   },
 
   updateLeadStatus: async (leadId: string, newStatus: LeadStatus) => {
-    return await updateOrForkSharedLead(leadId, { status: newStatus });
+    const persisted = await updateOrForkSharedLead(leadId, { status: newStatus });
+    await syncLeadPublicShareAfterSave(persisted);
+    return persisted;
   },
 
   updateLeadData: async (leadId: string, data: Partial<Lead>) => {
-    return await updateOrForkSharedLead(leadId, data);
+    const persisted = await updateOrForkSharedLead(leadId, data);
+    await syncLeadPublicShareAfterSave(persisted);
+    return persisted;
   },
 
   updateNestedField: async (leadId: string, fieldPath: string, value: any) => {
-    return await updateOrForkSharedLead(leadId, { [fieldPath]: value });
+    const persisted = await updateOrForkSharedLead(leadId, { [fieldPath]: value });
+    await syncLeadPublicShareAfterSave(persisted);
+    return persisted;
   },
 
   subscribeToLeads: (callback: (leads: Lead[]) => void) => {
@@ -335,8 +356,14 @@ export const leadsService = {
   },
 
   deleteLead: async (leadId: string) => {
+    const existingBeforeDelete = await crmApiClient
+      .getById<Lead>(LEADS_COLLECTION, leadId)
+      .catch(() => null);
     try {
       await crmApiClient.remove(LEADS_COLLECTION, leadId);
+      await deletePublicShareSnapshot(existingBeforeDelete || { id: leadId }, {
+        tenantId: getActiveCrmTenantId(),
+      }).catch(() => {});
     } catch (err) {
       // If deleting a shared platform lead from an agency view, mark it deleted locally
       // for this agency only so all other agencies keep access to the global shared lead.

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import { AppError } from "../errors/app_error";
+import { DailyQuotaTracker } from "../../../server/monitoring/svc_daily-quota-tracker";
 
 export interface GeminiGenerateOptions {
   model?: string;
@@ -81,6 +82,14 @@ export class GeminiProvider {
       const inputTokens = usageMeta?.promptTokenCount || Math.ceil(JSON.stringify(prompt).length / 4);
       const outputTokens = usageMeta?.candidatesTokenCount || Math.ceil(responseText.length / 4);
       const totalTokens = usageMeta?.totalTokenCount || inputTokens + outputTokens;
+
+      DailyQuotaTracker.recordAiUsage({
+        model,
+        promptTokens: inputTokens,
+        outputTokens,
+        totalTokens,
+        requests: 1,
+      });
 
       return {
         text: responseText,

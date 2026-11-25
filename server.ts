@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import compression from "compression";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -43,6 +44,16 @@ import {
   CACHE_CONTROL_PUBLIC_IMMUTABLE,
   MediaPipelineService,
 } from "./server/media/svc_media-pipeline";
+import { DailyQuotaTracker } from "./server/monitoring/svc_daily-quota-tracker";
+import {
+  FirestoreQuotaExceededError,
+  isFirestoreQuotaError,
+  PublicPropertyCacheService,
+} from "./src/core/cache/svc_public-property-cache";
+import {
+  invalidateEntityPublicShareCaches,
+  registerPublicShareWarmer,
+} from "./server/cache/svc_share-cache-invalidator";
 import { detectImageMagicBytes } from "./server/security/sec_image-validator";
 import { detectLogoBoxes, inpaintLogoBox } from "./server/security/sec_logo-inpainter";
 import {
@@ -767,6 +778,17 @@ async function startServer() {
   // Operational observability & latency telemetry
   app.use(mwObservability);
 
+  // HTTP gzip/deflate compression for HTML, JS, CSS, and JSON payloads (automatically skips images/WebP)
+  app.use(
+    compression({
+      threshold: 1024,
+      filter: (req, res) => {
+        if (req.headers["x-no-compression"]) return false;
+        return compression.filter(req, res);
+      },
+    })
+  );
+
   // Global Logging Middleware (logs API endpoints and main routes, skips internal module requests)
   app.use((req, res, next) => {
     if (req.url.startsWith("/api") || (!req.url.startsWith("/@") && !req.url.startsWith("/node_modules") && !req.url.startsWith("/src/"))) {
@@ -924,6 +946,10 @@ async function startServer() {
         uploadedByUserId: req.authUser?.uid || req.tenantContext?.userId || "authenticated_user",
       });
 
+      if (entityId !== "unassigned") {
+        invalidateEntityPublicShareCaches([entityId], verifiedTenantId);
+      }
+
       res.json({
         success: true,
         url: stored.url,
@@ -996,6 +1022,32 @@ async function startServer() {
 
   // Phase 4 liveness (/api/healthz), readiness (/api/readyz), and backward-compatible /api/health probes
   registerHealthRoutes(app, lifecycle);
+
+  // Dev Daily Quota Usage monitor endpoints (strictly RAM-backed: 0 Firestore reads, 0 AI tokens)
+  app.get("/api/dev/quota-usage", mwAuthentication, (_req, res) => {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      success: true,
+      data: DailyQuotaTracker.getSnapshot(),
+    });
+  });
+
+  app.post("/api/dev/quota-usage", mwAuthentication, (req, res) => {
+    const deltas = req.body?.clientDeltas;
+    if (deltas && typeof deltas === "object") {
+      DailyQuotaTracker.recordFirestoreOps({
+        reads: Number(deltas.reads) || 0,
+        writes: Number(deltas.writes) || 0,
+        deletes: Number(deltas.deletes) || 0,
+        source: "client",
+      });
+    }
+    res.setHeader("Cache-Control", "no-store");
+    res.json({
+      success: true,
+      data: DailyQuotaTracker.getSnapshot(),
+    });
+  });
 
   // Phase 6 OIDC-protected internal workers (Cloud Scheduler & Cloud Tasks)
   app.use("/internal/workers", internalWorkersRouter);
@@ -1362,6 +1414,12 @@ Returnează un JSON strict cu următoarele chei:
       });
 
       const text = response.text;
+      DailyQuotaTracker.recordGeminiResponse({
+        model: "gemini-3.1-flash-lite",
+        response,
+        fallbackPromptChars: prompt.length,
+        fallbackOutputChars: text?.length || 0,
+      });
       if (!text) throw new Error("Nu s-a primit niciun răspuns de la Gemini");
       const parsed = JSON.parse(text);
       const finalTitle = cleanForcedTitle || String(parsed.title || "").trim();
@@ -1536,10 +1594,14 @@ Returnează un JSON strict cu următoarele chei:
             },
           };
           const queryRes = await axios.post(queryUrl, queryBody, { headers: requestHeaders, timeout: 6000 });
+          DailyQuotaTracker.recordFirestoreOps({ reads: 1, source: "server" });
           if (Array.isArray(queryRes.data) && queryRes.data[0]?.document) {
             return parseFirestoreDoc(queryRes.data[0].document, cleanId);
           }
-        } catch {
+        } catch (err) {
+          if (isFirestoreQuotaError(err)) {
+            throw new FirestoreQuotaExceededError();
+          }
           // Continue to next candidate
         }
       }
@@ -1551,10 +1613,17 @@ Returnează un JSON strict cu următoarele chei:
       try {
         const url = `https://firestore.googleapis.com/v1/projects/${fbConfig.projectId}/databases/${dbId}/documents/${relativeDocPath}${authQuery}`;
         const res = await axios.get(url, { headers: requestHeaders, timeout: 6000 });
+        DailyQuotaTracker.recordFirestoreOps({ reads: 1, source: "server" });
         if (res.data) {
           return parseFirestoreDoc(res.data, cleanId);
         }
-      } catch {
+      } catch (err: any) {
+        if (isFirestoreQuotaError(err)) {
+          throw new FirestoreQuotaExceededError();
+        }
+        if (err?.response?.status === 404) {
+          DailyQuotaTracker.recordFirestoreOps({ reads: 1, source: "server" });
+        }
         // Not found or unauthorized
       }
       return null;
@@ -1745,10 +1814,22 @@ Returnează un JSON strict cu următoarele chei:
         expiresAt: Date.now() + publicTokenTtlMs,
       },
     };
+    const orderedTokenUrls = extractOrderedPublicImageUrls(sanitized);
+    const prefetchUrls = orderedTokenUrls
+      .slice(0, 5)
+      .filter((u) => u.startsWith("/api/public-image?"))
+      .map((u, idx) => {
+        const w = idx === 0 ? 1280 : 640;
+        const qIdx = u.indexOf("?");
+        const params = new URLSearchParams(qIdx >= 0 ? u.slice(qIdx + 1) : "");
+        params.set("w", String(w));
+        return `/api/public-image?${params.toString()}`;
+      });
     return {
       payload,
       propCode,
       mosaicSources: orderedNormalizedSources.slice(0, 5),
+      prefetchUrls,
     };
   }
 
@@ -1940,6 +2021,7 @@ Returnează un JSON strict cu următoarele chei:
       });
     });
   }
+  registerPublicShareWarmer(warmPublicShareMosaicImages);
 
   // Public property endpoint for shared property links (strictly strips private owner PII & source URLs, tokenizes images)
   app.get("/api/public-property/:id", async (req, res) => {
@@ -1948,7 +2030,8 @@ Returnează un JSON strict cu următoarele chei:
       if (!id) return res.status(400).json({ error: "Property ID required" });
 
       const preferredTenantId = resolvePublicShareTenantId(req);
-      const property = await fetchPropertyById(id, { preferredTenantId });
+      const bypassCache = req.query.fresh === "1";
+      const property = await fetchPropertyByIdCached(id, preferredTenantId, { bypassCache });
       if (!property) {
         return res.status(404).json({ error: "Property not found" });
       }
@@ -1960,6 +2043,14 @@ Returnează un JSON strict cu următoarele chei:
       res.setHeader("X-Robots-Tag", "noindex, noimageindex, noarchive");
       res.json(payload);
     } catch (e: any) {
+      if (isFirestoreQuotaError(e)) {
+        return res.status(503).json({
+          code: "FIRESTORE_QUOTA_EXCEEDED",
+          error:
+            e?.message ||
+            "Serviciul de date este temporar indisponibil (limită zilnică atinsă). Te rugăm să încerci din nou mai târziu.",
+        });
+      }
       if (e.response && (e.response.status === 404 || e.response.status === 403)) {
         return res.status(404).json({ error: "Property not found or requires server credentials" });
       }
@@ -2011,6 +2102,7 @@ Returnează un JSON strict cu următoarele chei:
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
       res.setHeader("X-Media-Storage-Hit", cachedProtected.fromStorage ? "HIT" : "MEM");
+      DailyQuotaTracker.recordMediaEgress(cachedProtected.buffer.length);
       return res.send(cachedProtected.buffer);
     }
 
@@ -2036,6 +2128,7 @@ Returnează un JSON strict cu următoarele chei:
       res.setHeader("X-Robots-Tag", "noindex, noimageindex");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+      DailyQuotaTracker.recordMediaEgress(protectedImg.buffer.length);
       return res.send(protectedImg.buffer);
     } catch (err: any) {
       console.warn("[Server] /api/public-image error:", err?.message || err);
@@ -2078,28 +2171,20 @@ Returnează un JSON strict cu următoarele chei:
     return { path: rootIndexPath, isDist: false };
   }
 
-  // Short-lived property lookup cache for OpenGraph metadata assembly (OG JPEGs themselves
-  // are persisted in Cloud Storage via MediaPipelineService across cold restarts)
-  const ogPropertyShortCache = new Map<string, { property: any; timestamp: number }>();
-
+  // Unified 3-minute RAM cache + in-flight coalescing for public property lookups
+  // (shared across /share/:id, /api/public-property/:id, and /api/og-image/:id,
+  // and instantaneously busted on any CRM/photo edit via PublicPropertyCacheService.invalidate)
   async function fetchPropertyByIdCached(
     id: string,
-    preferredTenantId?: string | null
+    preferredTenantId?: string | null,
+    options?: { bypassCache?: boolean }
   ): Promise<any> {
-    const cacheKey = `${preferredTenantId || "global"}:${id}`;
-    const hit = ogPropertyShortCache.get(cacheKey);
-    if (hit && Date.now() - hit.timestamp < 10_000) {
-      return hit.property;
-    }
-    const property = await fetchPropertyById(id, { preferredTenantId });
-    if (property) {
-      if (ogPropertyShortCache.size >= 300) {
-        const oldest = ogPropertyShortCache.keys().next().value;
-        if (oldest !== undefined) ogPropertyShortCache.delete(oldest);
-      }
-      ogPropertyShortCache.set(cacheKey, { property, timestamp: Date.now() });
-    }
-    return property;
+    return PublicPropertyCacheService.getOrFetch(
+      id,
+      preferredTenantId,
+      () => fetchPropertyById(id, { preferredTenantId }),
+      { bypassCache: options?.bypassCache }
+    );
   }
 
   // Helper to serve default brokr OpenGraph banner with short cache so transient upstream failures recover quickly
@@ -2374,10 +2459,11 @@ Returnează un JSON strict cu următoarele chei:
         );
 
       const preferredTenantId = resolvePublicShareTenantId(req);
-      // Human browsers always get fresh property data; link-preview bots reuse the 10s cache
-      const property = isLinkPreviewBot
-        ? await fetchPropertyByIdCached(id, preferredTenantId)
-        : await fetchPropertyById(id, { preferredTenantId });
+      // Both browsers and link-preview bots share the unified 3-minute RAM cache + in-flight coalescing;
+      // any CRM or gallery edit busts the entry immediately via PublicPropertyCacheService.invalidate.
+      const property = await fetchPropertyByIdCached(id, preferredTenantId, {
+        bypassCache: req.query.fresh === "1",
+      });
 
       const title = resolvePublicDisplayTitle(property, "Proprietate Imobiliară • brokr.");
       const description = formatOpenGraphDescription(
@@ -2414,10 +2500,15 @@ Returnează un JSON strict cu următoarele chei:
       }
 
       // Build sanitized public payload + start warming the first 5 mosaic WebP variants in parallel
-      // while the browser downloads/executes the SPA bundle.
+      // while the browser downloads/executes the SPA bundle, AND inject an inline <head> prefetch
+      // script so the browser fetches the hero + 4 mosaic images immediately alongside JS.
       let initialPayloadScript = "";
       if (property && !isLinkPreviewBot) {
-        const { payload, propCode, mosaicSources } = buildPublicPropertyPayload(property, id, req);
+        const { payload, propCode, mosaicSources, prefetchUrls } = buildPublicPropertyPayload(
+          property,
+          id,
+          req
+        );
         warmPublicShareMosaicImages(propCode, mosaicSources);
         const safeJson = JSON.stringify({ routeId: id, data: payload })
           .replace(/</g, "\\u003c")
@@ -2425,7 +2516,19 @@ Returnează un JSON strict cu următoarele chei:
           .replace(/&/g, "\\u0026")
           .replace(/\u2028/g, "\\u2028")
           .replace(/\u2029/g, "\\u2029");
-        initialPayloadScript = `    <script id="__BROKR_INITIAL_PUBLIC_PROPERTY__" type="application/json">${safeJson}</script>`;
+        const scripts: string[] = [
+          `    <script id="__BROKR_INITIAL_PUBLIC_PROPERTY__" type="application/json">${safeJson}</script>`,
+        ];
+        if (prefetchUrls.length > 0) {
+          const safeUrlsJson = JSON.stringify(prefetchUrls)
+            .replace(/</g, "\\u003c")
+            .replace(/>/g, "\\u003e")
+            .replace(/&/g, "\\u0026");
+          scripts.push(
+            `    <script>(function(){try{var u=${safeUrlsJson};var m=window.__BROKR_PREFETCHED_PUBLIC_IMAGES__=window.__BROKR_PREFETCHED_PUBLIC_IMAGES__||{};for(var i=0;i<u.length;i++){(function(s){if(m[s])return;var p=fetch(s,{credentials:"same-origin",headers:{"X-Brokr-Public-View":"1"},cache:"default"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.blob();});p.catch(function(){delete m[s];});m[s]=p;})(u[i]);}}catch(e){}})();</script>`
+          );
+        }
+        initialPayloadScript = scripts.join("\n");
       }
 
       // Clean path-versioned `.jpg` URL with zero query parameters for maximum compatibility across chat apps
@@ -3028,7 +3131,7 @@ Returnează un JSON strict cu următoarele chei:
       const sharePathMatch = parsedShareUrl.pathname.match(/^\/(?:share|p)\/([A-Za-z0-9_-]+)\/?$/i);
       if (sharePathMatch?.[1]) {
         const urlTenantId = resolvePublicShareTenantIdFromHost(parsedShareUrl.hostname);
-        const sharedProp = await fetchPropertyById(sharePathMatch[1], { preferredTenantId: urlTenantId });
+        const sharedProp = await fetchPropertyByIdCached(sharePathMatch[1], urlTenantId);
         if (sharedProp) {
           const authTenantId = req.tenantContext?.tenantId;
           const isSameTenant = !sharedProp.tenantId || !authTenantId || sharedProp.tenantId === authTenantId;
@@ -5782,18 +5885,35 @@ Returnează un JSON strict cu următoarele chei:
     }
   }
 
-  // Always serve static compiled assets from dist/assets if available (so /assets/... never 404s or returns HTML)
+  // Always serve static compiled hashed assets with 1-year immutable Cache-Control
   if (distPath) {
-    app.use("/assets", express.static(path.join(distPath, "assets")));
+    app.use(
+      "/assets",
+      express.static(path.join(distPath, "assets"), {
+        maxAge: "1y",
+        immutable: true,
+        etag: true,
+      })
+    );
   }
 
   // In development, Vite handles on-the-fly compilation, module transformation, and SPA routing!
   if (!isProduction && vite) {
     app.use(vite.middlewares);
   } else if (distPath) {
-    // In production, serve bundled static assets from dist
-    app.use(express.static(distPath));
+    // In production, serve bundled static assets from dist (HTML stays no-cache, static files cached 1h)
+    app.use(
+      express.static(distPath, {
+        maxAge: "1h",
+        setHeaders: (res, filePath) => {
+          if (filePath.endsWith(".html")) {
+            res.setHeader("Cache-Control", "no-cache, must-revalidate");
+          }
+        },
+      })
+    );
     app.get("*", (req, res) => {
+      res.setHeader("Cache-Control", "no-cache, must-revalidate");
       res.sendFile(path.join(distPath, "index.html"));
     });
   }

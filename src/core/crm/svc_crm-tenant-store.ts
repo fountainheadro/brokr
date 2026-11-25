@@ -130,6 +130,347 @@ function sanitizePayloadTimestamps(data: Record<string, any>): Record<string, an
   return out;
 }
 
+function getNestedValue(obj: Record<string, any> | undefined, path: string): any {
+  if (!obj || typeof obj !== "object") return undefined;
+  let curr: any = obj;
+  for (const part of path.split(".")) {
+    if (!curr || typeof curr !== "object") return undefined;
+    curr = curr[part];
+  }
+  return curr;
+}
+
+function parseParcareCount(parcare: string): number | undefined {
+  const norm = parcare.trim().toLowerCase();
+  if (!norm) return undefined;
+  if (norm === "fără" || norm === "fara" || norm === "0") return 0;
+  const m = norm.match(/\d+/);
+  return m ? parseInt(m[0], 10) : undefined;
+}
+
+/**
+ * Keeps top-level lead/cerere/property fields and nested `extractedData` (`crmData`,
+ * `originalTitle`, `originalDescription`, `markdownMarketing`, `presentationSections`)
+ * strictly synchronized whenever an entity is created or updated so the CRM detail view
+ * and external `/share/:id` pages always render identical, up-to-date data.
+ */
+function syncLeadDerivedFields(
+  target: Record<string, any>,
+  patch?: Record<string, any>
+): void {
+  const hasPatch = Boolean(patch && Object.keys(patch).length > 0);
+  const p = patch || {};
+  const hasExtractedPatch = Boolean(p.extractedData && typeof p.extractedData === "object");
+
+  const ensureExtracted = (): Record<string, any> => {
+    if (!target.extractedData || typeof target.extractedData !== "object") {
+      target.extractedData = {};
+    } else {
+      target.extractedData = { ...target.extractedData };
+    }
+    return target.extractedData;
+  };
+
+  // 1. Price synchronization
+  const patchedTopPrice =
+    p.price !== undefined && p.price !== null ? String(p.price).trim() : null;
+  const patchedCrmDotPrice =
+    p["extractedData.crmData.pret.detalii.pret"] !== undefined &&
+    p["extractedData.crmData.pret.detalii.pret"] !== null
+      ? String(p["extractedData.crmData.pret.detalii.pret"]).trim()
+      : null;
+  const patchedNestedPrice = hasExtractedPatch
+    ? (() => {
+        const v = getNestedValue(p.extractedData, "crmData.pret.detalii.pret");
+        return v !== undefined && v !== null ? String(v).trim() : null;
+      })()
+    : null;
+  const syncedPrice =
+    patchedTopPrice ||
+    patchedCrmDotPrice ||
+    patchedNestedPrice ||
+    (!hasPatch && typeof target.price === "string" && target.price.trim()
+      ? target.price.trim()
+      : null);
+
+  if (syncedPrice) {
+    target.price = syncedPrice;
+    if (target.extractedData && typeof target.extractedData === "object") {
+      const ext = ensureExtracted();
+      if (ext.crmData && typeof ext.crmData === "object") {
+        ext.crmData = {
+          ...ext.crmData,
+          pret: {
+            ...(ext.crmData.pret || {}),
+            detalii: {
+              ...(ext.crmData.pret?.detalii || {}),
+              pret: syncedPrice,
+            },
+          },
+        };
+      }
+      if (ext.presentationSections?.tranzactie && typeof ext.presentationSections.tranzactie === "object") {
+        ext.presentationSections = {
+          ...ext.presentationSections,
+          tranzactie: {
+            ...ext.presentationSections.tranzactie,
+            "Preț": syncedPrice,
+          },
+        };
+      }
+    }
+  }
+
+  // 2. Title synchronization (ensures raw leads, Selectate, Cereri & Properties all update on /share/:id)
+  const patchedTopTitle =
+    p.title !== undefined && p.title !== null ? String(p.title).trim() : null;
+  const patchedCrmDotTitle =
+    p["extractedData.crmData.descriere.titlu"] !== undefined &&
+    p["extractedData.crmData.descriere.titlu"] !== null
+      ? String(p["extractedData.crmData.descriere.titlu"]).trim()
+      : null;
+  const patchedOrigTitle =
+    p["extractedData.originalTitle"] !== undefined && p["extractedData.originalTitle"] !== null
+      ? String(p["extractedData.originalTitle"]).trim()
+      : null;
+  const patchedNestedTitle = hasExtractedPatch
+    ? (() => {
+        const v =
+          getNestedValue(p.extractedData, "crmData.descriere.titlu") ??
+          getNestedValue(p.extractedData, "originalTitle");
+        return v !== undefined && v !== null ? String(v).trim() : null;
+      })()
+    : null;
+  const syncedTitle = patchedTopTitle || patchedCrmDotTitle || patchedOrigTitle || patchedNestedTitle;
+
+  if (syncedTitle) {
+    target.title = syncedTitle;
+    if (target.extractedData && typeof target.extractedData === "object") {
+      const ext = ensureExtracted();
+      ext.originalTitle = syncedTitle;
+      if (ext.olxMeta && typeof ext.olxMeta === "object") {
+        ext.olxMeta = { ...ext.olxMeta, originalTitle: syncedTitle };
+      }
+      if (ext.crmData && typeof ext.crmData === "object") {
+        ext.crmData = {
+          ...ext.crmData,
+          descriere: {
+            ...(ext.crmData.descriere || {}),
+            titlu: syncedTitle,
+          },
+        };
+      }
+      if (ext.presentationSections?.introducere && typeof ext.presentationSections.introducere === "object") {
+        ext.presentationSections = {
+          ...ext.presentationSections,
+          introducere: {
+            ...ext.presentationSections.introducere,
+            titlu: syncedTitle,
+          },
+        };
+      }
+    }
+  }
+
+  // 3. Description synchronization (explicit description edits only — never leaks internal notes)
+  const patchedCrmDotDesc =
+    p["extractedData.crmData.descriere.continut"] !== undefined &&
+    p["extractedData.crmData.descriere.continut"] !== null
+      ? String(p["extractedData.crmData.descriere.continut"])
+      : null;
+  const patchedOrigDotDesc =
+    p["extractedData.originalDescription"] !== undefined &&
+    p["extractedData.originalDescription"] !== null
+      ? String(p["extractedData.originalDescription"])
+      : null;
+  const patchedMarkdownDotDesc =
+    p["extractedData.markdownMarketing"] !== undefined &&
+    p["extractedData.markdownMarketing"] !== null
+      ? String(p["extractedData.markdownMarketing"])
+      : null;
+  const patchedNestedDesc = hasExtractedPatch
+    ? (() => {
+        const v =
+          getNestedValue(p.extractedData, "crmData.descriere.continut") ??
+          getNestedValue(p.extractedData, "originalDescription");
+        return v !== undefined && v !== null ? String(v) : null;
+      })()
+    : null;
+  const syncedDesc =
+    patchedCrmDotDesc !== null
+      ? patchedCrmDotDesc
+      : patchedOrigDotDesc !== null
+        ? patchedOrigDotDesc
+        : patchedMarkdownDotDesc !== null
+          ? patchedMarkdownDotDesc
+          : patchedNestedDesc;
+
+  if (syncedDesc !== null) {
+    const ext = ensureExtracted();
+    ext.originalDescription = syncedDesc;
+    if (ext.crmData && typeof ext.crmData === "object") {
+      ext.crmData = {
+        ...ext.crmData,
+        descriere: {
+          ...(ext.crmData.descriere || {}),
+          continut: syncedDesc,
+        },
+      };
+    }
+    if (typeof ext.markdownMarketing === "string") {
+      ext.markdownMarketing = syncedDesc;
+    }
+    if (ext.presentationSections?.introducere && typeof ext.presentationSections.introducere === "object") {
+      ext.presentationSections = {
+        ...ext.presentationSections,
+        introducere: {
+          ...ext.presentationSections.introducere,
+          summary: syncedDesc,
+        },
+      };
+    }
+  }
+
+  // 4. Zone, transactionType, categoria synchronization
+  const patchedZone =
+    p.zone !== undefined && p.zone !== null
+      ? String(p.zone).trim()
+      : p["extractedData.crmData.detaliiGenerale.localizare.zona"] !== undefined
+        ? String(p["extractedData.crmData.detaliiGenerale.localizare.zona"]).trim()
+        : null;
+  if (patchedZone) {
+    target.zone = patchedZone;
+    if (target.extractedData?.crmData && typeof target.extractedData.crmData === "object") {
+      const ext = ensureExtracted();
+      ext.crmData = {
+        ...ext.crmData,
+        detaliiGenerale: {
+          ...(ext.crmData.detaliiGenerale || {}),
+          localizare: {
+            ...(ext.crmData.detaliiGenerale?.localizare || {}),
+            zona: patchedZone,
+          },
+        },
+      };
+    }
+  }
+
+  const patchedTx =
+    p.transactionType !== undefined && p.transactionType !== null
+      ? String(p.transactionType).trim()
+      : null;
+  if (patchedTx && target.extractedData?.crmData && typeof target.extractedData.crmData === "object") {
+    const ext = ensureExtracted();
+    ext.crmData = {
+      ...ext.crmData,
+      detaliiGenerale: {
+        ...(ext.crmData.detaliiGenerale || {}),
+        tranzactie: patchedTx,
+      },
+    };
+  }
+
+  const patchedCategoria =
+    p.categoria !== undefined && p.categoria !== null ? String(p.categoria).trim() : null;
+  if (patchedCategoria && target.extractedData?.crmData && typeof target.extractedData.crmData === "object") {
+    const ext = ensureExtracted();
+    ext.crmData = {
+      ...ext.crmData,
+      detaliiGenerale: {
+        ...(ext.crmData.detaliiGenerale || {}),
+        categoria: patchedCategoria,
+      },
+    };
+  }
+
+  // 5. Additional characteristics (mobilare, parcare, sursaIncalzire, modIncalzire)
+  const touchedChars =
+    p.mobilare !== undefined ||
+    p.parcare !== undefined ||
+    p.sursaIncalzire !== undefined ||
+    p.modIncalzire !== undefined;
+  if (touchedChars && target.extractedData && typeof target.extractedData === "object") {
+    const ext = ensureExtracted();
+    if (ext.crmData && typeof ext.crmData === "object") {
+      const nextCrm: Record<string, any> = { ...ext.crmData };
+      if (p.mobilare !== undefined) {
+        const mobVal = String(p.mobilare || "").trim();
+        const mappedMob =
+          mobVal === "Completă"
+            ? "Complet"
+            : mobVal === "Parțială"
+              ? "Partial"
+              : mobVal === "Fără"
+                ? "Nemobilat"
+                : mobVal;
+        nextCrm.utilitati = {
+          ...(nextCrm.utilitati || {}),
+          dotari: {
+            ...(nextCrm.utilitati?.dotari || {}),
+            mobilat: mappedMob,
+          },
+        };
+      }
+      if (p.parcare !== undefined) {
+        const count = parseParcareCount(String(p.parcare || ""));
+        if (count !== undefined) {
+          nextCrm.caracteristici = {
+            ...(nextCrm.caracteristici || {}),
+            detalii: {
+              ...(nextCrm.caracteristici?.detalii || {}),
+              parcari: count,
+            },
+          };
+        }
+      }
+      if (p.sursaIncalzire !== undefined || p.modIncalzire !== undefined) {
+        const nextHeating = [
+          String(target.sursaIncalzire || "").trim(),
+          String(target.modIncalzire || "").trim(),
+        ].filter(Boolean);
+        nextCrm.utilitati = {
+          ...(nextCrm.utilitati || {}),
+          sistemIncalzire: nextHeating,
+        };
+      }
+      ext.crmData = nextCrm;
+    }
+
+    if (ext.presentationSections && typeof ext.presentationSections === "object") {
+      const nextSections: Record<string, any> = { ...ext.presentationSections };
+      if (p.mobilare !== undefined && nextSections.mobilare && typeof nextSections.mobilare === "object") {
+        nextSections.mobilare = {
+          ...nextSections.mobilare,
+          "Stadiu mobilare": String(p.mobilare || "").trim() || "-",
+        };
+      }
+      if (p.parcare !== undefined && nextSections.parcare && typeof nextSections.parcare === "object") {
+        nextSections.parcare = {
+          ...nextSections.parcare,
+          "Parcare": String(p.parcare || "").trim() || "-",
+        };
+      }
+      if (
+        (p.sursaIncalzire !== undefined || p.modIncalzire !== undefined) &&
+        nextSections.dotari &&
+        typeof nextSections.dotari === "object"
+      ) {
+        const heatingSummary = [
+          String(target.sursaIncalzire || "").trim(),
+          String(target.modIncalzire || "").trim(),
+        ]
+          .filter(Boolean)
+          .join(", ");
+        nextSections.dotari = {
+          ...nextSections.dotari,
+          "Încălzire": heatingSummary || "-",
+        };
+      }
+      ext.presentationSections = nextSections;
+    }
+  }
+}
+
 function assertSafePathSegment(value: string, label: string): string {
   const trimmed = String(value || "").trim();
   if (
@@ -805,33 +1146,7 @@ export class CrmTenantStoreService {
       doc.lastMovedAt = doc.lastMovedAt || now;
       doc.docVersion = 1;
       doc.deletedAt = doc.status === "Sterse" ? now : null;
-      if (typeof doc.price === "string" && doc.price.trim()) {
-        const syncedPrice = doc.price.trim();
-        if (doc.extractedData && typeof doc.extractedData === "object") {
-          doc.extractedData = { ...doc.extractedData };
-          if (doc.extractedData.crmData && typeof doc.extractedData.crmData === "object") {
-            doc.extractedData.crmData = {
-              ...doc.extractedData.crmData,
-              pret: {
-                ...(doc.extractedData.crmData.pret || {}),
-                detalii: {
-                  ...(doc.extractedData.crmData.pret?.detalii || {}),
-                  pret: syncedPrice,
-                },
-              },
-            };
-          }
-          if (doc.extractedData.presentationSections?.tranzactie) {
-            doc.extractedData.presentationSections = {
-              ...doc.extractedData.presentationSections,
-              tranzactie: {
-                ...doc.extractedData.presentationSections.tranzactie,
-                "Preț": syncedPrice,
-              },
-            };
-          }
-        }
-      }
+      syncLeadDerivedFields(doc);
     } else if (collectionName === "contacts" && !doc.contactId) {
       doc.contactId = await this.getNextEntityId(safeTenant, "client");
     } else if (collectionName === "staff") {
@@ -1009,41 +1324,7 @@ export class CrmTenantStoreService {
       updated.status = toDisplayLeadStatus(updated.status) || updated.status;
     }
     if (collectionName === "leads") {
-      const patchedTopPrice =
-        sanitized.price !== undefined && sanitized.price !== null ? String(sanitized.price).trim() : null;
-      const patchedCrmDotPrice =
-        sanitized["extractedData.crmData.pret.detalii.pret"] !== undefined &&
-        sanitized["extractedData.crmData.pret.detalii.pret"] !== null
-          ? String(sanitized["extractedData.crmData.pret.detalii.pret"]).trim()
-          : null;
-      const syncedPrice = patchedTopPrice || patchedCrmDotPrice;
-      if (syncedPrice) {
-        updated.price = syncedPrice;
-        if (updated.extractedData && typeof updated.extractedData === "object") {
-          updated.extractedData = { ...updated.extractedData };
-          if (updated.extractedData.crmData && typeof updated.extractedData.crmData === "object") {
-            updated.extractedData.crmData = {
-              ...updated.extractedData.crmData,
-              pret: {
-                ...(updated.extractedData.crmData.pret || {}),
-                detalii: {
-                  ...(updated.extractedData.crmData.pret?.detalii || {}),
-                  pret: syncedPrice,
-                },
-              },
-            };
-          }
-          if (updated.extractedData.presentationSections?.tranzactie) {
-            updated.extractedData.presentationSections = {
-              ...updated.extractedData.presentationSections,
-              tranzactie: {
-                ...updated.extractedData.presentationSections.tranzactie,
-                "Preț": syncedPrice,
-              },
-            };
-          }
-        }
-      }
+      syncLeadDerivedFields(updated, sanitized);
     }
     if (collectionName === "staff" && updated.status !== undefined) {
       updated.status = toDisplayStaffStatus(updated.status);
@@ -1102,13 +1383,163 @@ export class CrmTenantStoreService {
       updated.docVersion = Number.isFinite(prevVersion) && prevVersion >= 1 ? Math.floor(prevVersion) + 1 : 2;
       updated.deletedAt = updated.status === "Sterse" ? existing.deletedAt || now : null;
       await this.commitLeadWithSummary(safeTenant, updated, "update_lead_dual_write");
+    } else if (collectionName === "activities") {
+      const tourDocId = `tour_${targetDocId}`;
+      const viewingDocId = `view_${targetDocId}`;
+      const tourDoc = {
+        id: tourDocId,
+        tenantId: safeTenant,
+        tourId: updated.activityId || targetDocId,
+        activityId: updated.activityId || targetDocId,
+        propertyId: updated.propertyId || "",
+        clientId: updated.clientId || "",
+        clientName: updated.clientName || "Client",
+        clientPhone: updated.clientPhone || "",
+        staffId: updated.staffId || "",
+        staffName: updated.staffName || "",
+        date: updated.date,
+        hour: updated.hour,
+        status: updated.status || "Programată",
+        notes: updated.notes || "",
+        createdAt: updated.createdAt || now,
+        updatedAt: now,
+      };
+      const viewingDoc = {
+        id: viewingDocId,
+        tenantId: safeTenant,
+        propertyId: updated.propertyId || "",
+        contactId: updated.clientId || updated.activityId || targetDocId,
+        contactName: updated.clientName || "Client",
+        agentId: updated.staffId || "",
+        agentName: updated.staffName || "",
+        date: updated.date,
+        hour: updated.hour,
+        activityId: updated.activityId || targetDocId,
+        createdAt: updated.createdAt || now,
+        updatedAt: now,
+      };
+
+      if (this.isUsingLiveFirestore()) {
+        const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
+        const basePrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${safeTenant}`;
+        await PersistentStoreService.remoteCommitWrites(
+          [
+            {
+              update: {
+                name: `${basePrefix}/activities/${targetDocId}`,
+                fields: PersistentStoreService.encodeDocumentFields(updated),
+              },
+            },
+            {
+              update: {
+                name: `${basePrefix}/tours/${tourDocId}`,
+                fields: PersistentStoreService.encodeDocumentFields(tourDoc),
+              },
+            },
+            {
+              update: {
+                name: `${basePrefix}/viewings/${viewingDocId}`,
+                fields: PersistentStoreService.encodeDocumentFields(viewingDoc),
+              },
+            },
+          ],
+          "update_activity_batch"
+        );
+      } else {
+        PersistentStoreService.set(this.storeKey(safeTenant, "activities"), targetDocId, updated);
+        PersistentStoreService.set(this.storeKey(safeTenant, "tours"), tourDocId, tourDoc);
+        PersistentStoreService.set(this.storeKey(safeTenant, "viewings"), viewingDocId, viewingDoc);
+      }
     } else if (this.isUsingLiveFirestore()) {
       await PersistentStoreService.remoteSetAtPath(
         this.firestoreDocPath(safeTenant, writeCollection, targetDocId),
         updated
       );
+      if (collectionName === "viewings" && targetDocId.startsWith("view_")) {
+        const mirroredActId = targetDocId.slice("view_".length);
+        const mirroredAct = await PersistentStoreService.remoteGetAtPath<Record<string, any>>(
+          this.firestoreDocPath(safeTenant, "activities", mirroredActId)
+        ).catch(() => null);
+        if (mirroredAct) {
+          const syncedAct = {
+            ...mirroredAct,
+            propertyId: updated.propertyId ?? mirroredAct.propertyId,
+            clientId: updated.contactId ?? mirroredAct.clientId,
+            clientName: updated.contactName ?? mirroredAct.clientName,
+            staffId: updated.agentId ?? mirroredAct.staffId,
+            staffName: updated.agentName ?? mirroredAct.staffName,
+            date: updated.date ?? mirroredAct.date,
+            hour: updated.hour ?? mirroredAct.hour,
+            updatedAt: now,
+          };
+          await PersistentStoreService.remoteSetAtPath(
+            this.firestoreDocPath(safeTenant, "activities", mirroredActId),
+            syncedAct
+          ).catch(() => {});
+          await PersistentStoreService.remoteSetAtPath(
+            this.firestoreDocPath(safeTenant, "tours", `tour_${mirroredActId}`),
+            {
+              id: `tour_${mirroredActId}`,
+              tenantId: safeTenant,
+              tourId: syncedAct.activityId || mirroredActId,
+              activityId: syncedAct.activityId || mirroredActId,
+              propertyId: syncedAct.propertyId || "",
+              clientId: syncedAct.clientId || "",
+              clientName: syncedAct.clientName || "Client",
+              clientPhone: syncedAct.clientPhone || "",
+              staffId: syncedAct.staffId || "",
+              staffName: syncedAct.staffName || "",
+              date: syncedAct.date,
+              hour: syncedAct.hour,
+              status: syncedAct.status || "Programată",
+              notes: syncedAct.notes || "",
+              createdAt: syncedAct.createdAt || now,
+              updatedAt: now,
+            }
+          ).catch(() => {});
+        }
+      }
     } else {
       PersistentStoreService.set(this.storeKey(safeTenant, writeCollection), targetDocId, updated);
+      if (collectionName === "viewings" && targetDocId.startsWith("view_")) {
+        const mirroredActId = targetDocId.slice("view_".length);
+        const mirroredAct = PersistentStoreService.get<Record<string, any>>(
+          this.storeKey(safeTenant, "activities"),
+          mirroredActId
+        );
+        if (mirroredAct) {
+          const syncedAct: Record<string, any> = {
+            ...mirroredAct,
+            propertyId: updated.propertyId ?? mirroredAct.propertyId,
+            clientId: updated.contactId ?? mirroredAct.clientId,
+            clientName: updated.contactName ?? mirroredAct.clientName,
+            staffId: updated.agentId ?? mirroredAct.staffId,
+            staffName: updated.agentName ?? mirroredAct.staffName,
+            date: updated.date ?? mirroredAct.date,
+            hour: updated.hour ?? mirroredAct.hour,
+            updatedAt: now,
+          };
+          PersistentStoreService.set(this.storeKey(safeTenant, "activities"), mirroredActId, syncedAct);
+          PersistentStoreService.set(this.storeKey(safeTenant, "tours"), `tour_${mirroredActId}`, {
+            id: `tour_${mirroredActId}`,
+            tenantId: safeTenant,
+            tourId: syncedAct.activityId || mirroredActId,
+            activityId: syncedAct.activityId || mirroredActId,
+            propertyId: syncedAct.propertyId || "",
+            clientId: syncedAct.clientId || "",
+            clientName: syncedAct.clientName || "Client",
+            clientPhone: syncedAct.clientPhone || "",
+            staffId: syncedAct.staffId || "",
+            staffName: syncedAct.staffName || "",
+            date: syncedAct.date,
+            hour: syncedAct.hour,
+            status: syncedAct.status || "Programată",
+            notes: syncedAct.notes || "",
+            createdAt: syncedAct.createdAt || now,
+            updatedAt: now,
+          });
+        }
+      }
     }
 
     if ((collectionName === "staff" || collectionName === "personal") && updated.email) {
@@ -1148,6 +1579,27 @@ export class CrmTenantStoreService {
     if (collectionName === "leads") {
       return await this.deleteLeadWithSummary(safeTenant, targetDocId);
     }
+    if (collectionName === "activities") {
+      const tourDocId = `tour_${targetDocId}`;
+      const viewingDocId = `view_${targetDocId}`;
+      if (this.isUsingLiveFirestore()) {
+        const { projectId, databaseId } = PersistentStoreService.getFirebaseTarget();
+        const basePrefix = `projects/${projectId}/databases/${databaseId}/documents/tenants/${safeTenant}`;
+        await PersistentStoreService.remoteCommitWrites(
+          [
+            { delete: `${basePrefix}/activities/${targetDocId}` },
+            { delete: `${basePrefix}/tours/${tourDocId}` },
+            { delete: `${basePrefix}/viewings/${viewingDocId}` },
+          ],
+          "delete_activity_batch"
+        );
+        return true;
+      }
+      const deletedAct = PersistentStoreService.delete(this.storeKey(safeTenant, "activities"), targetDocId);
+      PersistentStoreService.delete(this.storeKey(safeTenant, "tours"), tourDocId);
+      PersistentStoreService.delete(this.storeKey(safeTenant, "viewings"), viewingDocId);
+      return deletedAct;
+    }
     if (this.isUsingLiveFirestore()) {
       await PersistentStoreService.remoteDeleteAtPath(
         this.firestoreDocPath(safeTenant, collectionName, targetDocId)
@@ -1155,6 +1607,15 @@ export class CrmTenantStoreService {
       if (collectionName === "staff") {
         await PersistentStoreService.remoteDeleteAtPath(
           this.firestoreDocPath(safeTenant, "personal", targetDocId)
+        ).catch(() => {});
+      }
+      if (collectionName === "viewings" && targetDocId.startsWith("view_")) {
+        const mirroredActId = targetDocId.slice("view_".length);
+        await PersistentStoreService.remoteDeleteAtPath(
+          this.firestoreDocPath(safeTenant, "activities", mirroredActId)
+        ).catch(() => {});
+        await PersistentStoreService.remoteDeleteAtPath(
+          this.firestoreDocPath(safeTenant, "tours", `tour_${mirroredActId}`)
         ).catch(() => {});
       }
       return true;
@@ -1166,6 +1627,11 @@ export class CrmTenantStoreService {
         targetDocId
       );
       return deleted || deletedLegacy;
+    }
+    if (collectionName === "viewings" && targetDocId.startsWith("view_")) {
+      const mirroredActId = targetDocId.slice("view_".length);
+      PersistentStoreService.delete(this.storeKey(safeTenant, "activities"), mirroredActId);
+      PersistentStoreService.delete(this.storeKey(safeTenant, "tours"), `tour_${mirroredActId}`);
     }
     return deleted;
   }

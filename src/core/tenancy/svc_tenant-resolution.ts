@@ -443,7 +443,7 @@ export class TenantResolutionService {
    */
   public static async hydrateSingleTenantFromFirestore(
     tenantId: string,
-    ttlMs = 60_000
+    ttlMs = 300_000
   ): Promise<TenantRecord | null> {
     if (!tenantId) return null;
     if (!PersistentStoreService.isRemoteFirestoreConfigured()) {
@@ -489,7 +489,7 @@ export class TenantResolutionService {
    * lookup maps so Super Admin agency creations/updates survive restarts permanently.
    * Strictly gated to Platform Admin or Server ADC contexts to prevent 403 log storms.
    */
-  public static async hydrateFromFirestore(ttlMs = 30_000): Promise<TenantRecord[]> {
+  public static async hydrateFromFirestore(ttlMs = 300_000): Promise<TenantRecord[]> {
     if (!PersistentStoreService.isRemoteFirestoreConfigured()) {
       return this.getAllTenants();
     }

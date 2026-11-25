@@ -16,6 +16,12 @@ export interface RequestFirestoreAuth {
   emailVerified?: boolean;
 }
 
+export interface FirestoreOpEvent {
+  reads?: number;
+  writes?: number;
+  deletes?: number;
+}
+
 interface PersistentStoreData {
   collections: Record<string, Record<string, any>>;
 }
@@ -218,6 +224,21 @@ export class PersistentStoreService {
     };
   }
 
+  private static quotaCooldownUntil = 0;
+  private static lastQuotaLogAt = 0;
+
+  private static assertNotInQuotaCooldown(operation: string): void {
+    if (this.isTestMode()) return;
+    if (Date.now() < this.quotaCooldownUntil) {
+      throw new AppError({
+        message:
+          "Limita zilnică gratuită de citiri Firestore a fost atinsă (HTTP 429). Încercați din nou după resetarea cotei.",
+        code: "RATE_LIMIT_EXCEEDED",
+        statusCode: 429,
+      });
+    }
+  }
+
   private static recordRemoteFailure(
     err: unknown,
     operation: string,
@@ -225,8 +246,20 @@ export class PersistentStoreService {
     options?: { silentOnStatuses?: number[] }
   ): AppError {
     const appErr = GcpAuthService.sanitizeGcpHttpError(err, "Firestore", operation);
-    const suppress = Boolean(options?.silentOnStatuses?.includes(appErr.statusCode));
+    const now = Date.now();
+    const isQuota429 = appErr.statusCode === 429;
+    if (isQuota429 && !this.isTestMode()) {
+      this.quotaCooldownUntil = now + 30_000;
+    }
+
+    const suppress =
+      Boolean(options?.silentOnStatuses?.includes(appErr.statusCode)) ||
+      (isQuota429 && now - this.lastQuotaLogAt < 30_000);
+
     if (!suppress) {
+      if (isQuota429) {
+        this.lastQuotaLogAt = now;
+      }
       this.lastRemoteError = {
         message: appErr.message,
         statusCode: appErr.statusCode,
@@ -679,10 +712,25 @@ export class PersistentStoreService {
       .join("/");
   }
 
+  private static firestoreOpObserver: ((ops: FirestoreOpEvent) => void) | null = null;
+
+  public static setFirestoreOpObserver(observer: ((ops: FirestoreOpEvent) => void) | null): void {
+    this.firestoreOpObserver = observer;
+  }
+
+  private static notifyFirestoreOp(ops: FirestoreOpEvent): void {
+    try {
+      this.firestoreOpObserver?.(ops);
+    } catch {
+      // Telemetry must never break database operations
+    }
+  }
+
   public static async remoteGetAtPath<T = Record<string, any>>(
     relativeDocPath: string,
     options?: { silentOnStatuses?: number[] }
   ): Promise<T | null> {
+    this.assertNotInQuotaCooldown("remote_get");
     const { token, isUserToken } = await this.resolveFirestoreAuth("remote_get");
     const { projectId, databaseId } = this.getFirebaseTarget();
     const encodedPath = this.encodeDocumentPath(relativeDocPath);
@@ -692,9 +740,13 @@ export class PersistentStoreService {
         headers: this.buildFirestoreHeaders(token, isUserToken),
         timeout: 8000,
       });
+      this.notifyFirestoreOp({ reads: 1 });
       return this.decodeDocument<T>(res.data);
     } catch (err: any) {
-      if (err?.response?.status === 404) return null;
+      if (err?.response?.status === 404) {
+        this.notifyFirestoreOp({ reads: 1 });
+        return null;
+      }
       throw this.recordRemoteFailure(err, "remote_get", relativeDocPath, options);
     }
   }
@@ -705,6 +757,7 @@ export class PersistentStoreService {
     maxPages = 20,
     options?: { silentOnStatuses?: number[] }
   ): Promise<Array<{ docId: string; data: T }>> {
+    this.assertNotInQuotaCooldown("remote_list");
     const { token, isUserToken } = await this.resolveFirestoreAuth("remote_list");
     const { projectId, databaseId } = this.getFirebaseTarget();
     const encodedPath = this.encodeDocumentPath(relativeCollectionPath);
@@ -722,6 +775,7 @@ export class PersistentStoreService {
           timeout: 12000,
         });
         const docs = Array.isArray(res.data?.documents) ? res.data.documents : [];
+        this.notifyFirestoreOp({ reads: Math.max(1, docs.length) });
         for (const docItem of docs) {
           const nameParts = String(docItem?.name || "").split("/");
           const rawSeg = nameParts[nameParts.length - 1] || "";
@@ -736,7 +790,10 @@ export class PersistentStoreService {
         pageToken = res.data?.nextPageToken || undefined;
         if (!pageToken) break;
       } catch (err: any) {
-        if (err?.response?.status === 404) return [];
+        if (err?.response?.status === 404) {
+          this.notifyFirestoreOp({ reads: 1 });
+          return [];
+        }
         throw this.recordRemoteFailure(err, "remote_list", relativeCollectionPath, options);
       }
     }
@@ -768,6 +825,7 @@ export class PersistentStoreService {
     structuredQuery: Record<string, any>,
     options?: { silentOnStatuses?: number[] }
   ): Promise<Array<{ docId: string; data: T }>> {
+    this.assertNotInQuotaCooldown("remote_run_query");
     const { token, isUserToken } = await this.resolveFirestoreAuth("remote_run_query");
     const { projectId, databaseId } = this.getFirebaseTarget();
     const encodedParent = parentRelativePath
@@ -798,6 +856,7 @@ export class PersistentStoreService {
         results.push({ docId, data: this.decodeDocument<T>(row.document) });
       }
       this.lastRemoteError = null;
+      this.notifyFirestoreOp({ reads: Math.max(1, results.length) });
       return results;
     } catch (err: any) {
       throw this.recordRemoteFailure(err, "remote_run_query", parentRelativePath || ":root", options);
@@ -846,6 +905,7 @@ export class PersistentStoreService {
         }
       );
       this.lastRemoteError = null;
+      this.notifyFirestoreOp({ writes: 1 });
       const transformVal = res.data?.writeResults?.[0]?.transformResults?.[0];
       const parsed = this.fromFirestoreValue(transformVal);
       if (typeof parsed === "number" && Number.isFinite(parsed)) {
@@ -878,6 +938,7 @@ export class PersistentStoreService {
         }
       );
       this.lastRemoteError = null;
+      this.notifyFirestoreOp({ writes: 1 });
     } catch (err: any) {
       throw this.recordRemoteFailure(err, "remote_set", relativeDocPath);
     }
@@ -894,6 +955,7 @@ export class PersistentStoreService {
         timeout: 8000,
       });
       this.lastRemoteError = null;
+      this.notifyFirestoreOp({ deletes: 1 });
     } catch (err: any) {
       if (err?.response?.status === 404) return;
       throw this.recordRemoteFailure(err, "remote_delete", relativeDocPath);
@@ -919,6 +981,16 @@ export class PersistentStoreService {
         }
       );
       this.lastRemoteError = null;
+      let writeCount = 0;
+      let deleteCount = 0;
+      for (const w of writes) {
+        if (w && typeof w === "object" && "delete" in w) {
+          deleteCount++;
+        } else {
+          writeCount++;
+        }
+      }
+      this.notifyFirestoreOp({ writes: writeCount, deletes: deleteCount });
     } catch (err: any) {
       throw this.recordRemoteFailure(err, operation, ":commit", options);
     }
@@ -989,6 +1061,7 @@ export class PersistentStoreService {
               timeout: 8000,
             }
           );
+          this.notifyFirestoreOp({ writes: 1 });
           this.setCacheOnly(collectionName, id, data);
           return true;
         } catch (err: any) {

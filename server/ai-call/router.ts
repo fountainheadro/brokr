@@ -23,6 +23,7 @@ import {
   verifyTwilioStreamToken,
 } from "../middleware/mw_twilio-signature";
 import { logger } from "../../src/core/logger/logger";
+import { DailyQuotaTracker } from "../monitoring/svc_daily-quota-tracker";
 
 export const aiCallRouter = Router();
 
@@ -352,6 +353,7 @@ export function setupWebSocket(server: any) {
           });
           
           log("Connecting to Multimodal Gemini Live WebSocket API...");
+          DailyQuotaTracker.recordAiVoiceSession(1);
           geminiSession = await ai.live.connect({
             model: "gemini-3.8-live",
             callbacks: {

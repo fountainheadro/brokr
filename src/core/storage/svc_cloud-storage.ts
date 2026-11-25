@@ -42,8 +42,8 @@ const FORBIDDEN_EXTENSIONS = new Set([
 export const GCS_STORAGE_SCOPE = "https://www.googleapis.com/auth/devstorage.read_write";
 export const COL_PUBLIC_PROPERTY_MEDIA = "public_property_media";
 const MAX_FIRESTORE_PUBLIC_IMAGE_BYTES = 580_000;
-const PUBLIC_MEDIA_CACHE_MAX = 80;
-const PUBLIC_MEDIA_CACHE_TTL_MS = 30 * 60 * 1000;
+const PUBLIC_MEDIA_CACHE_MAX = 200;
+const PUBLIC_MEDIA_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
 /**
  * Validates and uploads/downloads/deletes tenant-scoped files using Google Cloud Storage JSON v1 API

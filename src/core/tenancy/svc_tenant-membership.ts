@@ -431,56 +431,108 @@ export class TenantMembershipService {
     await TenantResolutionService.ensureTenantExistsInFirestore(tenantId);
 
     const normalizedEmail = email ? email.toLowerCase().trim() : "";
+    const membershipCacheKey = getMembershipKey(tenantId, userId);
 
-    // Fast path: check in-memory verified cache first
+    // Fast path: reuse verified in-memory membership for 60s so concurrent page-load API
+    // requests share a single Firestore read instead of hitting Firestore on every request.
     let membership = PersistentStoreService.get<TenantMembershipRecord>(
       COL_MEMBERSHIPS,
-      getMembershipKey(tenantId, userId)
+      membershipCacheKey
     );
+    const lastVerifiedAt = this.membershipVerifiedAt.get(membershipCacheKey) || 0;
+    if (
+      membership &&
+      process.env.NODE_ENV !== "test" &&
+      Date.now() - lastVerifiedAt < 60_000
+    ) {
+      assertMembershipStatusAllowed(membership);
+      return membership;
+    }
 
     if (PersistentStoreService.isRemoteFirestoreConfigured()) {
-      // 1. O(1) direct lookup in /tenants/{tenantId}/users/{userId}
-      try {
-        const remoteDoc = await PersistentStoreService.remoteGetAtPath<TenantMembershipRecord>(
-          `tenants/${tenantId}/users/${userId}`,
-          { silentOnStatuses: [403] }
-        );
-        if (remoteDoc && remoteDoc.role && remoteDoc.status) {
-          membership = {
-            ...remoteDoc,
-            id: remoteDoc.id || userId,
-            tenantId,
-            userId,
-            authVersion: remoteDoc.authVersion ?? 1,
-          };
-          PersistentStoreService.setCacheOnly(
+      // Serialize concurrent membership lookups for the same (tenantId, userId)
+      const mutexResult = await PersistentStoreService.withKeyMutex(
+        `verify-membership::${membershipCacheKey}`,
+        async (): Promise<TenantMembershipRecord | null> => {
+          const cachedAgain = PersistentStoreService.get<TenantMembershipRecord>(
             COL_MEMBERSHIPS,
-            getMembershipKey(tenantId, userId),
-            membership
+            membershipCacheKey
           );
-          assertMembershipStatusAllowed(membership);
-          if (membership.role === "agency_owner" || membership.role === "agency_admin") {
-            const reqAuth = PersistentStoreService.getRequestAuth();
-            const syncPromise = reqAuth
-              ? PersistentStoreService.runWithRequestAuth(reqAuth, () =>
-                  this.ensureSeedInvitesSyncedAsync(tenantId)
-                )
-              : this.ensureSeedInvitesSyncedAsync(tenantId);
-            void syncPromise.catch(() => {});
+          const verifiedAgainAt = this.membershipVerifiedAt.get(membershipCacheKey) || 0;
+          if (
+            cachedAgain &&
+            process.env.NODE_ENV !== "test" &&
+            Date.now() - verifiedAgainAt < 60_000
+          ) {
+            assertMembershipStatusAllowed(cachedAgain);
+            return cachedAgain;
           }
-          return membership;
+
+          // 1. O(1) direct lookup in /tenants/{tenantId}/users/{userId}
+          try {
+            const remoteDoc = await PersistentStoreService.remoteGetAtPath<TenantMembershipRecord>(
+              `tenants/${tenantId}/users/${userId}`,
+              { silentOnStatuses: [403] }
+            );
+            if (remoteDoc && remoteDoc.role && remoteDoc.status) {
+              const resolved: TenantMembershipRecord = {
+                ...remoteDoc,
+                id: remoteDoc.id || userId,
+                tenantId,
+                userId,
+                authVersion: remoteDoc.authVersion ?? 1,
+              };
+              PersistentStoreService.setCacheOnly(
+                COL_MEMBERSHIPS,
+                membershipCacheKey,
+                resolved
+              );
+              this.membershipVerifiedAt.set(membershipCacheKey, Date.now());
+              assertMembershipStatusAllowed(resolved);
+              if (resolved.role === "agency_owner" || resolved.role === "agency_admin") {
+                const reqAuth = PersistentStoreService.getRequestAuth();
+                const syncPromise = reqAuth
+                  ? PersistentStoreService.runWithRequestAuth(reqAuth, () =>
+                      this.ensureSeedInvitesSyncedAsync(tenantId)
+                    )
+                  : this.ensureSeedInvitesSyncedAsync(tenantId);
+                void syncPromise.catch(() => {});
+              }
+              return resolved;
+            }
+          } catch (err: any) {
+            const statusCode = err instanceof AppError ? err.statusCode : Number(err?.response?.status || 0);
+            // On Firestore daily quota exhaustion (429), serve previously verified cached membership
+            // if available, or fail fast with 429 instead of cascading into extra invite/query reads.
+            if (statusCode === 429) {
+              if (cachedAgain) {
+                assertMembershipStatusAllowed(cachedAgain);
+                return cachedAgain;
+              }
+              throw new AppError({
+                message:
+                  "Limita zilnică gratuită de citiri Firestore a fost atinsă. Încercați din nou după resetarea cotei.",
+                code: "RATE_LIMIT_EXCEEDED",
+                statusCode: 429,
+              });
+            }
+            // Fail closed in production on upstream auth/Firestore 5xx/network outages instead of serving stale cache
+            if (process.env.NODE_ENV === "production" && statusCode !== 403 && statusCode !== 404) {
+              throw new AppError({
+                message: "Serviciul de verificare a accesului este temporar indisponibil. Vă rugăm să încercați din nou.",
+                code: "AUTH_BACKEND_UNAVAILABLE",
+                statusCode: 503,
+              });
+            }
+            // Might be 403 before user doc exists; fall through to invite / seed auto-binding
+          }
+
+          return null;
         }
-      } catch (err: any) {
-        const statusCode = err instanceof AppError ? err.statusCode : Number(err?.response?.status || 0);
-        // Fail closed in production on upstream auth/Firestore 5xx/network outages instead of serving stale cache
-        if (process.env.NODE_ENV === "production" && statusCode !== 403 && statusCode !== 404) {
-          throw new AppError({
-            message: "Serviciul de verificare a accesului este temporar indisponibil. Vă rugăm să încercați din nou.",
-            code: "AUTH_BACKEND_UNAVAILABLE",
-            statusCode: 503,
-          });
-        }
-        // Might be 403 before user doc exists; fall through to invite / seed auto-binding
+      );
+
+      if (mutexResult) {
+        return mutexResult;
       }
 
       // 2. If not bound to UID yet and user has verified email, look up O(1) invite or indexed email
@@ -678,19 +730,23 @@ export class TenantMembershipService {
     return this.getMembership(tenantId, userId);
   }
 
+  private static membershipVerifiedAt = new Map<string, number>();
+
+  public static invalidateMembershipCache(tenantId: string, userId: string): void {
+    this.membershipVerifiedAt.delete(getMembershipKey(tenantId, userId));
+  }
+
   public static setMembership(membership: TenantMembershipRecord): void {
     ensureMembershipsSeeded();
-    PersistentStoreService.setCacheOnly(
-      COL_MEMBERSHIPS,
-      getMembershipKey(membership.tenantId, membership.userId),
-      membership
-    );
+    const key = getMembershipKey(membership.tenantId, membership.userId);
+    PersistentStoreService.setCacheOnly(COL_MEMBERSHIPS, key, membership);
+    if (membership.status === "active") {
+      this.membershipVerifiedAt.set(key, Date.now());
+    } else {
+      this.membershipVerifiedAt.delete(key);
+    }
     if (process.env.NODE_ENV === "test") {
-      PersistentStoreService.set(
-        COL_MEMBERSHIPS,
-        getMembershipKey(membership.tenantId, membership.userId),
-        membership
-      );
+      PersistentStoreService.set(COL_MEMBERSHIPS, key, membership);
     } else if (PersistentStoreService.isRemoteFirestoreConfigured()) {
       const reqAuth = PersistentStoreService.getRequestAuth();
       const writePromise = reqAuth
@@ -711,22 +767,20 @@ export class TenantMembershipService {
   public static async setMembershipAsync(
     membership: TenantMembershipRecord
   ): Promise<TenantMembershipRecord> {
-    PersistentStoreService.setCacheOnly(
-      COL_MEMBERSHIPS,
-      getMembershipKey(membership.tenantId, membership.userId),
-      membership
-    );
+    const key = getMembershipKey(membership.tenantId, membership.userId);
+    PersistentStoreService.setCacheOnly(COL_MEMBERSHIPS, key, membership);
+    if (membership.status === "active") {
+      this.membershipVerifiedAt.set(key, Date.now());
+    } else {
+      this.membershipVerifiedAt.delete(key);
+    }
     if (process.env.NODE_ENV !== "test" || PersistentStoreService.isRemoteFirestoreConfigured()) {
       await PersistentStoreService.remoteSetAtPath(
         `tenants/${membership.tenantId}/users/${membership.userId}`,
         membership
       );
     } else {
-      PersistentStoreService.set(
-        COL_MEMBERSHIPS,
-        getMembershipKey(membership.tenantId, membership.userId),
-        membership
-      );
+      PersistentStoreService.set(COL_MEMBERSHIPS, key, membership);
     }
     return membership;
   }

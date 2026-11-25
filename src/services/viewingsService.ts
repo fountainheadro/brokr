@@ -39,6 +39,11 @@ export const viewingsService = {
     return crmApiClient.subscribe<Viewing>(VIEWINGS_COLLECTION, callback);
   },
 
+  updateViewing: async (viewingId: string, data: Partial<Viewing>) => {
+    const sanitized = cleanUndefined(data);
+    return crmApiClient.update<Viewing>(VIEWINGS_COLLECTION, viewingId, sanitized);
+  },
+
   deleteViewing: async (viewingId: string) => {
     await crmApiClient.remove(VIEWINGS_COLLECTION, viewingId);
   },

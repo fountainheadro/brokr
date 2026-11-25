@@ -1660,18 +1660,22 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         const trimmedTitle = (updatedSec["titlu"] || "").trim();
         if (trimmedTitle) {
           updates["title"] = trimmedTitle;
+          updates["extractedData.originalTitle"] = trimmedTitle;
           updates["extractedData.crmData.descriere.titlu"] = trimmedTitle;
         }
         if (updatedSec["summary"] !== undefined) {
           updates["extractedData.crmData.descriere.continut"] = updatedSec["summary"];
+          updates["extractedData.originalDescription"] = updatedSec["summary"];
+          updates["extractedData.markdownMarketing"] = updatedSec["summary"];
         }
       }
 
       const persisted = await leadsService.updateLeadData(lead.id, updates);
 
+      let localPatch: Partial<Lead>;
       if (sectionId === "tranzactie") {
         const nextPrice = updatedSec["Preț"] ? String(updatedSec["Preț"]).trim() : undefined;
-        const patchedExtracted = {
+        const patchedExtracted = (persisted?.extractedData || {
           ...(lead.extractedData || {}),
           presentationSections: nextSectionData,
           crmData: {
@@ -1688,24 +1692,25 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 }
               : {}),
           },
-        } as any;
-        const localPatch: Partial<Lead> = {
+        }) as any;
+        localPatch = {
           ...(nextPrice ? { price: nextPrice } : {}),
           extractedData: patchedExtracted,
+          ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
         };
-        if (onUpdateLead) {
-          onUpdateLead(localPatch);
-        }
-        void publishPublicShareSnapshot(
-          { ...lead, ...localPatch, ...(persisted || {}) },
-          { tenantId: tenant?.id, force: true }
-        );
       } else if (sectionId === "introducere") {
         const trimmedTitle = (updatedSec["titlu"] || "").trim();
-        const localPatch: Partial<Lead> = {
+        localPatch = {
           ...(trimmedTitle ? { title: trimmedTitle } : {}),
-          extractedData: {
+          extractedData: (persisted?.extractedData || {
             ...(lead.extractedData || {}),
+            ...(trimmedTitle ? { originalTitle: trimmedTitle } : {}),
+            ...(updatedSec["summary"] !== undefined
+              ? {
+                  originalDescription: updatedSec["summary"],
+                  markdownMarketing: updatedSec["summary"],
+                }
+              : {}),
             presentationSections: nextSectionData,
             crmData: {
               ...(lead.extractedData?.crmData || {}),
@@ -1715,28 +1720,27 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                 ...(updatedSec["summary"] !== undefined ? { continut: updatedSec["summary"] } : {}),
               },
             },
-          } as any,
+          }) as any,
+          ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
         };
-        if (onUpdateLead) {
-          onUpdateLead(localPatch);
-        }
-        void publishPublicShareSnapshot(
-          { ...lead, ...localPatch, ...(persisted || {}) },
-          { tenantId: tenant?.id, force: true }
-        );
       } else {
-        void publishPublicShareSnapshot(
-          {
-            ...lead,
-            extractedData: {
-              ...(lead.extractedData || {}),
-              presentationSections: nextSectionData,
-            } as any,
-            ...(persisted || {}),
-          },
-          { tenantId: tenant?.id, force: true }
-        );
+        localPatch = {
+          extractedData: (persisted?.extractedData || {
+            ...(lead.extractedData || {}),
+            presentationSections: nextSectionData,
+          }) as any,
+          ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
+        };
       }
+
+      if (onUpdateLead) {
+        onUpdateLead(localPatch);
+      }
+
+      await publishPublicShareSnapshot(
+        { ...lead, ...localPatch, ...(persisted || {}) },
+        { tenantId: tenant?.id, force: true }
+      );
 
       toast.success("Modificările au fost salvate cu succes!");
     } catch (e) {

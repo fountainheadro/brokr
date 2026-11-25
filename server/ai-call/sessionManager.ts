@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { WebSocket } from "ws";
 import { PersistentStoreService } from "../../src/core/database/svc_persistent-store";
+import { DailyQuotaTracker } from "../monitoring/svc_daily-quota-tracker";
 
 export type CallStatus = "idle" | "calling" | "connected" | "ended" | "failed";
 
@@ -412,6 +413,12 @@ Cerințe importante:
     });
 
     const textOutput = response.text?.trim() || "{}";
+    DailyQuotaTracker.recordGeminiResponse({
+      model: "gemini-4-hydrogen",
+      response,
+      fallbackPromptChars: transcriptText.length + (session.prompt?.length || 0),
+      fallbackOutputChars: textOutput.length,
+    });
     const notesJson: LiveNotes = JSON.parse(textOutput);
 
     // Update ongoing session notes and persist durably

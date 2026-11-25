@@ -12,6 +12,7 @@ import {
   StorageObjectMetadata,
 } from "../../src/core/storage/typ_storage-config";
 import { createThumbnail } from "../utils/img_thumbnail";
+import { DailyQuotaTracker } from "../monitoring/svc_daily-quota-tracker";
 
 const Jimp = createJimp({
   formats: [...defaultFormats, webp],
@@ -196,6 +197,39 @@ export class MediaPipelineService {
     pendingOgBuilds.clear();
   }
 
+  /**
+   * Erases ONLY the in-memory OG preview image cache & pending builds for the specified
+   * share code(s) / property ID(s), leaving all other cached properties warm.
+   */
+  public static invalidateOgCacheForShareCodes(ids: string | string[] | null | undefined): number {
+    const rawList = Array.isArray(ids) ? ids : typeof ids === "string" ? [ids] : [];
+    const prefixes = Array.from(
+      new Set(
+        rawList
+          .map((id) => sanitizeShareCode(id).toLowerCase())
+          .filter(Boolean)
+          .map((code) => `public/shares/${code}/`)
+      )
+    );
+    if (prefixes.length === 0) return 0;
+
+    let removed = 0;
+    for (const key of Array.from(ogMemoryCache.keys())) {
+      const lowerKey = key.toLowerCase();
+      if (prefixes.some((prefix) => lowerKey.startsWith(prefix))) {
+        ogMemoryCache.delete(key);
+        removed++;
+      }
+    }
+    for (const key of Array.from(pendingOgBuilds.keys())) {
+      const lowerKey = key.toLowerCase();
+      if (prefixes.some((prefix) => lowerKey.startsWith(prefix))) {
+        pendingOgBuilds.delete(key);
+      }
+    }
+    return removed;
+  }
+
   public static computeContentHash16(buffer: Buffer): string {
     return crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 16);
   }
@@ -312,6 +346,7 @@ export class MediaPipelineService {
             quality: width <= 400 ? 82 : 85,
           });
           transformCounters.propertyVariantTransforms++;
+          DailyQuotaTracker.recordImageTransform(1);
           const format: "webp" | "jpg" = thumb.mimeType === "image/webp" ? "webp" : "jpg";
           const variantKey = this.buildPropertyVariantKey({
             tenantId: params.tenantId,
@@ -417,6 +452,7 @@ export class MediaPipelineService {
       cacheKey: `storage::${params.objectKey}`,
     });
     transformCounters.propertyVariantTransforms++;
+    DailyQuotaTracker.recordImageTransform(1);
 
     if (variantKey && usePersisted) {
       const actualFormat: "webp" | "jpg" = thumb.mimeType === "image/webp" ? "webp" : "jpg";
@@ -510,6 +546,7 @@ export class MediaPipelineService {
 
   public static recordPublicShareTransform(): void {
     transformCounters.publicShareVariantTransforms++;
+    DailyQuotaTracker.recordImageTransform(1);
   }
 
   /**
@@ -539,6 +576,7 @@ export class MediaPipelineService {
     ];
 
     transformCounters.ogTransforms++;
+    DailyQuotaTracker.recordImageTransform(1);
 
     try {
       let converted = await runConvertBuffer([...ogBaseArgs, "-quality", "82", "jpg:-"], rawBuffer);

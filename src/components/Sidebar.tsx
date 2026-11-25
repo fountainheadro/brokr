@@ -13,6 +13,7 @@ import { Lead, isCerereLead } from "../services/leadsService";
 import { Contact } from "../services/contactsService";
 import { PersonalMember } from "../services/personalService";
 import { getCurrentVersion } from "../utils/versionService";
+import { DevQuotaMonitor } from "./DevQuotaMonitor";
 
 export type NavSubItem = 'Lead-uri' | 'Cereri' | 'Proprietati' | 'Imobile' | 'Proprietăți' | 'Calendar' | 'Contacte' | 'Clienți' | 'Personal';
 export type NavTransactionType = 'Închiriere' | 'Vânzare';
@@ -349,6 +350,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         )}
       </div>
+
+      {/* Dev Daily Quota Usage Monitor (directly above version container) */}
+      <DevQuotaMonitor
+        isCollapsed={isCollapsed}
+        onExpandSidebar={isCollapsed ? handleToggleCollapse : undefined}
+      />
 
       {/* Bottom Footer: Automated Version & Update Info (replaces collapse button) */}
       <div className="shrink-0 border-t border-gray-200 bg-gray-50/80 select-none">

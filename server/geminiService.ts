@@ -3,6 +3,7 @@ import { PROMPT_INSTRUCTIONS } from "../src/services/promptConfig";
 import { safeAxiosGet } from "./security/sec_url-validator";
 import { TitleAutomationRule } from "../src/core/automation/typ_title-automation";
 import { buildTitleFromAutomationRule } from "../src/utils/titleAutomationEngine";
+import { DailyQuotaTracker } from "./monitoring/svc_daily-quota-tracker";
 
 // Ensure Gemini is initialized with server-side environment variable
 const ai = new GoogleGenAI({ 
@@ -157,6 +158,12 @@ export async function serverExtractBasicData(
   });
 
   const text = response.text;
+  DailyQuotaTracker.recordGeminiResponse({
+    model: "gemini-3.1-flash-lite",
+    response,
+    fallbackPromptChars: prompt.length,
+    fallbackOutputChars: text?.length || 0,
+  });
   if (!text) throw new Error("No response from Gemini");
   const parsed = JSON.parse(text);
 
@@ -796,6 +803,12 @@ Condiții suplimentare:
   });
 
   const text = response.text;
+  DailyQuotaTracker.recordGeminiResponse({
+    model: "gemini-4-hydrogen",
+    response,
+    fallbackPromptChars: prompt.length,
+    fallbackOutputChars: text?.length || 0,
+  });
   if (!text) {
     throw new Error("No response from Gemini");
   }

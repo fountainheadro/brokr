@@ -14,6 +14,7 @@ import {
 import { auth, db, firestoreCacheMode, type FirestoreCacheMode } from "../../lib/firebase";
 import { normalizeCrmDocument } from "./svc_crm-normalizer";
 import { clearAllRecentSearches } from "../../utils/recentSearchUtils";
+import { recordClientFirestoreOps } from "../../utils/clientQuotaTelemetry";
 import {
   isSlimSummaryReadsEnabled,
   LEAD_SUMMARY_COLLECTION,
@@ -162,6 +163,8 @@ const DEFAULT_MAX_DETAIL_CACHE = 50;
 const DEFAULT_TEARDOWN_GRACE_MS = 2500;
 const DEFAULT_LIMIT = 1000;
 const MAX_LIMIT = 2000;
+const emptyLegacyPersonalTenants = new Set<string>();
+const unavailableSummaryCollections = new Set<string>();
 
 export function isClientDataHubEnabled(): boolean {
   try {
@@ -307,18 +310,40 @@ export class ClientDataHub {
       ) => {
         let active = true;
         let unsubSnapshot: (() => void) | null = null;
-        let fallbackTimer: ReturnType<typeof setInterval> | null = null;
+        let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+        let visibilityHandler: (() => void) | null = null;
         let tenantWaitTimer: ReturnType<typeof setTimeout> | null = null;
         let inFlight = false;
         let usingLiveSnapshot = false;
+        let fallbackStep = 0;
+        let lastFallbackPullAt = 0;
+        const FALLBACK_DELAYS_MS = [30_000, 60_000, 120_000, 180_000];
+        const QUOTA_BACKOFF_MS = 300_000;
 
         const hydrate = (rec: any) => (this.hydrateRecord ? this.hydrateRecord(rec) : rec);
 
+        const isQuotaExhaustedError = (err: any): boolean => {
+          const code = String(err?.code || "").toLowerCase();
+          const msg = String(err?.message || "").toLowerCase();
+          return (
+            err?.status === 429 ||
+            err?.statusCode === 429 ||
+            code.includes("resource-exhausted") ||
+            msg.includes("quota") ||
+            msg.includes("429")
+          );
+        };
+
         const stopFallback = () => {
           if (fallbackTimer) {
-            clearInterval(fallbackTimer);
+            clearTimeout(fallbackTimer);
             fallbackTimer = null;
           }
+          if (visibilityHandler && typeof document !== "undefined") {
+            document.removeEventListener("visibilitychange", visibilityHandler);
+            visibilityHandler = null;
+          }
+          fallbackStep = 0;
         };
 
         const clearWait = () => {
@@ -340,44 +365,87 @@ export class ClientDataHub {
           usingLiveSnapshot = false;
         };
 
-        const pullViaApi = async (overrideCollection?: string) => {
-          if (!active || inFlight || !params.uid || !this.apiListFallback) return;
-          if (params.scope === "platform") return;
+        const pullViaApi = async (overrideCollection?: string): Promise<"ok" | "quota" | "error"> => {
+          if (!active || inFlight || !params.uid || !this.apiListFallback) return "ok";
+          if (params.scope === "platform") return "ok";
           const apiCollection = overrideCollection || params.collectionName;
           inFlight = true;
+          lastFallbackPullAt = Date.now();
           try {
             const items = await this.apiListFallback<T>(apiCollection, {
               propertyId: params.propertyId,
               onlyMine: params.onlyMine,
               limit: params.limit,
             });
-            if (!active) return;
+            if (!active) return "ok";
             const adapted =
               apiCollection === LEAD_SUMMARY_COLLECTION
                 ? (items.map((item: any) => summaryToLeadRecord(item)) as unknown as T[])
                 : items;
             handlers.onData(adapted, { fromCache: false, source: "api" });
+            return "ok";
           } catch (err: any) {
-            if (!active) return;
+            if (!active) return "error";
+            if (isQuotaExhaustedError(err)) {
+              handlers.onError(err instanceof Error ? err : new Error(String(err || "Quota exceeded")));
+              return "quota";
+            }
             if (apiCollection === LEAD_SUMMARY_COLLECTION) {
               // Safe fallback to canonical leads API if leads_summary is unavailable
               inFlight = false;
-              void pullViaApi("leads");
-              return;
+              return pullViaApi("leads");
             }
             handlers.onError(err instanceof Error ? err : new Error(String(err || "Sync API error")));
+            return "error";
           } finally {
             inFlight = false;
           }
         };
 
+        const scheduleNextFallbackTick = (overrideDelayMs?: number) => {
+          if (!active || usingLiveSnapshot || params.scope === "platform") return;
+          if (fallbackTimer) {
+            clearTimeout(fallbackTimer);
+            fallbackTimer = null;
+          }
+          const delayMs =
+            overrideDelayMs ??
+            FALLBACK_DELAYS_MS[Math.min(fallbackStep, FALLBACK_DELAYS_MS.length - 1)];
+          fallbackTimer = setTimeout(async () => {
+            fallbackTimer = null;
+            if (!active || usingLiveSnapshot) return;
+            // Skip polling completely while browser tab is hidden (0 wasted reads)
+            if (typeof document !== "undefined" && document.hidden) {
+              scheduleNextFallbackTick(FALLBACK_DELAYS_MS[FALLBACK_DELAYS_MS.length - 1]);
+              return;
+            }
+            const outcome = await pullViaApi();
+            if (outcome === "quota") {
+              fallbackStep = FALLBACK_DELAYS_MS.length - 1;
+              scheduleNextFallbackTick(QUOTA_BACKOFF_MS);
+            } else {
+              fallbackStep = Math.min(fallbackStep + 1, FALLBACK_DELAYS_MS.length - 1);
+              scheduleNextFallbackTick();
+            }
+          }, delayMs);
+        };
+
         const startFallbackPolling = () => {
           if (fallbackTimer || !active || params.scope === "platform") return;
-          fallbackTimer = setInterval(() => {
-            if (!usingLiveSnapshot && active) {
-              void pullViaApi();
-            }
-          }, 30_000);
+          if (!visibilityHandler && typeof document !== "undefined") {
+            visibilityHandler = () => {
+              if (!active || usingLiveSnapshot || document.hidden) return;
+              // Single immediate catch-up sync when returning to tab after >= 60s
+              if (Date.now() - lastFallbackPullAt >= 60_000) {
+                fallbackStep = 0;
+                void pullViaApi().then((outcome) => {
+                  scheduleNextFallbackTick(outcome === "quota" ? QUOTA_BACKOFF_MS : undefined);
+                });
+              }
+            };
+            document.addEventListener("visibilitychange", visibilityHandler);
+          }
+          scheduleNextFallbackTick();
         };
 
         if (!params.uid) {
@@ -387,7 +455,14 @@ export class ClientDataHub {
         }
 
         if (params.scope === "platform") {
-          const isSlimShared = params.collectionName === SHARED_LEADS_SUMMARY_COLLECTION;
+          const summaryMemoKey = `platform::${params.collectionName}`;
+          const isSlimShared =
+            params.collectionName === SHARED_LEADS_SUMMARY_COLLECTION &&
+            !unavailableSummaryCollections.has(summaryMemoKey);
+          const initialPlatformCol =
+            params.collectionName === SHARED_LEADS_SUMMARY_COLLECTION && !isSlimShared
+              ? "platform_shared_leads"
+              : params.collectionName;
           const attachPlatformListener = (targetCol: string, allowCanonicalFallback: boolean) => {
             try {
               const q = query(
@@ -400,6 +475,13 @@ export class ClientDataHub {
                 q,
                 (snapshot) => {
                   if (!active) return;
+                  if (!snapshot.metadata?.fromCache) {
+                    const billed =
+                      typeof snapshot.docChanges === "function"
+                        ? Math.max(1, snapshot.docChanges().length)
+                        : Math.max(1, snapshot.size);
+                    recordClientFirestoreOps({ reads: billed });
+                  }
                   const items = snapshot.docs.map((d) => {
                     const raw = d.data() as Record<string, any>;
                     const base = {
@@ -421,7 +503,8 @@ export class ClientDataHub {
                 },
                 (err) => {
                   if (!active) return;
-                  if (allowCanonicalFallback) {
+                  if (allowCanonicalFallback && !isQuotaExhaustedError(err)) {
+                    unavailableSummaryCollections.add(summaryMemoKey);
                     console.warn(
                       `[ClientDataHub] Falling back from ${targetCol} to platform_shared_leads:`,
                       (err as any)?.code || err?.message
@@ -434,7 +517,8 @@ export class ClientDataHub {
                 }
               );
             } catch (err: any) {
-              if (allowCanonicalFallback) {
+              if (allowCanonicalFallback && !isQuotaExhaustedError(err)) {
+                unavailableSummaryCollections.add(summaryMemoKey);
                 attachPlatformListener("platform_shared_leads", false);
                 return;
               }
@@ -442,7 +526,7 @@ export class ClientDataHub {
             }
           };
 
-          attachPlatformListener(params.collectionName, isSlimShared);
+          attachPlatformListener(initialPlatformCol, isSlimShared);
 
           return () => {
             active = false;
@@ -451,7 +535,14 @@ export class ClientDataHub {
         }
 
         const canUseDirectSnapshot = Boolean(params.tenantId) && !params.isPreviewMode;
-        const isSlimTenantLeads = params.collectionName === LEAD_SUMMARY_COLLECTION;
+        const tenantSummaryMemoKey = `${params.tenantId || "none"}::${params.collectionName}`;
+        const isSlimTenantLeads =
+          params.collectionName === LEAD_SUMMARY_COLLECTION &&
+          !unavailableSummaryCollections.has(tenantSummaryMemoKey);
+        const initialTenantCol =
+          params.collectionName === LEAD_SUMMARY_COLLECTION && !isSlimTenantLeads
+            ? "leads"
+            : params.collectionName;
 
         if (canUseDirectSnapshot && params.tenantId) {
           const attachTenantListener = (targetCol: string, allowCanonicalFallback: boolean) => {
@@ -505,11 +596,18 @@ export class ClientDataHub {
                 });
               };
 
-              if (targetCol === "staff") {
+              if (targetCol === "staff" && !emptyLegacyPersonalTenants.has(params.tenantId!)) {
                 const legacyRef = collection(db, "tenants", params.tenantId!, "personal");
                 void getDocs(query(legacyRef, firestoreLimit(Math.min(500, params.limit))))
                   .then((legacySnap) => {
-                    if (!active || legacySnap.empty) return;
+                    if (!active) return;
+                    if (!legacySnap.metadata?.fromCache) {
+                      recordClientFirestoreOps({ reads: Math.max(1, legacySnap.size) });
+                    }
+                    if (legacySnap.empty) {
+                      emptyLegacyPersonalTenants.add(params.tenantId!);
+                      return;
+                    }
                     legacyPersonalDocs = legacySnap.docs.map((docSnap) => ({
                       id: docSnap.id,
                       ...docSnap.data(),
@@ -517,7 +615,8 @@ export class ClientDataHub {
                     emitMerged();
                   })
                   .catch(() => {
-                    // Ignore if legacy "personal" collection is empty or restricted
+                    // Memoize restricted/absent legacy "personal" collection for this session
+                    emptyLegacyPersonalTenants.add(params.tenantId!);
                   });
               }
 
@@ -525,6 +624,13 @@ export class ClientDataHub {
                 q,
                 (snapshot) => {
                   if (!active) return;
+                  if (!snapshot.metadata?.fromCache) {
+                    const billed =
+                      typeof snapshot.docChanges === "function"
+                        ? Math.max(1, snapshot.docChanges().length)
+                        : Math.max(1, snapshot.size);
+                    recordClientFirestoreOps({ reads: billed });
+                  }
                   latestPrimaryDocs = snapshot.docs.map((docSnap) => ({
                     id: docSnap.id,
                     ...docSnap.data(),
@@ -535,7 +641,12 @@ export class ClientDataHub {
                 },
                 (err) => {
                   if (!active) return;
+                  if (isQuotaExhaustedError(err)) {
+                    handlers.onError(err instanceof Error ? err : new Error(String(err)));
+                    return;
+                  }
                   if (allowCanonicalFallback) {
+                    unavailableSummaryCollections.add(tenantSummaryMemoKey);
                     console.warn(
                       `[ClientDataHub] Falling back from ${targetCol} to canonical leads:`,
                       (err as any)?.code || err?.message
@@ -553,8 +664,13 @@ export class ClientDataHub {
                   startFallbackPolling();
                 }
               );
-            } catch {
+            } catch (err) {
+              if (isQuotaExhaustedError(err)) {
+                handlers.onError(err instanceof Error ? err : new Error(String(err)));
+                return;
+              }
               if (allowCanonicalFallback) {
+                unavailableSummaryCollections.add(tenantSummaryMemoKey);
                 detachSnapshot();
                 attachTenantListener("leads", false);
                 return;
@@ -565,7 +681,7 @@ export class ClientDataHub {
             }
           };
 
-          attachTenantListener(params.collectionName, isSlimTenantLeads);
+          attachTenantListener(initialTenantCol, isSlimTenantLeads);
         } else if (!params.tenantId && !params.isPreviewMode) {
           // Wait briefly for TenantProvider to finish resolving tenantId before hitting API
           tenantWaitTimer = setTimeout(() => {
@@ -632,6 +748,9 @@ export class ClientDataHub {
           constraints.push(firestoreLimit(safePageSize + 1));
 
           const snap = await getDocs(query(colRef, ...constraints));
+          if (!snap.metadata?.fromCache) {
+            recordClientFirestoreOps({ reads: Math.max(1, snap.size) });
+          }
           const hasMore = snap.docs.length > safePageSize;
           const pageDocs = hasMore ? snap.docs.slice(0, safePageSize) : snap.docs;
           const items = pageDocs.map((docSnap) => {
@@ -904,22 +1023,109 @@ export class ClientDataHub {
     return this.subscribeCollection<T>("platform_shared_leads", callback, options, "platform");
   }
 
-  public notifyMutation(collectionName: string, docId?: string): void {
-    if (docId) {
-      this.invalidateDocument(collectionName, docId);
+  public notifyMutation(
+    collectionName: string,
+    docId?: string,
+    options?: {
+      updatedDoc?: Record<string, any> | null;
+      deleted?: boolean;
+      extraIds?: Array<string | undefined | null>;
+    }
+  ): void {
+    const idCandidates = Array.from(
+      new Set(
+        [docId, ...(options?.extraIds || [])]
+          .map((v) => String(v || "").trim())
+          .filter(Boolean)
+      )
+    );
+
+    if (idCandidates.length > 0) {
+      let cacheRemoved = false;
+      for (const candidate of idCandidates) {
+        if (this.detailCache.delete(this.buildDetailKey(collectionName, candidate))) {
+          cacheRemoved = true;
+        }
+      }
+      // Also erase any alias-keyed detailCache entry in the same collection that points to this exact entity
+      const candidateSet = new Set(idCandidates);
+      for (const [key, entry] of this.detailCache.entries()) {
+        if (entry.collectionName !== collectionName) continue;
+        const val = entry.value as Record<string, any> | null | undefined;
+        if (
+          val &&
+          typeof val === "object" &&
+          (candidateSet.has(String(val.id || "").trim()) ||
+            candidateSet.has(String(val.propertyId || "").trim()) ||
+            candidateSet.has(String(val.sourcePropertyId || "").trim()) ||
+            candidateSet.has(String(val.contactId || "").trim()) ||
+            candidateSet.has(String(val.staffId || "").trim()) ||
+            candidateSet.has(String(val.personalId || "").trim()) ||
+            candidateSet.has(String(val.activityId || "").trim()) ||
+            candidateSet.has(String(val.documentId || "").trim()))
+        ) {
+          this.detailCache.delete(key);
+          cacheRemoved = true;
+        }
+      }
+      if (cacheRemoved) {
+        this.emitSyncState();
+      }
     } else {
       this.invalidateCollection(collectionName);
     }
 
     const { targetCollection } = resolveEffectiveReadCollection("tenant", collectionName);
+    const candidateSet = new Set(idCandidates);
 
-    // Re-pull any API-backed slices for this collection (Firestore onSnapshot updates automatically)
     for (const slice of this.slices.values()) {
-      if (
-        (slice.collectionName === collectionName || slice.collectionName === targetCollection) &&
-        slice.source === "api" &&
-        slice.subscribers.size > 0
-      ) {
+      const matchesCollection =
+        slice.collectionName === collectionName || slice.collectionName === targetCollection;
+      if (!matchesCollection || slice.subscribers.size === 0) continue;
+
+      if (options?.deleted && candidateSet.size > 0 && slice.hasInitialData) {
+        const nextItems = slice.items.filter((item: any) => {
+          const itemId = String(item?.id || "").trim();
+          const itemPropId = String(item?.propertyId || "").trim();
+          return !candidateSet.has(itemId) && (!itemPropId || !candidateSet.has(itemPropId));
+        });
+        if (nextItems.length !== slice.items.length) {
+          slice.items = nextItems;
+          slice.lastUpdatedAt = Date.now();
+          for (const sub of slice.subscribers.values()) {
+            this.deliverToSubscriber(sub, slice.items);
+          }
+        }
+      } else if (options?.updatedDoc && slice.hasInitialData) {
+        const updated = options.updatedDoc;
+        const updatedId = String(updated.id || docId || "").trim();
+        const matchesPropertyFilter =
+          !slice.propertyId ||
+          String(updated.propertyId || "").trim() === slice.propertyId;
+
+        if (updatedId && matchesPropertyFilter) {
+          let replaced = false;
+          const nextItems = slice.items.map((item: any) => {
+            const itemId = String(item?.id || "").trim();
+            if (itemId === updatedId || candidateSet.has(itemId)) {
+              replaced = true;
+              return { ...item, ...updated };
+            }
+            return item;
+          });
+          if (!replaced) {
+            nextItems.unshift(updated);
+          }
+          slice.items = defaultSortItems(nextItems as any[], slice.collectionName);
+          slice.lastUpdatedAt = Date.now();
+          for (const sub of slice.subscribers.values()) {
+            this.deliverToSubscriber(sub, slice.items);
+          }
+        }
+      }
+
+      // Re-pull any API-backed slices for this collection (Firestore onSnapshot updates automatically)
+      if (slice.source === "api") {
         this.teardownSliceTransport(slice);
         this.attachSliceTransport(slice);
       }

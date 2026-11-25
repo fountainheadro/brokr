@@ -97,6 +97,20 @@ const deriveInitialModIncalzire = (lead: Lead): string => {
   return "";
 };
 
+const deriveInitialDescription = (lead: Lead): string => {
+  const candidates = [
+    lead.extractedData?.crmData?.descriere?.continut,
+    lead.extractedData?.originalDescription,
+    (lead.extractedData as any)?.markdownMarketing,
+    (lead.extractedData as any)?.presentationSections?.introducere?.summary,
+    lead.notes,
+  ];
+  for (const val of candidates) {
+    if (typeof val === "string" && val.trim()) return val;
+  }
+  return "";
+};
+
 const extractImageUrl = (item: unknown): string => {
   if (typeof item === "string") return item.trim();
   if (item && typeof item === "object" && "original" in item && typeof (item as any).original === "string") {
@@ -278,7 +292,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
   const [titleDraft, setTitleDraft] = useState<string>(
     lead.title || lead.extractedData?.crmData?.descriere?.titlu || ""
   );
-  const [notesDraft, setNotesDraft] = useState<string>(lead.notes || "");
+  const [notesDraft, setNotesDraft] = useState<string>(() => deriveInitialDescription(lead));
 
   // Drafts for Section 2: Caracteristici Suplimentare
   const [mobilare, setMobilare] = useState<string>(() => deriveInitialMobilare(lead));
@@ -329,7 +343,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
       setSuprafataDraft(nextSuprafata !== undefined && nextSuprafata !== null ? String(nextSuprafata) : "");
       setZoneDraft(lead.zone || "");
       setTitleDraft(lead.title || lead.extractedData?.crmData?.descriere?.titlu || "");
-      setNotesDraft(lead.notes || "");
+      setNotesDraft(deriveInitialDescription(lead));
     }
   }, [
     editingPropertyInfo,
@@ -341,6 +355,8 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
     lead.zone,
     lead.notes,
     lead.extractedData?.crmData?.descriere?.titlu,
+    lead.extractedData?.crmData?.descriere?.continut,
+    lead.extractedData?.originalDescription,
     lead.extractedData?.crmData?.caracteristici?.detalii?.camere,
     lead.extractedData?.crmData?.caracteristici?.suprafete?.utila,
   ]);
@@ -408,65 +424,86 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
 
     const currentCrm = lead.extractedData?.crmData;
     const currentPresentationSections = (lead.extractedData as any)?.presentationSections;
-    const shouldBuildExtracted = Boolean(lead.extractedData || cleanCamere || cleanSuprafata || cleanPrice);
-    const nextExtractedData = shouldBuildExtracted
-      ? {
-          ...(lead.extractedData || {}),
-          ...(currentPresentationSections
-            ? {
-                presentationSections: {
-                  ...currentPresentationSections,
-                  ...(currentPresentationSections.tranzactie
-                    ? {
-                        tranzactie: {
-                          ...currentPresentationSections.tranzactie,
-                          "Preț": cleanPrice,
-                        },
-                      }
-                    : {}),
-                },
-              }
-            : {}),
-          crmData: {
-            ...(currentCrm || {}),
-            ...(currentCrm?.detaliiGenerale
-              ? {
-                  detaliiGenerale: {
-                    ...currentCrm.detaliiGenerale,
-                    tranzactie: transactionDraft,
-                    categoria: categoriaDraft,
-                  },
-                }
-              : {}),
-            ...(cleanTitle && currentCrm
-              ? {
-                  descriere: {
-                    ...(currentCrm.descriere || {}),
-                    titlu: cleanTitle,
-                  },
-                }
-              : {}),
-            caracteristici: {
-              ...(currentCrm?.caracteristici || {}),
-              detalii: {
-                ...(currentCrm?.caracteristici?.detalii || {}),
-                camere: cleanCamere,
-              },
-              suprafete: {
-                ...(currentCrm?.caracteristici?.suprafete || {}),
-                utila: cleanSuprafata,
-              },
+    const currentOlxMeta = (lead.extractedData as any)?.olxMeta;
+    const nextExtractedData = {
+      ...(lead.extractedData || {}),
+      ...(cleanTitle ? { originalTitle: cleanTitle } : {}),
+      originalDescription: cleanNotes,
+      ...(typeof (lead.extractedData as any)?.markdownMarketing === "string"
+        ? { markdownMarketing: cleanNotes }
+        : {}),
+      ...(currentOlxMeta && typeof currentOlxMeta === "object" && cleanTitle
+        ? { olxMeta: { ...currentOlxMeta, originalTitle: cleanTitle } }
+        : {}),
+      ...(currentPresentationSections
+        ? {
+            presentationSections: {
+              ...currentPresentationSections,
+              ...(currentPresentationSections.introducere
+                ? {
+                    introducere: {
+                      ...currentPresentationSections.introducere,
+                      ...(cleanTitle ? { titlu: cleanTitle } : {}),
+                      summary: cleanNotes,
+                    },
+                  }
+                : {}),
+              ...(currentPresentationSections.tranzactie
+                ? {
+                    tranzactie: {
+                      ...currentPresentationSections.tranzactie,
+                      "Preț": cleanPrice,
+                    },
+                  }
+                : {}),
+              ...(currentPresentationSections.configuratie
+                ? {
+                    configuratie: {
+                      ...currentPresentationSections.configuratie,
+                      ...(cleanCamere ? { "Număr camere": cleanCamere } : {}),
+                      ...(cleanSuprafata ? { "Suprafață utilă": `${cleanSuprafata} mp` } : {}),
+                    },
+                  }
+                : {}),
             },
-            pret: {
-              ...(currentCrm?.pret || {}),
-              detalii: {
-                ...(currentCrm?.pret?.detalii || {}),
-                pret: cleanPrice,
-              },
-            },
+          }
+        : {}),
+      crmData: {
+        ...(currentCrm || {}),
+        detaliiGenerale: {
+          ...(currentCrm?.detaliiGenerale || {}),
+          tranzactie: transactionDraft,
+          categoria: categoriaDraft,
+          localizare: {
+            ...(currentCrm?.detaliiGenerale?.localizare || {}),
+            zona: cleanZone,
           },
-        }
-      : undefined;
+        },
+        descriere: {
+          ...(currentCrm?.descriere || {}),
+          ...(cleanTitle ? { titlu: cleanTitle } : {}),
+          continut: cleanNotes,
+        },
+        caracteristici: {
+          ...(currentCrm?.caracteristici || {}),
+          detalii: {
+            ...(currentCrm?.caracteristici?.detalii || {}),
+            camere: cleanCamere,
+          },
+          suprafete: {
+            ...(currentCrm?.caracteristici?.suprafete || {}),
+            utila: cleanSuprafata,
+          },
+        },
+        pret: {
+          ...(currentCrm?.pret || {}),
+          detalii: {
+            ...(currentCrm?.pret?.detalii || {}),
+            pret: cleanPrice,
+          },
+        },
+      },
+    };
 
     const payload: Partial<Lead> = {
       ...(cleanTitle ? { title: cleanTitle } : {}),
@@ -475,7 +512,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
       categoria: categoriaDraft,
       zone: cleanZone,
       notes: cleanNotes,
-      ...(nextExtractedData !== undefined ? { extractedData: nextExtractedData as any } : {}),
+      extractedData: nextExtractedData as any,
     };
 
     setSavingPropertyInfo(true);
@@ -483,13 +520,14 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
       const persisted = await leadsService.updateLeadData(lead.id, payload);
       const mergedPatch: Partial<Lead> = {
         ...payload,
+        ...(persisted?.extractedData ? { extractedData: persisted.extractedData } : {}),
         ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
         ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
         ...(persisted?.isSharedLead === false ? { isSharedLead: false } : {}),
         ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
       };
       onUpdateLead(mergedPatch);
-      void publishPublicShareSnapshot(
+      await publishPublicShareSnapshot(
         { ...lead, ...mergedPatch },
         { tenantId: tenant?.id, force: true }
       );
@@ -515,8 +553,20 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
 
     setSavingCharacteristics(true);
     try {
-      await leadsService.updateLeadData(lead.id, payload);
-      onUpdateLead(payload);
+      const persisted = await leadsService.updateLeadData(lead.id, payload);
+      const mergedPatch: Partial<Lead> = {
+        ...payload,
+        ...(persisted?.extractedData ? { extractedData: persisted.extractedData } : {}),
+        ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
+        ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
+        ...(persisted?.isSharedLead === false ? { isSharedLead: false } : {}),
+        ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
+      };
+      onUpdateLead(mergedPatch);
+      await publishPublicShareSnapshot(
+        { ...lead, ...mergedPatch },
+        { tenantId: tenant?.id, force: true }
+      );
       setEditingCharacteristics(false);
       toast.success("Caracteristicile suplimentare au fost salvate!");
     } catch (err) {
@@ -910,7 +960,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 setSuprafataDraft(suprafata !== undefined && suprafata !== null ? String(suprafata) : "");
                 setZoneDraft(lead.zone || "");
                 setTitleDraft(lead.title || lead.extractedData?.crmData?.descriere?.titlu || "");
-                setNotesDraft(lead.notes || "");
+                setNotesDraft(deriveInitialDescription(lead));
                 setEditingPropertyInfo(true);
               }}
               onSave={() => void handleSavePropertyInfo()}
@@ -1023,7 +1073,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
 
             <InlineDetailField
               label="Descriere"
-              value={lead.notes || ""}
+              value={deriveInitialDescription(lead)}
               editValue={notesDraft}
               isEditing={editingPropertyInfo}
               onChange={setNotesDraft}

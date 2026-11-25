@@ -8,6 +8,8 @@ import {
   onSnapshot,
   query,
   orderBy,
+  where,
+  limit,
   writeBatch,
   runTransaction,
 } from "firebase/firestore";
@@ -70,6 +72,8 @@ export const DEFAULT_PLATFORM_AUTO_CRAWL_CONFIG: PlatformAutoCrawlConfig = {
 };
 
 const LOCAL_CONFIG_CACHE_KEY = "brokr_platform_autocrawl_config";
+let legacyIdsNormalizedThisSession = false;
+const syncedDailyLeadMaxByDate = new Map<string, number>();
 
 function stripUndefinedDeep<T>(value: T): T {
   if (value === null || value === undefined) return value;
@@ -365,12 +369,16 @@ export const platformAutoCrawlService = {
           isSharedLead: true,
         }) as Lead;
       }
-      // Also support lookup by propertyId (e.g. /leads/L-XXXX)
-      const allSnap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
-      const match = allSnap.docs.find((d) => {
-        const data = d.data();
-        return d.id === leadId || data?.propertyId === leadId;
-      });
+      // Indexed single-field lookup by propertyId (e.g. /leads/L49 or /leads/2026-11-24-1)
+      // — 1 read instead of scanning the entire platform_shared_leads collection.
+      const byCodeSnap = await getDocs(
+        query(
+          collection(db, SHARED_LEADS_COLLECTION),
+          where("propertyId", "==", leadId),
+          limit(1)
+        )
+      );
+      const match = byCodeSnap.docs[0];
       if (!match) return null;
       return hydrateEntityTimestamps({
         ...(match.data() as Record<string, any>),
@@ -482,17 +490,32 @@ export const platformAutoCrawlService = {
     const dateKey = explicitDateKey || getDailyLeadDateKey();
     const counterRef = doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID);
 
-    // Inspect live collection max for today so counter is never behind existing YYYY-MM-DD-N docs
-    let liveMax = getMaxDailyLeadSequenceForDate(fallbackExistingLeads, dateKey);
-    try {
-      const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
-      const snapMax = getMaxDailyLeadSequenceForDate(
-        snap.docs.map((d) => d.data() as { propertyId?: string }),
-        dateKey
-      );
-      if (snapMax > liveMax) liveMax = snapMax;
-    } catch {
-      // fallbackExistingLeads max already computed
+    // Inspect today's leads ONLY via single-field prefix range query (never full-collection scan),
+    // and reuse in-session synced max for today once checked.
+    let liveMax = Math.max(
+      getMaxDailyLeadSequenceForDate(fallbackExistingLeads, dateKey),
+      syncedDailyLeadMaxByDate.get(dateKey) || 0
+    );
+    if (!syncedDailyLeadMaxByDate.has(dateKey) && fallbackExistingLeads.length === 0) {
+      try {
+        const prefix = `${dateKey}-`;
+        const todaySnap = await getDocs(
+          query(
+            collection(db, SHARED_LEADS_COLLECTION),
+            where("propertyId", ">=", prefix),
+            where("propertyId", "<=", `${prefix}\uf8ff`),
+            orderBy("propertyId", "desc"),
+            limit(50)
+          )
+        );
+        const snapMax = getMaxDailyLeadSequenceForDate(
+          todaySnap.docs.map((d) => d.data() as { propertyId?: string }),
+          dateKey
+        );
+        if (snapMax > liveMax) liveMax = snapMax;
+      } catch {
+        // fallbackExistingLeads max + atomic counter document already protect uniqueness
+      }
     }
 
     const startNum = await runTransaction(db, async (tx) => {
@@ -525,6 +548,8 @@ export const platformAutoCrawlService = {
       return base + 1;
     });
 
+    syncedDailyLeadMaxByDate.set(dateKey, startNum + count - 1);
+
     const ids: string[] = [];
     for (let i = 0; i < count; i++) {
       ids.push(formatDailyLeadId(dateKey, startNum + i));
@@ -535,12 +560,34 @@ export const platformAutoCrawlService = {
   /**
    * Repairs any previously imported shared leads that do not use the daily `YYYY-MM-DD-N` format
    * (e.g., legacy `L1` or `L-L7KSG` slugs) into clean daily incremental IDs grouped by creation day.
+   * Memoized via session flag + `platform_auto_crawl/counters.legacyIdsNormalizedAt` so once clean,
+   * repeated page opens & auto-crawl scans incur 0–1 reads instead of scanning the entire collection.
    */
-  async normalizeLegacySharedLeadIds(): Promise<number> {
+  async normalizeLegacySharedLeadIds(options?: { force?: boolean }): Promise<number> {
     if (!auth.currentUser) return 0;
+    const force = Boolean(options?.force);
+    if (!force && legacyIdsNormalizedThisSession) {
+      return 0;
+    }
     try {
+      const counterRef = doc(db, AUTO_CRAWL_CONFIG_COLLECTION, AUTO_CRAWL_COUNTERS_DOC_ID);
+      if (!force) {
+        try {
+          const counterSnap = await getDoc(counterRef);
+          if (counterSnap.exists() && counterSnap.data()?.legacyIdsNormalizedAt) {
+            legacyIdsNormalizedThisSession = true;
+            return 0;
+          }
+        } catch {
+          // Proceed to check below if counter doc read fails
+        }
+      }
+
       const snap = await getDocs(collection(db, SHARED_LEADS_COLLECTION));
-      if (snap.empty) return 0;
+      if (snap.empty) {
+        legacyIdsNormalizedThisSession = true;
+        return 0;
+      }
 
       const allDocs = snap.docs.map((d) => ({
         id: d.id,
@@ -556,7 +603,15 @@ export const platformAutoCrawlService = {
           return ta - tb;
         });
 
-      if (broken.length === 0) return 0;
+      if (broken.length === 0) {
+        legacyIdsNormalizedThisSession = true;
+        void setDoc(
+          counterRef,
+          { legacyIdsNormalizedAt: new Date().toISOString() },
+          { merge: true }
+        ).catch(() => {});
+        return 0;
+      }
 
       const maxByDate = new Map<string, number>();
       const allPropertyRecords = allDocs.map((entry) => ({ propertyId: entry.data.propertyId }));
@@ -618,6 +673,13 @@ export const platformAutoCrawlService = {
           }
         });
       }
+
+      legacyIdsNormalizedThisSession = true;
+      void setDoc(
+        counterRef,
+        { legacyIdsNormalizedAt: new Date().toISOString() },
+        { merge: true }
+      ).catch(() => {});
 
       return updatedCount;
     } catch (err) {

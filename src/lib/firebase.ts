@@ -8,8 +8,6 @@ import {
   memoryLocalCache,
   terminate,
   clearIndexedDbPersistence,
-  doc,
-  getDocFromServer,
   type Firestore,
 } from 'firebase/firestore';
 import { getMessaging, isSupported as isMessagingSupported } from 'firebase/messaging';
@@ -142,17 +140,3 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   console.error('Firestore Error: ', JSON.stringify(errInfo));
   throw new Error(JSON.stringify(errInfo));
 }
-
-// Validate connection
-async function testConnection() {
-  if (typeof window === 'undefined') return;
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Please check your Firebase configuration.");
-    }
-  }
-}
-testConnection();
