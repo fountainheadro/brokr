@@ -20,7 +20,9 @@ import { motion, AnimatePresence, type Transition } from "motion/react";
 import toast from "react-hot-toast";
 
 const personalSlideTransition: Transition = {
-  x: { type: "tween", duration: 0.28, ease: [0.22, 1, 0.36, 1] },
+  type: "tween",
+  duration: 0.34,
+  ease: [0.32, 0.72, 0, 1],
 };
 
 interface PersonalViewProps {
@@ -193,7 +195,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
         initial={false}
         animate={{ x: selectedMember ? "-100%" : "0%" }}
         transition={personalSlideTransition}
-        className={`absolute inset-0 w-full h-full flex flex-col bg-gray-50 overflow-hidden ${
+        className={`absolute inset-0 w-full h-full flex flex-col bg-gray-50 overflow-hidden will-change-transform ${
           selectedMember ? "pointer-events-none" : ""
         }`}
       >
@@ -504,7 +506,7 @@ export const PersonalView: React.FC<PersonalViewProps> = ({
             animate={{ x: "0%" }}
             exit={{ x: "100%" }}
             transition={personalSlideTransition}
-            className="absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-20"
+            className="absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-20 will-change-transform"
           >
             <PersonalDetailView
               member={selectedMember}

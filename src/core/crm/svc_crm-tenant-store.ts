@@ -113,18 +113,49 @@ function isCererePayload(l: Record<string, any>): boolean {
   return false;
 }
 
+function sanitizeValueDeep(v: any): any {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  if (typeof v === "number") {
+    return Number.isFinite(v) ? v : null;
+  }
+  if (v instanceof Date) {
+    return v.toISOString();
+  }
+  if (Array.isArray(v)) {
+    const arr: any[] = [];
+    for (const item of v) {
+      const cleaned = sanitizeValueDeep(item);
+      if (cleaned !== undefined) {
+        arr.push(cleaned);
+      }
+    }
+    return arr;
+  }
+  if (typeof v === "object") {
+    if (v._methodName === "serverTimestamp" || typeof v.isEqual === "function") {
+      return new Date().toISOString();
+    }
+    const obj: Record<string, any> = {};
+    for (const [k, child] of Object.entries(v)) {
+      if (child === undefined) continue;
+      const cleaned = sanitizeValueDeep(child);
+      if (cleaned !== undefined) {
+        obj[k] = cleaned;
+      }
+    }
+    return obj;
+  }
+  return v;
+}
+
 function sanitizePayloadTimestamps(data: Record<string, any>): Record<string, any> {
   const out: Record<string, any> = {};
   for (const [k, v] of Object.entries(data || {})) {
     if (v === undefined) continue;
-    if (
-      v &&
-      typeof v === "object" &&
-      (v._methodName === "serverTimestamp" || typeof v.isEqual === "function")
-    ) {
-      out[k] = new Date().toISOString();
-    } else {
-      out[k] = v;
+    const cleaned = sanitizeValueDeep(v);
+    if (cleaned !== undefined) {
+      out[k] = cleaned;
     }
   }
   return out;
@@ -156,7 +187,8 @@ function parseParcareCount(parcare: string): number | undefined {
  */
 function syncLeadDerivedFields(
   target: Record<string, any>,
-  patch?: Record<string, any>
+  patch?: Record<string, any>,
+  existingCriteria?: Record<string, any>
 ): void {
   const hasPatch = Boolean(patch && Object.keys(patch).length > 0);
   const p = patch || {};
@@ -410,9 +442,14 @@ function syncLeadDerivedFields(
             mobilat: mappedMob,
           },
         };
+        nextCrm.dotari = {
+          ...(nextCrm.dotari || {}),
+          mobilat: mobVal ? [mobVal] : [],
+        };
       }
       if (p.parcare !== undefined) {
-        const count = parseParcareCount(String(p.parcare || ""));
+        const parcareStr = String(p.parcare || "").trim();
+        const count = parseParcareCount(parcareStr);
         if (count !== undefined) {
           nextCrm.caracteristici = {
             ...(nextCrm.caracteristici || {}),
@@ -422,6 +459,10 @@ function syncLeadDerivedFields(
             },
           };
         }
+        nextCrm.dotari = {
+          ...(nextCrm.dotari || {}),
+          parcare: parcareStr,
+        };
       }
       if (p.sursaIncalzire !== undefined || p.modIncalzire !== undefined) {
         const nextHeating = [
@@ -431,6 +472,9 @@ function syncLeadDerivedFields(
         nextCrm.utilitati = {
           ...(nextCrm.utilitati || {}),
           sistemIncalzire: nextHeating,
+          ...(p.modIncalzire !== undefined
+            ? { metodaIncalzire: String(target.modIncalzire || "").trim() }
+            : {}),
         };
       }
       ext.crmData = nextCrm;
@@ -468,6 +512,60 @@ function syncLeadDerivedFields(
       }
       ext.presentationSections = nextSections;
     }
+  }
+
+  // 6. Accordion criteria synchronization & preservation across partial edits
+  const patchedTopCriteria =
+    p.criteriiFormular && typeof p.criteriiFormular === "object"
+      ? (p.criteriiFormular as Record<string, any>)
+      : null;
+  const patchedNestedCriteria =
+    p["extractedData.crmData.criteriiFormular"] &&
+    typeof p["extractedData.crmData.criteriiFormular"] === "object"
+      ? (p["extractedData.crmData.criteriiFormular"] as Record<string, any>)
+      : hasExtractedPatch &&
+          p.extractedData?.crmData?.criteriiFormular &&
+          typeof p.extractedData.crmData.criteriiFormular === "object"
+        ? (p.extractedData.crmData.criteriiFormular as Record<string, any>)
+        : null;
+
+  const baseCriteria =
+    (existingCriteria && typeof existingCriteria === "object" ? existingCriteria : null) ||
+    (target.criteriiFormular && typeof target.criteriiFormular === "object"
+      ? (target.criteriiFormular as Record<string, any>)
+      : null) ||
+    (target.extractedData?.crmData?.criteriiFormular &&
+    typeof target.extractedData.crmData.criteriiFormular === "object"
+      ? (target.extractedData.crmData.criteriiFormular as Record<string, any>)
+      : null);
+
+  if (baseCriteria || patchedTopCriteria || patchedNestedCriteria) {
+    const mergedCriteria: Record<string, any> = {
+      ...(baseCriteria || {}),
+      ...(patchedNestedCriteria || {}),
+      ...(patchedTopCriteria || {}),
+    };
+    if (p.mobilare !== undefined) {
+      mergedCriteria.mobilare = String(p.mobilare || "").trim();
+    }
+    if (p.utilare !== undefined) {
+      mergedCriteria.utilare = String(p.utilare || "").trim();
+    }
+    if (p.sursaIncalzire !== undefined) {
+      mergedCriteria.sistemIncalzire = String(p.sursaIncalzire || "").trim();
+    }
+    if (p.modIncalzire !== undefined) {
+      mergedCriteria.metodaIncalzire = String(p.modIncalzire || "").trim();
+    }
+    if (p.compartimentare !== undefined) {
+      mergedCriteria.compartimentare = String(p.compartimentare || "").trim();
+    }
+    target.criteriiFormular = mergedCriteria;
+    const ext = ensureExtracted();
+    ext.crmData = {
+      ...(ext.crmData && typeof ext.crmData === "object" ? ext.crmData : {}),
+      criteriiFormular: { ...mergedCriteria },
+    };
   }
 }
 
@@ -1301,6 +1399,14 @@ export class CrmTenantStoreService {
     };
     delete updated.tenant_id;
 
+    const existingCriteria =
+      existing.criteriiFormular && typeof existing.criteriiFormular === "object"
+        ? { ...existing.criteriiFormular }
+        : existing.extractedData?.crmData?.criteriiFormular &&
+            typeof existing.extractedData.crmData.criteriiFormular === "object"
+          ? { ...existing.extractedData.crmData.criteriiFormular }
+          : undefined;
+
     for (const [key, val] of Object.entries(sanitized)) {
       if (key.includes(".")) {
         const parts = key.split(".");
@@ -1324,7 +1430,7 @@ export class CrmTenantStoreService {
       updated.status = toDisplayLeadStatus(updated.status) || updated.status;
     }
     if (collectionName === "leads") {
-      syncLeadDerivedFields(updated, sanitized);
+      syncLeadDerivedFields(updated, sanitized, existingCriteria);
     }
     if (collectionName === "staff" && updated.status !== undefined) {
       updated.status = toDisplayStaffStatus(updated.status);

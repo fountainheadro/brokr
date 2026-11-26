@@ -163,7 +163,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const pageSlideTransition: Transition = {
-  x: { type: "tween", duration: 0.28, ease: [0.22, 1, 0.36, 1] },
+  type: "tween",
+  duration: 0.34,
+  ease: [0.32, 0.72, 0, 1],
 };
 
 type SortOption = 'newest' | 'oldest' | 'expensive' | 'cheap';
@@ -348,7 +350,7 @@ const CellCopyButton = ({ text, isImage = false, url = "", isRowDownload = false
 };
 
 export const Home: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<LeadStatus>("Noua");
+  const [activeTab, setActiveTab] = useState<LeadStatus>("ListaMea");
   const [lastVisitedTimes, setLastVisitedTimes] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem('lastVisited_tabs');
@@ -358,7 +360,7 @@ export const Home: React.FC = () => {
     }
   });
   const [sortOption, setSortOption] = useState<SortOption>('newest');
-  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Proprietati');
+  const [activeSidebarItem, setActiveSidebarItem] = useState<NavSubItem>('Lead-uri');
   const location = useLocation();
   const navigate = useNavigate();
   const prevPathnameRef = useRef(location.pathname);
@@ -367,10 +369,15 @@ export const Home: React.FC = () => {
 
   const handleSelectSidebarItem = (subItem: NavSubItem) => {
     if (selectedLead || location.pathname !== "/") {
-      closingDetailRouteRef.current = true;
+      if (location.pathname !== "/") {
+        closingDetailRouteRef.current = true;
+      }
       setSelectedLead(null);
       setIsEditingDetails(false);
       setShowDeleteConfirm(false);
+      if (location.pathname !== "/") {
+        navigate("/");
+      }
     }
     if (selectedContact) {
       setSelectedContact(null);
@@ -1863,7 +1870,9 @@ export const Home: React.FC = () => {
   };
 
   const handleCloseDetails = () => {
-    closingDetailRouteRef.current = true;
+    if (location.pathname !== "/") {
+      closingDetailRouteRef.current = true;
+    }
     setShowDeleteConfirm(false);
     setIsEditingDetails(false);
     setSelectedLead(null);
@@ -2279,7 +2288,7 @@ export const Home: React.FC = () => {
             initial={false}
             animate={{ x: (selectedLead || selectedContact) ? "-100%" : "0%" }}
             transition={pageSlideTransition}
-            className={`absolute inset-0 w-full h-full flex flex-col bg-gray-50 overflow-hidden ${
+            className={`absolute inset-0 w-full h-full flex flex-col bg-gray-50 overflow-hidden will-change-transform ${
               (selectedLead || selectedContact) ? "pointer-events-none" : ""
             }`}
           >
@@ -2557,7 +2566,7 @@ export const Home: React.FC = () => {
                 animate={{ x: selectedContact ? "-100%" : "0%" }}
                 exit={{ x: "100%" }}
                 transition={pageSlideTransition}
-                className={`absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-20 ${
+                className={`absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-20 will-change-transform ${
                   selectedContact ? "pointer-events-none" : ""
                 }`}
               >
@@ -2864,7 +2873,7 @@ export const Home: React.FC = () => {
                 animate={{ x: "0%" }}
                 exit={{ x: "100%" }}
                 transition={pageSlideTransition}
-                className="absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-30"
+                className="absolute inset-0 w-full h-full bg-gray-50 overflow-hidden flex flex-col z-30 will-change-transform"
               >
                 <ContactDetailView
                   contact={selectedContact}
@@ -2934,7 +2943,15 @@ export const Home: React.FC = () => {
         }}
       />
 
-      <AddLeadModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+      <AddLeadModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        propertyOnly={
+          activeSidebarItem === "Proprietati" ||
+          activeSidebarItem === "Imobile" ||
+          activeSidebarItem === "Proprietăți"
+        }
+      />
       <AddCerereModal 
         isOpen={isCerereModalOpen} 
         onClose={() => setIsCerereModalOpen(false)} 

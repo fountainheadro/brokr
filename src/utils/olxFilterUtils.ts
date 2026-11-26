@@ -471,6 +471,9 @@ export function extractNumericSurface(lead: any): number {
     lead?.extractedData?.olxMeta?.surface,
     lead?.extractedData?.crmData?.caracteristici?.suprafete?.utila,
     lead?.extractedData?.crmData?.caracteristici?.suprafete?.suprafataUtila,
+    lead?.extractedData?.crmData?.caracteristici?.suprafete?.teren,
+    lead?.suprafataUtilaMin,
+    lead?.suprafataTerenMin,
     lead?.suprafataUtila,
     lead?.surface,
     lead?.suprafata,
@@ -575,8 +578,15 @@ export function extractNormalizedConstructieBuckets(lead: any): string[] {
   }
   const rawValues = [
     lead?.constructionYear,
+    lead?.anConstructieMin,
+    lead?.anConstructieMax,
+    lead?.criteriiFormular?.anConstructieMin,
+    lead?.criteriiFormular?.anConstructieMax,
     lead?.extractedData?.olxMeta?.constructie,
     lead?.extractedData?.crmData?.caracteristici?.alteDetalii?.anConstructie,
+    lead?.extractedData?.crmData?.caracteristici?.detalii?.anConstructie,
+    lead?.extractedData?.crmData?.criteriiFormular?.anConstructieMin,
+    lead?.extractedData?.crmData?.criteriiFormular?.anConstructieMax,
   ];
 
   for (const raw of rawValues) {

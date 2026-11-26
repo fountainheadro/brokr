@@ -97,6 +97,17 @@ function sanitizeExtractedDataForPublicShare(
     delete cloned.crmData.contact;
     delete cloned.crmData.proprietar;
     delete cloned.crmData.owner;
+    if (cloned.crmData.criteriiFormular && typeof cloned.crmData.criteriiFormular === "object") {
+      delete cloned.crmData.criteriiFormular.cetatenie;
+      delete cloned.crmData.criteriiFormular.cetatenieList;
+      delete cloned.crmData.criteriiFormular.animal;
+      delete cloned.crmData.criteriiFormular.animaleList;
+      delete cloned.crmData.criteriiFormular.profil;
+      delete cloned.crmData.criteriiFormular.copii;
+      delete cloned.crmData.criteriiFormular.clientName;
+      delete cloned.crmData.criteriiFormular.clientPhone;
+      delete cloned.crmData.criteriiFormular.requirements;
+    }
   }
 
   // Ensure description and price are synchronized on the public snapshot for OpenGraph & shared page rendering

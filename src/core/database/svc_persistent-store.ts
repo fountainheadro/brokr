@@ -636,11 +636,14 @@ export class PersistentStoreService {
     if (val === null || val === undefined) return { nullValue: null };
     if (typeof val === "boolean") return { booleanValue: val };
     if (typeof val === "number") {
+      if (!Number.isFinite(val)) return { nullValue: null };
       return Number.isInteger(val) ? { integerValue: String(val) } : { doubleValue: val };
     }
     if (typeof val === "string") return { stringValue: val };
+    if (val instanceof Date) return { stringValue: val.toISOString() };
     if (Array.isArray(val)) {
-      return { arrayValue: { values: val.map((item) => this.toFirestoreValue(item)) } };
+      const cleaned = val.filter((item) => item !== undefined);
+      return { arrayValue: { values: cleaned.map((item) => this.toFirestoreValue(item)) } };
     }
     if (typeof val === "object") {
       const fields: Record<string, any> = {};

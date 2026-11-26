@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ChevronDown, ChevronUp, Pause, Play, RefreshCw } from "lucide-react";
+import { Activity, ChevronDown, ChevronUp, RefreshCw } from "lucide-react";
 import { onAuthStateChanged } from "firebase/auth";
 import { auth } from "../lib/firebase";
 import {
@@ -82,13 +82,8 @@ export const DevQuotaMonitor: React.FC<DevQuotaMonitorProps> = ({
       return true;
     }
   });
-  const [autoScrollEnabled, setAutoScrollEnabled] = useState(true);
-  const [isHoverPaused, setIsHoverPaused] = useState(false);
-
-  const listRef = useRef<HTMLDivElement | null>(null);
   const lastFetchedAtRef = useRef<number>(0);
   const inFlightRef = useRef<boolean>(false);
-  const userScrollPauseUntilRef = useRef<number>(0);
 
   const togglePanel = () => {
     setPanelOpen((prev) => {
@@ -175,70 +170,6 @@ export const DevQuotaMonitor: React.FC<DevQuotaMonitorProps> = ({
     };
   }, [fetchQuota]);
 
-  // Smooth continuous auto-scroll when the list overflows; pauses on hover/manual wheel
-  useEffect(() => {
-    if (isCollapsed || !panelOpen || !autoScrollEnabled || isHoverPaused) return;
-    const el = listRef.current;
-    if (!el) return;
-
-    let rafId = 0;
-    let lastTs = 0;
-    let dwellUntil = performance.now() + 1_800; // let user read top item first
-    let phase: "down" | "reset" = "down";
-    let fractionalScroll = el.scrollTop;
-
-    const step = (ts: number) => {
-      if (!listRef.current) return;
-      const node = listRef.current;
-      const maxScroll = node.scrollHeight - node.clientHeight;
-
-      if (maxScroll <= 2) {
-        rafId = window.requestAnimationFrame(step);
-        return;
-      }
-
-      if (performance.now() < userScrollPauseUntilRef.current) {
-        fractionalScroll = node.scrollTop;
-        lastTs = ts;
-        rafId = window.requestAnimationFrame(step);
-        return;
-      }
-
-      if (ts < dwellUntil) {
-        lastTs = ts;
-        rafId = window.requestAnimationFrame(step);
-        return;
-      }
-
-      const dtSec = lastTs > 0 ? Math.min(0.1, (ts - lastTs) / 1000) : 0;
-      lastTs = ts;
-
-      if (phase === "down") {
-        fractionalScroll += dtSec * 16; // gentle 16px/sec scroll speed
-        if (fractionalScroll >= maxScroll) {
-          node.scrollTop = maxScroll;
-          fractionalScroll = maxScroll;
-          phase = "reset";
-          dwellUntil = ts + 2_200; // brief pause at bottom
-        } else {
-          node.scrollTop = fractionalScroll;
-        }
-      } else {
-        // Smooth jump back to top and dwell so AI Studio Tokens is readable
-        node.scrollTop = 0;
-        fractionalScroll = 0;
-        phase = "down";
-        dwellUntil = ts + 2_200;
-      }
-
-      rafId = window.requestAnimationFrame(step);
-    };
-
-    rafId = window.requestAnimationFrame(step);
-    return () => {
-      window.cancelAnimationFrame(rafId);
-    };
-  }, [isCollapsed, panelOpen, autoScrollEnabled, isHoverPaused, snapshot?.resources.length]);
 
   const peakResource = useMemo(() => {
     if (!snapshot || snapshot.resources.length === 0) return null;
@@ -280,7 +211,7 @@ export const DevQuotaMonitor: React.FC<DevQuotaMonitorProps> = ({
           </div>
           <div className="w-8 h-1 rounded-full bg-gray-200 overflow-hidden">
             <div
-              className={`h-full rounded-full transition-all duration-500 ${getBarColorClass(peakPct)}`}
+              className={`h-full rounded-full ${getBarColorClass(peakPct)}`}
               style={{ width: `${Math.max(peakPct > 0 ? 8 : 0, Math.min(100, peakPct))}%` }}
             />
           </div>
@@ -309,30 +240,19 @@ export const DevQuotaMonitor: React.FC<DevQuotaMonitorProps> = ({
         </button>
 
         <div className="flex items-center gap-0.5 shrink-0">
-          {panelOpen && (
-            <button
-              type="button"
-              onClick={() => setAutoScrollEnabled((prev) => !prev)}
-              className="p-1 rounded text-gray-400 hover:text-[#051D35] hover:bg-gray-100 transition-colors cursor-pointer"
-              title={autoScrollEnabled ? "Pauză auto-scroll" : "Pornește auto-scroll"}
-              aria-label={autoScrollEnabled ? "Pauză auto-scroll" : "Pornește auto-scroll"}
-            >
-              {autoScrollEnabled ? <Pause size={10} /> : <Play size={10} />}
-            </button>
-          )}
           <button
             type="button"
             onClick={() => void fetchQuota(true)}
-            className="p-1 rounded text-gray-400 hover:text-[#051D35] hover:bg-gray-100 transition-colors cursor-pointer"
+            className="p-1 rounded text-gray-400 hover:text-[#051D35] hover:bg-gray-100 cursor-pointer"
             title="Reîmprospătează acum (actualizare automată la 60s)"
             aria-label="Reîmprospătează consumul zilnic"
           >
-            <RefreshCw size={10} className={loading ? "animate-spin text-[#BE9662]" : ""} />
+            <RefreshCw size={10} className={loading ? "text-[#BE9662]" : ""} />
           </button>
           <button
             type="button"
             onClick={togglePanel}
-            className="p-1 rounded text-gray-400 hover:text-[#051D35] hover:bg-gray-100 transition-colors cursor-pointer"
+            className="p-1 rounded text-gray-400 hover:text-[#051D35] hover:bg-gray-100 cursor-pointer"
             title={panelOpen ? "Restrânge lista" : "Extinde lista"}
             aria-label={panelOpen ? "Restrânge lista" : "Extinde lista"}
           >
@@ -341,20 +261,9 @@ export const DevQuotaMonitor: React.FC<DevQuotaMonitorProps> = ({
         </div>
       </div>
 
-      {/* Scrollable + Auto-Scrolling Resource Quota List */}
+      {/* Scrollable Resource Quota List */}
       {panelOpen && (
-        <div
-          ref={listRef}
-          onMouseEnter={() => setIsHoverPaused(true)}
-          onMouseLeave={() => setIsHoverPaused(false)}
-          onTouchStart={() => {
-            userScrollPauseUntilRef.current = performance.now() + 6_000;
-          }}
-          onWheel={() => {
-            userScrollPauseUntilRef.current = performance.now() + 6_000;
-          }}
-          className="max-h-[172px] overflow-y-auto px-3 py-2 space-y-2.5 [scrollbar-width:thin]"
-        >
+        <div className="max-h-[172px] overflow-y-auto px-3 py-2 space-y-2.5 [scrollbar-width:thin]">
           {!snapshot ? (
             <div className="py-3 text-center text-[10px] text-gray-400">
               Se încarcă cotele zilnice...
@@ -396,7 +305,7 @@ export const DevQuotaMonitor: React.FC<DevQuotaMonitorProps> = ({
                   {/* Bar from 0 to limit */}
                   <div className="h-1.5 w-full rounded-full bg-gray-200 overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all duration-500 ${getBarColorClass(
+                      className={`h-full rounded-full ${getBarColorClass(
                         res.percent
                       )}`}
                       style={{ width: `${barWidth}%` }}

@@ -35,6 +35,7 @@ import {
   Check, 
   Maximize2,
   User,
+  UserCheck,
   Lock,
   Copy,
   Bookmark,
@@ -63,6 +64,12 @@ import { regeneratePropertyImages } from "../utils/regeneratePropertyImages";
 import { auth } from "../lib/firebase";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { ProtectedPublicImage, prefetchProtectedPublicImage } from "./ProtectedPublicImage";
+import {
+  CriteriaDetailSections,
+  derivePropertyCriteriaStateFromLead,
+  getCriteriaSectionTitles,
+} from "./CriteriaDetailSections";
+import type { BuildingCategoryType } from "./PropertyCriteriaAccordionForm";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -375,7 +382,42 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   onRefreshPublicProperty
 }) => {
   const { tenant, platformRootDomain } = useTenantContext();
-  const [activeSection, setActiveSection] = useState<string>(NAV_SECTIONS[0]?.id || "tranzactie");
+  const [internalBuildingType, setInternalBuildingType] = useState<BuildingCategoryType>(
+    () => derivePropertyCriteriaStateFromLead(lead).buildingType
+  );
+  const internalIsRent =
+    lead?.transactionType === "Închiriere" ||
+    lead?.extractedData?.crmData?.detaliiGenerale?.tranzactie === "Închiriere";
+  const internalSectionTitles = getCriteriaSectionTitles({
+    mode: "property",
+    role: internalIsRent ? "Chirias" : "Cumparator",
+    buildingType: internalBuildingType,
+  });
+  const internalNavSections: NavSection[] = useMemo(
+    () => [
+      { id: "sec-persoana", label: internalSectionTitles.persoanaTitle, icon: User },
+      { id: "sec-client-dorit", label: internalSectionTitles.clientDoritTitle, icon: UserCheck },
+      { id: "sec-pret-conditii", label: internalSectionTitles.pretConditiiTitle, icon: BadgePercent },
+      { id: "sec-generale", label: internalSectionTitles.generaleTitle, icon: FileText },
+      { id: "sec-imobil", label: internalSectionTitles.imobilTitle, icon: Home },
+      { id: "sec-avansate", label: internalSectionTitles.avansateTitle, icon: Layers },
+      { id: "sec-alte", label: internalSectionTitles.alteTitle, icon: Sparkles },
+      { id: "sec-imagini", label: "Fotografii", icon: Camera },
+    ],
+    [
+      internalSectionTitles.persoanaTitle,
+      internalSectionTitles.clientDoritTitle,
+      internalSectionTitles.pretConditiiTitle,
+      internalSectionTitles.generaleTitle,
+      internalSectionTitles.imobilTitle,
+      internalSectionTitles.avansateTitle,
+      internalSectionTitles.alteTitle,
+    ]
+  );
+
+  const [activeSection, setActiveSection] = useState<string>(
+    isPublicShared ? (NAV_SECTIONS[0]?.id || "tranzactie") : "sec-persoana"
+  );
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const publicShareUrl =
     lead?.propertyId || lead?.id
@@ -387,7 +429,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   
   // Ensure default active tab is always the first in jump links on mount or property change
   useEffect(() => {
-    setActiveSection(NAV_SECTIONS[0]?.id || "tranzactie");
+    setInternalBuildingType(derivePropertyCriteriaStateFromLead(lead).buildingType);
+    setActiveSection(isPublicShared ? (NAV_SECTIONS[0]?.id || "tranzactie") : "sec-persoana");
     if (isPublicShared) {
       window.scrollTo(0, 0);
     } else {
@@ -503,13 +546,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       // Check if user is scrolled to the absolute bottom of the container
       const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
       if (isAtBottom) {
-        setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
+        setActiveSection(internalNavSections[internalNavSections.length - 1].id);
         return;
       }
 
       // If at or near the top of the container, force the first jump link tab
       if (scrollContainer.scrollTop <= 40) {
-        setActiveSection(NAV_SECTIONS[0].id);
+        setActiveSection(internalNavSections[0].id);
         return;
       }
 
@@ -518,8 +561,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       const triggerLine = containerTop + 70;
 
       // Find the last section whose top has reached or passed the trigger line
-      let currentSectionId = NAV_SECTIONS[0].id;
-      for (const sect of NAV_SECTIONS) {
+      let currentSectionId = internalNavSections[0].id;
+      for (const sect of internalNavSections) {
         const el = document.getElementById(sect.id);
         if (el) {
           const rect = el.getBoundingClientRect();
@@ -552,7 +595,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         }
       };
     }
-  }, [isPublicShared]);
+  }, [isPublicShared, internalNavSections]);
 
   const toggleCard = (cardId: string) => {
     setCollapsedCards(prev => ({
@@ -572,7 +615,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       isManualScrollingRef.current = false;
     }, 850);
 
-    if (sectionId === "photos") {
+    if (sectionId === "photos" || (!isPublicShared && sectionId === "sec-persoana")) {
       if (isPublicShared) {
         window.scrollTo({
           top: 0,
@@ -1845,7 +1888,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                       }`}
                     >
                       <Icon size={14} className={isActive ? "text-[#BE9662]" : "text-gray-500 group-hover:text-[#051D35] transition-colors"} />
-                      <span>{sect.label}</span>
+                      <span>{sect.id === "photos" ? "Poze" : sect.label}</span>
                     </button>
                   );
                 })}
@@ -1892,7 +1935,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           <div className="h-10 shrink-0 bg-white border-b border-gray-200 shadow-2xs select-none z-20">
             <div className="w-full px-4 h-10 flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
               <div className="flex items-center gap-2 shrink-0 overflow-x-auto no-scrollbar py-1">
-                {NAV_SECTIONS.map((sect) => {
+                {internalNavSections.map((sect) => {
                   const Icon = sect.icon;
                   const isActive = activeSection === sect.id;
 
@@ -1995,6 +2038,348 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       )}
 
       {/* Main Layout (Scrollable container below the fixed headers) */}
+      {!isPublicShared ? (
+        <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-gray-50 p-0 overflow-y-auto scroll-smooth custom-scrollbar">
+          <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-4 text-xs">
+            {/* Exact 4 Accordion Sections & Fields */}
+            <CriteriaDetailSections
+              lead={lead}
+              role={internalIsRent ? "Chirias" : "Cumparator"}
+              mode="property"
+              onUpdateLead={onUpdateLead || (() => {})}
+              onBuildingTypeDisplayChange={setInternalBuildingType}
+            />
+
+            {/* LAST SECTION: Fotografii Imobil (kept as-is) */}
+            <div id="sec-imagini" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-2xs font-sans scroll-mt-[104px]">
+              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
+                    <Camera size={16} />
+                  </div>
+                  <div>
+                    <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                      Fotografii Imobil
+                    </h2>
+                    <span className="text-[10px] text-gray-500 font-normal font-sans">
+                      {imagesList.length} {imagesList.length === 1 ? "fotografie" : "fotografii"}
+                    </span>
+                  </div>
+                </div>
+                <SectionEditButton
+                  isEditing={isEditingPhotos}
+                  isDirty={isPhotosDirty}
+                  onStartEdit={() => setIsEditingPhotos(true)}
+                  onCancel={handleCancelPhotos}
+                  onSave={handleSavePhotos}
+                  disabled={isSavingPhotos}
+                />
+              </div>
+
+              <div
+                className="relative p-5 space-y-3 font-sans select-none"
+                onDragEnter={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.types.includes("Files")) setIsDraggingOverCard(true);
+                }}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (e.dataTransfer.types.includes("Files")) setIsDraggingOverCard(true);
+                }}
+                onDragLeave={(e) => {
+                  e.preventDefault();
+                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                    setIsDraggingOverCard(false);
+                  }
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setIsDraggingOverCard(false);
+                  if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    handleAddPhotoFiles(e.dataTransfer.files);
+                  }
+                }}
+              >
+                {isDraggingOverCard && (
+                  <div className="absolute inset-0 bg-[#051D35]/85 backdrop-blur-xs z-30 flex flex-col items-center justify-center text-white pointer-events-none p-4 text-center border-2 border-dashed border-[#BE9662] transition-all">
+                    <div className="w-12 h-12 rounded-full bg-[#BE9662]/20 text-[#BE9662] flex items-center justify-center mb-2 animate-bounce">
+                      <Upload size={24} />
+                    </div>
+                    <p className="font-title text-sm font-semibold tracking-wide">Plasează fotografiile aici</p>
+                    <p className="text-xs text-gray-300 mt-1">Trage fișierele pentru a le adăuga în galerie</p>
+                  </div>
+                )}
+
+                <input
+                  ref={photoFileInputRef}
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      handleAddPhotoFiles(e.target.files);
+                    }
+                    e.target.value = "";
+                  }}
+                  className="hidden"
+                />
+
+                {/* Main large photo carousel preview */}
+                <div className="relative aspect-[16/10] sm:aspect-[16/9] max-h-[420px] w-full bg-gray-100 rounded-lg group select-none overflow-hidden border border-gray-200">
+                  {imagesList.length > 0 ? (
+                    <>
+                      <img
+                        src={getThumbnailImageUrl(imagesList[carouselIndex] || imagesList[0], 1000)}
+                        alt={`${displayTitle} - foto ${carouselIndex + 1}`}
+                        decoding="async"
+                        onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
+                        className="w-full h-full object-cover cursor-pointer group-hover:scale-102 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                      />
+
+                      <div className="absolute top-3 right-3 flex items-center gap-2 z-10">
+                        {isEditingPhotos && imagesList.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const idxToDelete = carouselIndex;
+                              setImagesList(prev => prev.filter((_, i) => i !== idxToDelete));
+                              setIsPhotosDirty(true);
+                              if (carouselIndex >= imagesList.length - 1) {
+                                setCarouselIndex(Math.max(0, imagesList.length - 2));
+                              }
+                            }}
+                            className="h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-[11px] font-sans font-medium backdrop-blur-xs flex items-center gap-1 transition-colors cursor-pointer shadow-xs"
+                            title="Șterge fotografia curentă"
+                          >
+                            <X size={11} />
+                            <span>Șterge</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => { setSelectedPhotoIndex(carouselIndex); setIsGalleryOpen(true); }}
+                          className="h-7 px-2 rounded-md bg-black/65 hover:bg-black/85 text-white text-[11px] font-normal backdrop-blur-xs flex items-center gap-1 transition-colors cursor-pointer tabular-nums"
+                          title="Deschide galeria completă"
+                        >
+                          <Camera size={11} className="text-[#BE9662]" />
+                          <span>{carouselIndex + 1} / {imagesList.length}</span>
+                        </button>
+                      </div>
+
+                      {imagesList.length > 1 && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCarouselIndex((prev) => (prev === 0 ? imagesList.length - 1 : prev - 1));
+                            }}
+                            className="absolute left-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
+                            title="Fotografia anterioară"
+                          >
+                            <ChevronLeft size={16} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setCarouselIndex((prev) => (prev === imagesList.length - 1 ? 0 : prev + 1));
+                            }}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 w-8 h-8 rounded-full bg-black/50 hover:bg-black/75 text-white flex items-center justify-center opacity-80 sm:opacity-0 group-hover:opacity-100 transition-all cursor-pointer backdrop-blur-xs shadow-sm z-10"
+                            title="Fotografia următoare"
+                          >
+                            <ChevronRight size={16} />
+                          </button>
+                        </>
+                      )}
+                    </>
+                  ) : (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-gray-400 gap-2 p-4 text-center">
+                      <Camera size={32} className="text-gray-300" />
+                      <span className="text-xs font-normal">Nicio fotografie disponibilă</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Thumbnails Slots & Pagination */}
+                <div className="space-y-2 pt-1">
+                  {imagesList.length > 4 && (
+                    <div className="flex items-center justify-between text-[11px] text-gray-500 font-sans px-1">
+                      <span>Sloturi {slotPage * 4 + 1} - {Math.min((slotPage + 1) * 4, imagesList.length)} din {imagesList.length}</span>
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          disabled={slotPage === 0}
+                          onClick={() => setSlotPage(p => Math.max(0, p - 1))}
+                          className="w-5 h-5 rounded flex items-center justify-center border border-gray-200 bg-white hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                          title="Sloturile anterioare"
+                        >
+                          <ChevronLeft size={12} />
+                        </button>
+                        <span className="text-[10px] px-1 tabular-nums">{slotPage + 1}/{Math.ceil(imagesList.length / 4)}</span>
+                        <button
+                          type="button"
+                          disabled={(slotPage + 1) * 4 >= imagesList.length}
+                          onClick={() => setSlotPage(p => (p + 1) * 4 < imagesList.length ? p + 1 : p)}
+                          className="w-5 h-5 rounded flex items-center justify-center border border-gray-200 bg-white hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+                          title="Sloturile următoare"
+                        >
+                          <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-5 gap-2">
+                    {[0, 1, 2, 3].map((offset) => {
+                      const actualIndex = slotPage * 4 + offset;
+                      const imgUrl = imagesList[actualIndex];
+                      if (imgUrl) {
+                        const isSelected = carouselIndex === actualIndex;
+                        const isDragTarget = dropTargetIndex === actualIndex;
+                        return (
+                          <div
+                            key={actualIndex}
+                            draggable={true}
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData("text/plain", String(actualIndex));
+                              setDraggedSlotIndex(actualIndex);
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              if (draggedSlotIndex !== null && draggedSlotIndex !== actualIndex) {
+                                setDropTargetIndex(actualIndex);
+                              }
+                            }}
+                            onDragLeave={() => {
+                              if (dropTargetIndex === actualIndex) setDropTargetIndex(null);
+                            }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              const fromIdxStr = e.dataTransfer.getData("text/plain");
+                              const fromIdx = fromIdxStr !== "" ? parseInt(fromIdxStr, 10) : draggedSlotIndex;
+                              if (fromIdx !== null && !isNaN(fromIdx) && fromIdx !== actualIndex) {
+                                setImagesList(prev => {
+                                  const next = [...prev];
+                                  const [moved] = next.splice(fromIdx, 1);
+                                  next.splice(actualIndex, 0, moved);
+                                  return next;
+                                });
+                                setIsPhotosDirty(true);
+                                setIsEditingPhotos(true);
+                                setCarouselIndex(actualIndex);
+                              }
+                              setDraggedSlotIndex(null);
+                              setDropTargetIndex(null);
+                            }}
+                            onDragEnd={() => {
+                              setDraggedSlotIndex(null);
+                              setDropTargetIndex(null);
+                            }}
+                            onClick={() => setCarouselIndex(actualIndex)}
+                            className={`relative aspect-square rounded-lg overflow-hidden border cursor-pointer transition-all group ${
+                              isSelected
+                                ? "border-[#BE9662] ring-2 ring-[#BE9662] shadow-xs"
+                                : "border-gray-200 hover:border-gray-400"
+                            } ${isDragTarget ? "scale-105 ring-2 ring-[#051D35] border-[#051D35]" : ""}`}
+                            title={`Foto ${actualIndex + 1} (Trage pentru rearanjare)`}
+                          >
+                            <img
+                              src={getThumbnailImageUrl(imgUrl, 180)}
+                              alt={`Foto ${actualIndex + 1}`}
+                              loading="lazy"
+                              decoding="async"
+                              className="w-full h-full object-cover select-none"
+                              referrerPolicy="no-referrer"
+                            />
+                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors pointer-events-none" />
+                            <span className="absolute bottom-1 left-1 px-1 py-0 rounded bg-black/60 text-white text-[9px] pointer-events-none tabular-nums">
+                              {actualIndex + 1}
+                            </span>
+                            {isEditingPhotos && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setImagesList(prev => prev.filter((_, i) => i !== actualIndex));
+                                  setIsPhotosDirty(true);
+                                  if (carouselIndex >= imagesList.length - 1) {
+                                    setCarouselIndex(Math.max(0, imagesList.length - 2));
+                                  }
+                                }}
+                                className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-600 hover:bg-red-700 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer shadow-xs"
+                                title="Șterge fotografia"
+                              >
+                                <X size={10} />
+                              </button>
+                            )}
+                          </div>
+                        );
+                      }
+                      return (
+                        <div
+                          key={`empty-${offset}`}
+                          className="aspect-square rounded-lg border border-dashed border-gray-200 bg-gray-50/50 flex items-center justify-center text-gray-300"
+                        >
+                          <span className="text-[10px] text-gray-300 tabular-nums">{slotPage * 4 + offset + 1}</span>
+                        </div>
+                      );
+                    })}
+
+                    <button
+                      type="button"
+                      onClick={() => photoFileInputRef.current?.click()}
+                      className="aspect-square rounded-lg border-2 border-dashed border-gray-300 hover:border-[#BE9662] hover:bg-amber-50/20 text-gray-400 hover:text-[#BE9662] flex items-center justify-center transition-all cursor-pointer group shadow-2xs"
+                      title="Încarcă fotografii de pe dispozitiv"
+                    >
+                      <Plus size={20} className="group-hover:scale-125 group-hover:text-[#BE9662] transition-all duration-200" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Watermark Regeneration Bar (internal CRM only) */}
+            <div className="bg-white rounded-xl border border-gray-200 px-5 py-4 shadow-2xs font-sans flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div className="flex items-start sm:items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center shrink-0">
+                  <Wand2 size={16} className="text-[#BE9662]" />
+                </div>
+                <div>
+                  <h3 className="font-title text-[12px] font-semibold text-[#051D35]">
+                    Curățare Watermark Fotografii
+                  </h3>
+                  <p className="text-[11px] text-gray-500 mt-0.5">
+                    Reprocesează toate cele {imagesList.length} {imagesList.length === 1 ? "fotografie" : "fotografii"} ale proprietății prin inpainting pentru a ascunde watermark-urile.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleRegenerateImages()}
+                disabled={isRegeneratingImages || isEditingPhotos || imagesList.length === 0}
+                className="h-9 px-4 rounded-lg bg-[#051D35] hover:bg-[#0a2b4a] text-white text-xs font-semibold transition-colors cursor-pointer flex items-center justify-center gap-2 shrink-0 disabled:opacity-50 disabled:cursor-not-allowed shadow-2xs"
+              >
+                {isRegeneratingImages ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin text-[#BE9662]" />
+                    <span>Se regenerează imaginile...</span>
+                  </>
+                ) : (
+                  <>
+                    <Wand2 size={14} className="text-[#BE9662]" />
+                    <span>Regenerează imagini (ascunde watermark)</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            <div className="h-[16vh] min-h-[120px] pointer-events-none" aria-hidden="true" />
+          </div>
+        </main>
+      ) : (
       <main ref={mainScrollRef} className={isPublicShared ? "w-full bg-transparent p-0 overflow-visible pt-[104px]" : "w-full flex-1 min-h-0 bg-white p-0 overflow-y-auto scroll-smooth"}>
         <div className={isPublicShared ? "w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 pb-10 space-y-4" : "grid grid-cols-1 lg:grid-cols-12 min-h-full items-start"}>
           
@@ -3214,6 +3599,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
         </div>
       </main>
+      )}
 
       {/* Back to Top Button: Square button on the right side with arrow up icon */}
       {isPublicShared && showBackToTop && (

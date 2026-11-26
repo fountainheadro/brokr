@@ -1,5 +1,5 @@
 import React, { Component, Suspense, lazy } from "react";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from "react-router-dom";
 import { NotificationManager } from "./components/NotificationManager";
 import { NotificationProvider } from "./components/NotificationProvider";
 import { AuthProvider } from "./core/auth/ctx_auth";
@@ -147,15 +147,17 @@ const RouteLoadingFallback = () => (
   </div>
 );
 
-const RootRouteElement = () => {
+const HomeRouteShell = () => {
   const { isPlatformAdminHost } = useTenantContext();
-  if (isPlatformAdminHost) {
+  const location = useLocation();
+  if (isPlatformAdminHost && location.pathname === "/") {
     return <Navigate to="/platform/dashboard" replace />;
   }
   return (
     <>
       <NotificationManager />
       <Home />
+      <Outlet />
     </>
   );
 };
@@ -196,25 +198,11 @@ export default function App() {
             <RouteErrorBoundary>
               <Suspense fallback={<RouteLoadingFallback />}>
                 <Routes>
-                  <Route path="/" element={<RootRouteElement />} />
-                  <Route
-                    path="/leads/:id"
-                    element={
-                      <>
-                        <NotificationManager />
-                        <Home />
-                      </>
-                    }
-                  />
-                  <Route
-                    path="/cereri/:id"
-                    element={
-                      <>
-                        <NotificationManager />
-                        <Home />
-                      </>
-                    }
-                  />
+                  <Route element={<HomeRouteShell />}>
+                    <Route path="/" element={null} />
+                    <Route path="/leads/:id" element={null} />
+                    <Route path="/cereri/:id" element={null} />
+                  </Route>
                   <Route path="/calendar" element={<Navigate to="/?calendar=true" replace />} />
                   <Route path="/share/:id" element={<SharedProperty />} />
                   <Route path="/p/:id" element={<SharedProperty />} />
