@@ -374,32 +374,63 @@ export const leadsService = {
 
     let finalTitle = leadData.title;
     let finalExtractedData = leadData.extractedData;
+    let finalCriteriiFormular = leadData.criteriiFormular;
     const shouldApplyTitleRule = isProperty || isCerere || leadData.status === 'ListaMea';
-    const titleRule = automationSettingsService.getCachedTitleRule();
+    const isManualTitle = Boolean((leadData.extractedData as any)?.titleManuallyEdited);
     const automationSource = (leadData.extractedData as any)?.automationSource;
-    if (shouldApplyTitleRule && titleRule?.enabled && automationSource) {
-      const rebuilt = buildTitleFromAutomationRule(titleRule, {
-        ...automationSource,
-        propertyId,
-      });
-      if (rebuilt) {
-        const oldTitle = finalTitle;
-        finalTitle = rebuilt;
-        if (finalExtractedData?.crmData?.descriere) {
-          const updatedDescriere = {
-            ...finalExtractedData.crmData.descriere,
-            titlu: rebuilt,
-          };
-          if (oldTitle && typeof updatedDescriere.continut === 'string') {
-            updatedDescriere.continut = updatedDescriere.continut.replace(oldTitle, rebuilt);
+
+    if (shouldApplyTitleRule && !isManualTitle && automationSource) {
+      let titleRule = automationSettingsService.getCachedTitleRule();
+      try {
+        const fetched = await automationSettingsService.fetchTitleRule();
+        if (fetched?.titleRule) {
+          titleRule = fetched.titleRule;
+        }
+      } catch {
+        // Fallback to cached rule
+      }
+      if (titleRule?.enabled) {
+        const rebuilt = buildTitleFromAutomationRule(titleRule, {
+          ...automationSource,
+          propertyId,
+        });
+        if (rebuilt) {
+          const oldTitle = finalTitle;
+          finalTitle = rebuilt;
+          if (finalCriteriiFormular) {
+            finalCriteriiFormular = {
+              ...finalCriteriiFormular,
+              propertyTitle: rebuilt,
+            };
           }
-          finalExtractedData = {
-            ...finalExtractedData,
-            crmData: {
-              ...finalExtractedData.crmData,
-              descriere: updatedDescriere,
-            },
-          };
+          if (finalExtractedData) {
+            const existingDesc = finalExtractedData.crmData?.descriere;
+            const nextContinut =
+              oldTitle && typeof existingDesc?.continut === 'string'
+                ? existingDesc.continut.replace(oldTitle, rebuilt)
+                : existingDesc?.continut ?? '';
+            const nextCrm = finalExtractedData.crmData
+              ? {
+                  ...finalExtractedData.crmData,
+                  ...(finalCriteriiFormular
+                    ? { criteriiFormular: { ...finalCriteriiFormular } }
+                    : {}),
+                  descriere: {
+                    disponibilitate: existingDesc?.disponibilitate ?? '',
+                    video: existingDesc?.video ?? '',
+                    turVirtual: existingDesc?.turVirtual ?? '',
+                    ...(existingDesc || {}),
+                    titlu: rebuilt,
+                    continut: nextContinut,
+                  },
+                }
+              : finalExtractedData.crmData;
+            finalExtractedData = {
+              ...finalExtractedData,
+              originalTitle: rebuilt,
+              crmData: nextCrm,
+            };
+          }
         }
       }
     }
@@ -407,6 +438,7 @@ export const leadsService = {
     const created = await crmApiClient.create<Lead>(LEADS_COLLECTION, {
       ...leadData,
       title: finalTitle,
+      ...(finalCriteriiFormular ? { criteriiFormular: finalCriteriiFormular } : {}),
       extractedData: finalExtractedData,
       propertyId,
     });

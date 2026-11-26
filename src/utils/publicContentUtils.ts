@@ -68,8 +68,12 @@ export function resolvePublicDisplayTitle(
     nonEmptyString(ext?.olxMeta?.originalTitle) ||
     nonEmptyString(lead.originalTitle);
 
+  if (ext?.titleManuallyEdited === true) {
+    return leadTitle || crmTitle || originalTitle || fallbackTitle;
+  }
+
   if (shouldUseModifiedAdContent(lead)) {
-    return crmTitle || leadTitle || originalTitle || fallbackTitle;
+    return leadTitle || crmTitle || originalTitle || fallbackTitle;
   }
 
   return originalTitle || leadTitle || crmTitle || fallbackTitle;

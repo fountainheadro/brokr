@@ -3,6 +3,7 @@ import { automationSettingsService } from "../services/automationSettingsService
 import { buildTitleFromAutomationRule } from "./titleAutomationEngine";
 import { generateStandardAdTitle } from "./propertyTitleGenerator";
 import { getApiAuthHeaders } from "../lib/apiAuth";
+import { findAreaInText, hasRealNeighborhoodArea } from "./zoneResolutionUtils";
 
 export type LeadTransformTarget = "property" | "cerere" | "my_list";
 
@@ -159,8 +160,6 @@ export async function applyLeadTitleAndDescriptionRules(params: {
 
   const category = lead.categoria || crmData?.detaliiGenerale?.categoria || "Apartament";
   const transactionType = lead.transactionType || crmData?.detaliiGenerale?.tranzactie || "Vânzare";
-  const zoneVal = crmData?.detaliiGenerale?.localizare?.zona || lead.zone || "București";
-  const zone = Array.isArray(zoneVal) ? (zoneVal[0] || "București") : (zoneVal || "București");
   const oras = crmData?.detaliiGenerale?.localizare?.oras || "București";
   const price = lead.price || crmData?.pret?.detalii?.pret || "";
   const specs = crmData?.caracteristici || {};
@@ -178,32 +177,86 @@ export async function applyLeadTitleAndDescriptionRules(params: {
     extracted?.originalDescription ||
       lead.notes ||
       crmData?.descriere?.continut ||
-      extracted?.markdownMarketing ||
       ""
   ).trim();
 
+  // Resolve real zone strictly from verified structured location or the original ad text —
+  // never propagate a previously false-matched area that does not belong to the listing.
+  const rawZoneVal = crmData?.detaliiGenerale?.localizare?.zona || lead.zone || "";
+  const rawZoneStr = Array.isArray(rawZoneVal)
+    ? String(rawZoneVal[0] || "").trim()
+    : String(rawZoneVal || "").trim();
+
+  const areaFromOriginalAd =
+    findAreaInText(sourceTitle, { strict: true }) ||
+    findAreaInText(sourceDescription, { strict: true }) ||
+    "";
+
+  // If the stored zone is a real neighborhood, keep it ONLY if either:
+  // (a) the original ad has no conflicting area and the stored zone wasn't a false-positive match, or
+  // (b) it matches the original ad / was explicitly entered on a manual lead (no external crawl URL).
+  const isCrawledListing = Boolean(lead.url && /^https?:\/\//i.test(lead.url));
+  let verifiedZone = "";
+  if (areaFromOriginalAd) {
+    verifiedZone = areaFromOriginalAd;
+  } else if (hasRealNeighborhoodArea(rawZoneStr)) {
+    if (!isCrawledListing) {
+      verifiedZone = rawZoneStr;
+    } else {
+      // For crawled ads, verify the stored zone actually appears in the original ad text or URL slug
+      // (or came from a structured OLX/Storia district field that isn't a common-word false positive).
+      const rawZoneNorm = rawZoneStr
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .trim();
+      const origCombinedNorm = `${sourceTitle} ${sourceDescription} ${lead.url || ""}`
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      if (rawZoneNorm && origCombinedNorm.includes(rawZoneNorm)) {
+        verifiedZone = rawZoneStr;
+      }
+    }
+  }
+
+  const displayZone = verifiedZone || (hasRealNeighborhoodArea(rawZoneStr) && !isCrawledListing ? rawZoneStr : "");
+
+  // Build a clean automationSource strictly from verified structured fields and the real original ad copy.
+  // Never spread stale/polluted `extracted.automationSource` (which may carry old full-page HTML text or bogus stations).
   const automationSource = {
-    ...(extracted?.automationSource || {}),
     transactionType,
     categoria: category,
-    camere: specs?.detalii?.camere || extracted?.automationSource?.camere || "",
-    suprafataUtila: specs?.suprafete?.utila || extracted?.automationSource?.suprafataUtila || "",
-    suprafataConstruita: specs?.suprafete?.construita || extracted?.automationSource?.suprafataConstruita || "",
-    etaj: specs?.detalii?.etaj || extracted?.automationSource?.etaj || "",
-    zona: zone,
+    camere: specs?.detalii?.camere || lead.rooms || "",
+    suprafataUtila: specs?.suprafete?.utila || (lead.usefulArea ? String(lead.usefulArea) : ""),
+    suprafataConstruita: specs?.suprafete?.construita || "",
+    etaj: specs?.detalii?.etaj || lead.floor || "",
+    etajeTotal: specs?.detalii?.totalEtaje || lead.totalFloors || "",
+    zona: verifiedZone,
     oras,
-    compartimentare: specs?.detalii?.compartimentare || extracted?.automationSource?.compartimentare || "",
+    compartimentare: specs?.detalii?.compartimentare || lead.compartimentare || "",
     sistemIncalzire: Array.isArray(utilitati?.sistemIncalzire)
       ? utilitati.sistemIncalzire.join(", ")
-      : extracted?.automationSource?.sistemIncalzire || "",
-    mobilat: utilitati?.dotari?.mobilat || extracted?.automationSource?.mobilat || "",
-    balcoane: specs?.detalii?.balcoane || extracted?.automationSource?.balcoane || "",
+      : lead.sursaIncalzire || "",
+    mobilat: lead.mobilare || utilitati?.dotari?.mobilat || "",
+    utilare: lead.utilare || "",
+    parcare: lead.parcare || "",
+    balcoane: specs?.detalii?.balcoane || "",
     propertyId: propertyId || lead.propertyId || "",
     rawTitle: sourceTitle,
     rawText: sourceDescription || sourceTitle,
   };
 
-  const titleRule = automationSettingsService.getCachedTitleRule();
+  let titleRule = automationSettingsService.getCachedTitleRule();
+  try {
+    const freshRecord = await automationSettingsService.fetchTitleRule();
+    if (freshRecord?.titleRule) {
+      titleRule = freshRecord.titleRule;
+    }
+  } catch {
+    // Use cached rule if fetch fails
+  }
+
   const ruleTitle =
     titleRule?.enabled
       ? buildTitleFromAutomationRule(titleRule, automationSource)
@@ -222,7 +275,7 @@ export async function applyLeadTitleAndDescriptionRules(params: {
     title: formattedTitle,
     category,
     transactionType,
-    zone,
+    zone: displayZone || oras,
     price,
     specs,
     propertyId: propertyId || lead.propertyId || "",
@@ -236,7 +289,7 @@ export async function applyLeadTitleAndDescriptionRules(params: {
       body: JSON.stringify({
         category,
         transactionType,
-        zone,
+        zone: displayZone,
         price,
         specs,
         originalTitle: sourceTitle,
@@ -263,9 +316,21 @@ export async function applyLeadTitleAndDescriptionRules(params: {
 
   formattedDescription = syncTitleInsideDescription(formattedDescription, formattedTitle);
 
+  const existingCriteria =
+    (lead.criteriiFormular && typeof lead.criteriiFormular === "object" ? lead.criteriiFormular : null) ||
+    (crmData?.criteriiFormular && typeof crmData.criteriiFormular === "object" ? crmData.criteriiFormular : null);
+  const syncedCriteria = existingCriteria
+    ? {
+        ...existingCriteria,
+        propertyTitle: formattedTitle,
+        requirements: formattedDescription,
+      }
+    : undefined;
+
   const updatedCrmData = crmData
     ? {
         ...crmData,
+        ...(syncedCriteria ? { criteriiFormular: syncedCriteria } : {}),
         descriere: {
           disponibilitate: crmData.descriere?.disponibilitate || "",
           video: crmData.descriere?.video || "",
@@ -286,6 +351,7 @@ export async function applyLeadTitleAndDescriptionRules(params: {
             ...extracted.presentationSections,
             introducere: {
               ...(extracted.presentationSections.introducere || {}),
+              titlu: formattedTitle,
               summary: formattedDescription,
             },
           },

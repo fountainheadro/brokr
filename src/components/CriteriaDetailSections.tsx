@@ -714,9 +714,10 @@ export function derivePropertyCriteriaStateFromLead(lead: Lead): PropertyCriteri
   const copii = matchOptionInsensitive(cf?.copii || lead.copii, COPII_OPTIONS);
 
   const propertyTitle =
-    cf?.propertyTitle !== undefined && cf.propertyTitle.trim() !== ""
-      ? cf.propertyTitle
-      : crm?.descriere?.titlu || lead.title || "";
+    (lead.title && lead.title.trim()) ||
+    (crm?.descriere?.titlu && String(crm.descriere.titlu).trim()) ||
+    (cf?.propertyTitle && cf.propertyTitle.trim()) ||
+    "";
 
   const requirements =
     cf?.requirements !== undefined
@@ -810,8 +811,9 @@ function buildLeadUpdatePatch(params: {
   state: PropertyCriteriaFormState;
   role: "Chirias" | "Cumparator";
   mode: "lead" | "cerere" | "property";
+  section?: CriteriaSectionKey;
 }): Partial<Lead> {
-  const { lead, state, role, mode } = params;
+  const { lead, state, role, mode, section } = params;
   const isProperty = mode === "property";
   const isTeren = state.buildingType === "Teren";
   const isCasaVila = state.buildingType === "Casa/Vila";
@@ -970,14 +972,54 @@ function buildLeadUpdatePatch(params: {
   };
 
   const currentCrm = (lead.extractedData?.crmData || {}) as any;
+  const currentExtracted = (lead.extractedData || {}) as any;
+  const trimmedInputTitle = state.propertyTitle.trim();
+  const prevLeadTitle = String(
+    lead.title || currentCrm?.descriere?.titlu || currentExtracted?.originalTitle || ""
+  ).trim();
   const nextTitle = isProperty
-    ? state.propertyTitle.trim() || lead.title || ""
+    ? trimmedInputTitle || prevLeadTitle
     : lead.title || "";
+  const titleWasChanged = Boolean(isProperty && trimmedInputTitle && trimmedInputTitle !== prevLeadTitle);
+  const nextTitleManuallyEdited = Boolean(
+    currentExtracted?.titleManuallyEdited ||
+      titleWasChanged ||
+      (isProperty && section === "generale" && trimmedInputTitle.length > 0)
+  );
+
+  let syncedDescription = state.requirements.trim();
+  if (titleWasChanged && syncedDescription && /^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+/m.test(syncedDescription)) {
+    syncedDescription = syncedDescription.replace(/^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+$/m, `$1${nextTitle}`);
+  }
+  criteriiFormular.propertyTitle = nextTitle;
+  criteriiFormular.requirements = syncedDescription;
+
+  const existingMarkdown =
+    typeof currentExtracted?.markdownMarketing === "string" ? currentExtracted.markdownMarketing : "";
+  const syncedMarkdown =
+    titleWasChanged && existingMarkdown && /^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+/m.test(existingMarkdown)
+      ? existingMarkdown.replace(/^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+$/m, `$1${nextTitle}`)
+      : section === "generale"
+        ? syncedDescription
+        : existingMarkdown || syncedDescription;
 
   const nextExtractedData = {
-    ...(lead.extractedData || {}),
+    ...currentExtracted,
+    ...(isProperty && nextTitle ? { originalTitle: nextTitle } : {}),
+    ...(nextTitleManuallyEdited ? { titleManuallyEdited: true } : {}),
+    ...(isProperty && nextTitle && currentExtracted?.olxMeta && typeof currentExtracted.olxMeta === "object"
+      ? {
+          olxMeta: {
+            ...currentExtracted.olxMeta,
+            originalTitle: nextTitle,
+          },
+        }
+      : {}),
+    ...(syncedMarkdown ? { markdownMarketing: syncedMarkdown } : {}),
+    ...(section === "generale" && syncedDescription ? { originalDescription: syncedDescription } : {}),
     crmData: {
       ...currentCrm,
+      criteriiFormular: { ...criteriiFormular },
       detaliiGenerale: {
         ...(currentCrm.detaliiGenerale || {}),
         categoria: canonicalCategory,
@@ -989,7 +1031,7 @@ function buildLeadUpdatePatch(params: {
       descriere: {
         ...(currentCrm.descriere || {}),
         ...(isProperty && nextTitle ? { titlu: nextTitle } : {}),
-        continut: state.requirements.trim(),
+        continut: syncedDescription,
       },
       caracteristici: {
         ...(currentCrm.caracteristici || {}),
@@ -1073,6 +1115,14 @@ function buildLeadUpdatePatch(params: {
       ? {
           presentationSections: {
             ...((lead.extractedData as any)?.presentationSections || {}),
+            ...(nextTitle
+              ? {
+                  introducere: {
+                    ...((lead.extractedData as any)?.presentationSections?.introducere || {}),
+                    titlu: nextTitle,
+                  },
+                }
+              : {}),
             tranzactie: {
               ...((lead.extractedData as any)?.presentationSections?.tranzactie || {}),
               "Preț": displayBudget,
@@ -1154,7 +1204,7 @@ function buildLeadUpdatePatch(params: {
     numarLocuriParcare: !isTeren ? state.numarLocuriParcare : "",
     sursaIncalzire: !isTeren ? state.sistemIncalzire : "",
     modIncalzire: !isTeren ? state.metodaIncalzire : "",
-    requirements: state.requirements.trim(),
+    requirements: syncedDescription,
     anConstructieMin: !isTeren ? normAnMin : "",
     anConstructieMax: !isTeren ? normAnMax : "",
     constructionYear: !isTeren ? anConstructieValue : "",
@@ -1398,19 +1448,23 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
         state: draft,
         role,
         mode,
+        section,
       });
       const persisted = await leadsService.updateLeadData(lead.id, patch);
       const mergedPatch: Partial<Lead> = {
         ...patch,
+        ...(persisted?.title ? { title: persisted.title } : {}),
+        ...(persisted?.criteriiFormular ? { criteriiFormular: persisted.criteriiFormular } : {}),
         ...(persisted?.extractedData ? { extractedData: persisted.extractedData } : {}),
         ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
         ...(persisted?.sourcePropertyId ? { sourcePropertyId: persisted.sourcePropertyId } : {}),
         ...(persisted?.isSharedLead === false ? { isSharedLead: false } : {}),
+        ...(persisted?.docVersion !== undefined ? { docVersion: persisted.docVersion } : {}),
         ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
       };
       onUpdateLead(mergedPatch);
       await publishPublicShareSnapshot(
-        { ...lead, ...mergedPatch },
+        { ...lead, ...(persisted || {}), ...mergedPatch },
         { tenantId: tenant?.id, force: true }
       );
       setEditingSection(null);

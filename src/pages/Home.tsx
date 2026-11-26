@@ -2075,6 +2075,14 @@ export const Home: React.FC = () => {
         propertyId: agencyLeadId,
       });
 
+      const nextCriteriiFormular = leadObj.criteriiFormular
+        ? {
+            ...leadObj.criteriiFormular,
+            propertyTitle: formattedTitle,
+            requirements: formattedDescription,
+          }
+        : undefined;
+
       const finalPayload: Partial<Lead> = {
         ...agentAttribution,
         propertyId: agencyLeadId,
@@ -2083,18 +2091,26 @@ export const Home: React.FC = () => {
         status: 'ListaMea' as LeadStatus,
         title: formattedTitle,
         notes: formattedDescription,
+        ...(nextCriteriiFormular ? { criteriiFormular: nextCriteriiFormular } : {}),
         extractedData: updatedExtractedData,
         lastMovedAt: new Date(),
       };
 
+      lastOptimisticUpdate.current = { id: leadId, time: Date.now() };
       const persisted = await leadsService.updateLeadData(leadId, finalPayload);
       const resolvedPropertyId = persisted?.propertyId || agencyLeadId;
       const mergedPayload: Partial<Lead> = {
         ...finalPayload,
+        ...(persisted?.title ? { title: persisted.title } : {}),
+        ...(persisted?.extractedData ? { extractedData: persisted.extractedData } : {}),
+        ...(persisted?.criteriiFormular ? { criteriiFormular: persisted.criteriiFormular } : {}),
+        ...(persisted?.docVersion !== undefined ? { docVersion: persisted.docVersion } : {}),
+        ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
         propertyId: resolvedPropertyId,
       };
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPayload } : l));
       setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...mergedPayload } : prev);
+      setEditedTitle(mergedPayload.title || formattedTitle);
       toast.success(`Leadul a fost procesat și mutat în Procesate (#${resolvedPropertyId})!`);
     } catch (e) {
       console.error("Failed to process lead:", e);
@@ -2829,6 +2845,12 @@ export const Home: React.FC = () => {
                   void handleCloseDetails();
                 }}
                 onUpdateLead={(updatedData) => {
+                  if (selectedLead.id) {
+                    lastOptimisticUpdate.current = { id: selectedLead.id, time: Date.now() };
+                  }
+                  if (typeof updatedData.title === "string") {
+                    setEditedTitle(updatedData.title);
+                  }
                   setSelectedLead(prev => prev ? { ...prev, ...updatedData } : null);
                   setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, ...updatedData } : l));
                 }}
@@ -2848,6 +2870,12 @@ export const Home: React.FC = () => {
                 isPublicShared={false}
                 contacts={contacts.filter(c => c.propertyId === selectedLead.propertyId || c.propertyId === selectedLead.id)}
                 onUpdateLead={(updatedData) => {
+                  if (selectedLead.id) {
+                    lastOptimisticUpdate.current = { id: selectedLead.id, time: Date.now() };
+                  }
+                  if (typeof updatedData.title === "string") {
+                    setEditedTitle(updatedData.title);
+                  }
                   setSelectedLead(prev => prev ? { ...prev, ...updatedData } : null);
                   setLeads(prev => prev.map(l => l.id === selectedLead.id ? { ...l, ...updatedData } : l));
                 }}

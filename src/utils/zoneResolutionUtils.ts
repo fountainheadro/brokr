@@ -74,10 +74,89 @@ export function stripSectorAndCityNoise(value: string): string {
     .trim();
 }
 
+// Ambiguous area names from ZONA_OPTIONS / ILFOV_LOCALITIES that are also common Romanian words,
+// dates, or idioms (e.g., "in regie proprie", "cablu si televiziune", "reparatii capitale",
+// "disponibil din 1 mai", "cetatenie romana", "fara trafic greu", "locul muncii").
+// In free text (ad title / description / URL), these ONLY match when explicitly paired with
+// a location cue (e.g. "zona Regie", "metrou 1 Mai", "Piata Romana") and never inside non-location idioms.
+const STRICT_CONTEXT_ONLY_AREAS = new Set<string>([
+  "regie",
+  "televiziune",
+  "capitale",
+  "domenii",
+  "trafic greu",
+  "catelul",
+  "1 mai",
+  "1 decembrie",
+  "23 august",
+  "13 septembrie",
+  "16 februarie",
+  "romana",
+  "muncii",
+  "primaverii",
+  "nuci",
+  "tei",
+  "pacii",
+  "dacia",
+  "constructorilor",
+  "industriilor",
+  "progresul",
+  "libertatii",
+  "apusului",
+  "viilor",
+  "virtutii",
+  "nordului",
+  "ultracentral",
+  "polona",
+  "mitropolie",
+  "agronomie",
+  "veteranilor",
+  "compozitorilor",
+  "fizicienilor",
+  "morarilor",
+  "sura mare",
+  "universitate",
+  "victoriei",
+  "unirii",
+]);
+
+const LOCATION_CUE_PREFIX_RE =
+  /(?:^|[\s,;|(\-/])(?:zona|cartier(?:ul)?|metrou(?:l)?|statia\s+de\s+metrou|statie\s+de\s+metrou|piata|p-ta|pta|bd\.?|b-dul|bulevardul|calea|sos\.?|soseaua|langa|aproape\s+de|vis-a-vis\s+de|vizavi\s+de|parcul|parc)\s*$/i;
+
+const NON_LOCATION_IDIOM_EXCLUSIONS: Array<{ keyword: string; regex: RegExp }> = [
+  { keyword: "regie", regex: /\b(?:in\s+)?regie\s+proprie\b/i },
+  { keyword: "televiziune", regex: /\b(?:cablu|internet|tv|abonament)[^\n.,;]{0,20}\bteleviziune\b|\bteleviziune\s+(?:prin\s+cablu|cablu|tv)\b/i },
+  { keyword: "capitale", regex: /\b(?:reparatii|lucrari|investitii|renovari)\s+capitale\b/i },
+  { keyword: "domenii", regex: /\b(?:diverse|multiple|toate|alte)\s+domenii\b|\bdomenii\s+de\s+activitate\b/i },
+  { keyword: "trafic greu", regex: /\b(?:fara|acces|interzis|restric[tț]ii)\s+trafic\s+greu\b/i },
+  { keyword: "romana", regex: /\b(?:limba|cetatenie|banca|posta|politia|legislatia|legea|scoala|universitatea|firma|companie|nationalitate)\s+romana\b/i },
+  { keyword: "muncii", regex: /\b(?:locul|contract(?:ul)?\s+de|piata\s+fortei\s+de|inspectia|cartea|dreptul)\s+muncii\b/i },
+  { keyword: "1 mai", regex: /\b(?:din|incepand\s+cu|de\s+la|pana\s+la|pe|data\s+de)\s+1\s+mai\b|\b1\s+mai\s+20\d{2}\b/i },
+  { keyword: "1 decembrie", regex: /\b(?:din|incepand\s+cu|de\s+la|pana\s+la|pe|data\s+de)\s+1\s+decembrie\b(?!\s+1918)|\b1\s+decembrie\s+20\d{2}\b/i },
+  { keyword: "23 august", regex: /\b(?:din|incepand\s+cu|de\s+la|pana\s+la|pe|data\s+de)\s+23\s+august\b|\b23\s+august\s+20\d{2}\b/i },
+  { keyword: "13 septembrie", regex: /\b(?:din|incepand\s+cu|de\s+la|pana\s+la|pe|data\s+de)\s+13\s+septembrie\b|\b13\s+septembrie\s+20\d{2}\b/i },
+  { keyword: "16 februarie", regex: /\b(?:din|incepand\s+cu|de\s+la|pana\s+la|pe|data\s+de)\s+16\s+februarie\b|\b16\s+februarie\s+20\d{2}\b/i },
+  { keyword: "primaverii", regex: /\b(?:sezonul|inceputul|sfarsitul|lunile|vremea)\s+primaverii\b/i },
+];
+
+export function hasRealNeighborhoodArea(value: unknown): boolean {
+  const raw = String(value ?? "").trim();
+  if (!raw) return false;
+  if (isSectorLabel(raw)) return false;
+  const norm = normalizeRoZoneText(raw);
+  if (PLACEHOLDER_ZONE_VALUES.has(norm)) return false;
+  if (GENERIC_FREE_TEXT_EXCLUSIONS.has(norm)) return false;
+  const stripped = stripSectorAndCityNoise(raw);
+  if (!stripped) return false;
+  const strippedNorm = normalizeRoZoneText(stripped);
+  return !PLACEHOLDER_ZONE_VALUES.has(strippedNorm) && !isSectorLabel(stripped);
+}
+
 interface AreaMatcherEntry {
   canonical: string;
   keyword: string;
   regex: RegExp;
+  requiresContext: boolean;
 }
 
 function buildAreaMatchers(): AreaMatcherEntry[] {
@@ -117,11 +196,10 @@ function buildAreaMatchers(): AreaMatcherEntry[] {
       pushAlias(area, `Bd ${rest}`);
     }
 
-    // Expand parenthesized variants like "23 August (Catelul)"
+    // Expand parenthesized variants like "23 August (Catelul)" — ONLY primary part, never ambiguous nickname ("catelul")
     const parenMatch = area.match(/^(.+?)\s*\((.+?)\)$/);
     if (parenMatch) {
       pushAlias(area, parenMatch[1]);
-      pushAlias(area, parenMatch[2]);
     }
 
     // Expand hyphenated forms with space (e.g. "Vitan-Barzesti" -> "Vitan Barzesti")
@@ -210,7 +288,8 @@ function buildAreaMatchers(): AreaMatcherEntry[] {
     return {
       canonical: entry.canonical,
       keyword: entry.keyword,
-      regex: new RegExp(`(?:^|[^a-z0-9])${pattern}(?:$|[^a-z0-9])`, "i"),
+      regex: new RegExp(`(?:^|[^a-z0-9])(${pattern})(?:$|[^a-z0-9])`, "gi"),
+      requiresContext: STRICT_CONTEXT_ONLY_AREAS.has(entry.keyword),
     };
   });
 }
@@ -220,13 +299,42 @@ const AREA_MATCHERS: AreaMatcherEntry[] = buildAreaMatchers();
 /**
  * Searches free text (ad title, ad description, or URL slug) against the existing
  * areas database (`ZONA_OPTIONS` + `ILFOV_LOCALITIES`) and returns the best canonical area match.
+ * When `strict` is true (free-text scanning), ambiguous words/dates require an explicit location cue.
  */
-export function findAreaInText(text: unknown): string | null {
+export function findAreaInText(
+  text: unknown,
+  options?: { strict?: boolean }
+): string | null {
   const norm = normalizeRoZoneText(text);
   if (!norm) return null;
+  const strict = options?.strict ?? false;
 
   for (const matcher of AREA_MATCHERS) {
-    if (matcher.regex.test(norm)) {
+    matcher.regex.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = matcher.regex.exec(norm)) !== null) {
+      if (!strict) {
+        return matcher.canonical;
+      }
+
+      // Reject known non-location Romanian idioms around this match
+      const matchStart = m.index + (m[0].length - m[1].length - (m[0].endsWith(m[1]) ? 0 : 1));
+      const windowStart = Math.max(0, matchStart - 35);
+      const windowEnd = Math.min(norm.length, matchStart + m[1].length + 35);
+      const localWindow = norm.slice(windowStart, windowEnd);
+
+      const blockedByIdiom = NON_LOCATION_IDIOM_EXCLUSIONS.some(
+        (ex) => ex.keyword === matcher.keyword && ex.regex.test(localWindow)
+      );
+      if (blockedByIdiom) continue;
+
+      if (matcher.requiresContext) {
+        const beforeMatch = norm.slice(Math.max(0, matchStart - 28), matchStart);
+        if (!LOCATION_CUE_PREFIX_RE.test(beforeMatch)) {
+          continue;
+        }
+      }
+
       return matcher.canonical;
     }
   }
@@ -250,15 +358,17 @@ export interface ResolveAreaParams {
   title?: string | null;
   description?: string | null;
   url?: string | null;
+  fallbackToCity?: boolean;
 }
 
 /**
  * Resolves a clean neighborhood/area name for a property or lead.
  * NEVER returns a Bucharest sector ("Sector 1".."Sector 6").
  * When the stored/external zone is a sector or generic city, searches the ad title,
- * description, and URL slug against the existing database of areas (`ZONA_OPTIONS` + `ILFOV_LOCALITIES`).
+ * description, and URL slug strictly against the existing database of areas (`ZONA_OPTIONS` + `ILFOV_LOCALITIES`).
  */
 export function resolveAreaFromAd(params: ResolveAreaParams): string {
+  const fallbackToCity = params.fallbackToCity !== false;
   const zoneCandidates: string[] = [];
   if (Array.isArray(params.rawZone)) {
     for (const z of params.rawZone) {
@@ -268,14 +378,14 @@ export function resolveAreaFromAd(params: ResolveAreaParams): string {
     zoneCandidates.push(params.rawZone.trim());
   }
 
-  // 1. If a provided zone is NOT a sector and NOT a placeholder/generic city, use or canonicalize it
+  // 1. If a provided structured zone is NOT a sector and NOT a placeholder/generic city, use or canonicalize it
   for (const raw of zoneCandidates) {
     if (isSectorLabel(raw)) continue;
     const normRaw = normalizeRoZoneText(raw);
     if (PLACEHOLDER_ZONE_VALUES.has(normRaw)) continue;
 
-    // Check if the raw value directly matches an area in the database (even if paired with "Sector 2" or "Bucuresti")
-    const matchedFromRaw = findAreaInText(raw);
+    // Structured zone dropdown/field directly matches an area in the database (non-strict ok here)
+    const matchedFromRaw = findAreaInText(raw, { strict: false });
     if (matchedFromRaw) return matchedFromRaw;
 
     const stripped = stripSectorAndCityNoise(raw);
@@ -284,20 +394,24 @@ export function resolveAreaFromAd(params: ResolveAreaParams): string {
     }
   }
 
-  // 2. Search ad title first (highest precision), then ad description, then URL slug
-  const fromTitle = findAreaInText(params.title);
+  // 2. Search ad title first (highest precision), then ad description, then URL slug — strictly avoiding false positives
+  const fromTitle = findAreaInText(params.title, { strict: true });
   if (fromTitle) return fromTitle;
 
-  const fromDescription = findAreaInText(params.description);
+  const fromDescription = findAreaInText(params.description, { strict: true });
   if (fromDescription) return fromDescription;
 
-  const fromUrl = findAreaInText(extractUrlSlugText(params.url));
+  const fromUrl = findAreaInText(extractUrlSlugText(params.url), { strict: true });
   if (fromUrl) return fromUrl;
+
+  if (!fallbackToCity) {
+    return "";
+  }
 
   // 3. Fallback: if city is a specific Ilfov locality or non-sector city, return it; never a sector
   const cityRaw = String(params.city || "").trim();
   if (cityRaw && !isSectorLabel(cityRaw)) {
-    const matchedCity = findAreaInText(cityRaw);
+    const matchedCity = findAreaInText(cityRaw, { strict: false });
     if (matchedCity) return matchedCity;
     const strippedCity = stripSectorAndCityNoise(cityRaw);
     if (strippedCity && !isSectorLabel(strippedCity)) return strippedCity;
@@ -331,6 +445,7 @@ export function resolveLeadDisplayArea(lead: {
   ];
 
   const titleCandidates = [
+    lead.extractedData?.originalTitle,
     lead.extractedData?.olxMeta?.originalTitle,
     lead.title,
     lead.extractedData?.crmData?.descriere?.titlu,
@@ -342,7 +457,6 @@ export function resolveLeadDisplayArea(lead: {
     lead.extractedData?.originalDescription,
     lead.extractedData?.crmData?.descriere?.continut,
     lead.notes,
-    lead.extractedData?.automationSource?.rawText,
   ]
     .filter((v): v is string => typeof v === "string" && v.trim().length > 0)
     .join("\n");

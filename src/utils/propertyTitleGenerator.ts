@@ -105,8 +105,12 @@ export function generateStandardAdTitle(params: PropertyTitleParams): string {
       : (numSuprafata ? `Apartament ${numSuprafata} mp` : "Apartament");
   }
 
-  // 2. Zonă (STRICT: NO street numbers, blocks, complex names, full postal addresses)
-  let cleanZone = (zona && zona !== "-" && zona !== "Nespecificat" ? zona : oras).trim();
+  // 2. Zonă (STRICT: NO street numbers, blocks, complex names, full postal addresses; never fabricate a zone)
+  const rawZoneCandidate =
+    zona && zona !== "-" && zona !== "Nespecificat" && zona !== "București" && zona !== "Bucuresti"
+      ? zona
+      : "";
+  let cleanZone = rawZoneCandidate.trim();
   cleanZone = cleanZone
     .replace(/(?:str\.?|strada|bd\.?|bulevardul|sos\.?|soseaua|calea|aleea|splaiul?)\s+[^,|•\n]+/gi, "")
     .replace(/(?:nr\.?|numarul)\s*\d+[a-z]?/gi, "")
@@ -119,19 +123,19 @@ export function generateStandardAdTitle(params: PropertyTitleParams): string {
     .replace(/^[,.\s-]+|[,.\s-]+$/g, "");
 
   if (!cleanZone || cleanZone.length < 2) {
-    cleanZone = oras && oras !== "-" ? oras : "București";
+    cleanZone = oras && oras !== "-" && oras !== "Nespecificat" ? oras.trim() : "";
   }
 
-  // 3. Pct de interes (Metrou, Metrou 10min, Lângă parc, Aproape de mall)
+  // 3. Pct de interes (Metrou, Metrou 10min, Lângă parc, Aproape de mall) — strict word boundaries
   let pctInteres = "";
-  const metroMinMatch = textLower.match(/metrou\s+(?:la\s+)?(\d{1,2})\s*min/i);
+  const metroMinMatch = textLower.match(/\bmetrou\s+(?:la\s+)?(\d{1,2})\s*min/i);
   if (metroMinMatch) {
     pctInteres = `Metrou ${metroMinMatch[1]}min`;
-  } else if (textLower.includes("metrou")) {
+  } else if (/\bmetrou\b/.test(textLower)) {
     pctInteres = "Metrou";
-  } else if (textLower.includes("parcul") || textLower.includes("parc ")) {
+  } else if (/\bparcul\b|\bl[aâ]ng[aă]\s+parc\b|\bvedere\s+la\s+parc\b/.test(textLower)) {
     pctInteres = "Lângă parc";
-  } else if (textLower.includes("mall") || textLower.includes("promenada") || textLower.includes("afi")) {
+  } else if (/\bmall\b|\bpromenada\b|\bafi\s+(?:cotroceni|palace|mall)\b|\bparklake\b|\bsun\s+plaza\b/.test(textLower)) {
     pctInteres = "Aproape de mall";
   }
 

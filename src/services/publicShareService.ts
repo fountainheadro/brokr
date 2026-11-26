@@ -110,10 +110,40 @@ function sanitizeExtractedDataForPublicShare(
     }
   }
 
-  // Ensure description and price are synchronized on the public snapshot for OpenGraph & shared page rendering
+  // Ensure title, description and price are synchronized on the public snapshot for OpenGraph & shared page rendering
   // without leaking top-level `notes` or owner PII.
   if (lead) {
     const rawLead = lead as Record<string, any>;
+    const syncedTitle =
+      resolvePublicDisplayTitle(rawLead, "") ||
+      (typeof rawLead.title === "string" ? rawLead.title.trim() : "");
+    if (syncedTitle) {
+      cloned.originalTitle = syncedTitle;
+      if (cloned.olxMeta && typeof cloned.olxMeta === "object") {
+        cloned.olxMeta = {
+          ...cloned.olxMeta,
+          originalTitle: syncedTitle,
+        };
+      }
+      if (cloned.crmData && typeof cloned.crmData === "object") {
+        cloned.crmData.descriere = {
+          ...(cloned.crmData.descriere && typeof cloned.crmData.descriere === "object"
+            ? cloned.crmData.descriere
+            : {}),
+          titlu: syncedTitle,
+        };
+      }
+      if (
+        cloned.presentationSections?.introducere &&
+        typeof cloned.presentationSections.introducere === "object"
+      ) {
+        cloned.presentationSections.introducere = {
+          ...cloned.presentationSections.introducere,
+          titlu: syncedTitle,
+        };
+      }
+    }
+
     const topPrice = typeof rawLead.price === "string" ? rawLead.price.trim() : "";
     if (topPrice && topPrice !== "-" && topPrice.toUpperCase() !== "N/A") {
       if (cloned.crmData && typeof cloned.crmData === "object") {

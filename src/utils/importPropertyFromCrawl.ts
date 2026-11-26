@@ -125,7 +125,7 @@ export async function importPropertyFromCrawl({
   const finalTitle = originalTitle || "Anunț imobiliar";
 
   const originalDescription = String(
-    crawlData.description || crmData?.descriere?.continut || crawlData.text || ""
+    crawlData.description || crmData?.descriere?.continut || ""
   ).trim();
 
   if (crmData?.descriere) {
@@ -204,7 +204,16 @@ export async function importPropertyFromCrawl({
           markdownMarketing: originalDescription,
           summary:
             crawlData.presentationSections?.introducere?.summary ||
-            `${crawledCat || "Proprietate"} ${crmData.caracteristici?.detalii?.camere || "2"} camere în ${zone || "București"}, ${price || "N/A"}`,
+            [
+              crawledCat || "Proprietate",
+              crmData.caracteristici?.detalii?.camere
+                ? `${crmData.caracteristici.detalii.camere} camere`
+                : "",
+              zone ? `în ${zone}` : "",
+              price && price !== "N/A" ? price : "",
+            ]
+              .filter(Boolean)
+              .join(", "),
           originalDescription: originalDescription,
           ...(crawlData.publishedAt || crawlData.publishedAtLabel || crawlData.sellerType
             ? {

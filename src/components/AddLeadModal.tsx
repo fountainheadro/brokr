@@ -161,11 +161,11 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({
           status: propertyOnly ? "Noua" : "ListaMea",
         });
 
-        await leadsService.addLead(payload);
+        const created = await leadsService.addLead(payload);
 
         await notificationsService.addNotification({
           title: "Proprietate Nouă Adăugată Manual",
-          message: `${payload.title} (${payload.price}) a fost înregistrată.`,
+          message: `${created?.title || payload.title} (${payload.price}) a fost înregistrată.`,
           type: "lead",
         });
 

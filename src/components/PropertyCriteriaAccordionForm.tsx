@@ -2005,7 +2005,8 @@ export function buildLeadPayloadFromCriteria(params: {
           : "La cerere";
 
   const numericPrice = parseFloat((maxB || minB).replace(/[^\d.]/g, ""));
-  const zoneStr = state.zoneList.join(", ") || "București";
+  const realZoneStr = state.zoneList.join(", ");
+  const zoneStr = realZoneStr || "Nespecificat";
   const roomsStr = !isTeren ? state.selectedRooms.join(", ") : "";
   const bathsStr = !isTeren ? state.selectedBaths.join(", ") : "";
 
@@ -2034,13 +2035,14 @@ export function buildLeadPayloadFromCriteria(params: {
       : state.buildingType;
 
   const customPropertyTitle = isProperty ? state.propertyTitle.trim() : "";
+  const titleZoneSuffix = realZoneStr ? ` - ${realZoneStr}` : "";
   const title =
     mode === "cerere"
-      ? `Cerere: ${categoryDisplay} ${transactionType === "Vânzare" ? "Cumpărare" : "Închiriere"} - ${zoneStr}`
+      ? `Cerere: ${categoryDisplay} ${transactionType === "Vânzare" ? "Cumpărare" : "Închiriere"}${titleZoneSuffix}`
       : mode === "property"
         ? customPropertyTitle ||
-          `${categoryDisplay}${roomsStr ? ` ${roomsStr}` : ""} de ${transactionType === "Vânzare" ? "vânzare" : "închiriat"} - ${zoneStr}`
-        : `${roleLabel}: ${categoryDisplay} ${transactionType === "Vânzare" ? "Cumpărare" : "Închiriere"} - ${zoneStr}`;
+          `${categoryDisplay}${roomsStr ? ` ${roomsStr}` : ""} de ${transactionType === "Vânzare" ? "vânzare" : "închiriat"}${titleZoneSuffix}`
+        : `${roleLabel}: ${categoryDisplay} ${transactionType === "Vânzare" ? "Cumpărare" : "Închiriere"}${titleZoneSuffix}`;
 
   const cetatenieStr = state.cetatenie.join(", ");
   const animalStr = state.animal.join(", ");
@@ -2252,7 +2254,7 @@ export function buildLeadPayloadFromCriteria(params: {
     url: "",
     title,
     zone: zoneStr,
-    zoneList: state.zoneList.length > 0 ? [...state.zoneList] : ["București"],
+    zoneList: [...state.zoneList],
     price: displayBudget,
     ...(Number.isFinite(numericPrice) && numericPrice > 0 ? { priceNumeric: numericPrice } : {}),
     ownerName: state.clientName.trim(),
@@ -2357,17 +2359,40 @@ export function buildLeadPayloadFromCriteria(params: {
     criteriiFormular,
     notes: noteParts.length > 0 ? `${notesPrefix}${noteParts.join(" | ")}` : "",
     extractedData: {
+      originalTitle: title,
+      originalDescription: state.requirements.trim(),
+      titleManuallyEdited: Boolean(customPropertyTitle),
+      ...(isProperty
+        ? {
+            automationSource: {
+              transactionType,
+              categoria: canonicalCategory,
+              camere: roomsStr,
+              suprafataUtila: isTeren ? normTerenMin : normUtilaMin,
+              suprafataConstruita: isTeren ? "" : normConstrMin,
+              etaj: floorStr,
+              etajeTotal: !isTeren && !isCasaVila ? criteriiFormular.totalFloors : "",
+              zona: realZoneStr,
+              oras: "București",
+              mobilat: !isTeren ? state.mobilare : "",
+              utilare: !isTeren ? state.utilare : "",
+              parcare: parcareSummary,
+              rawTitle: customPropertyTitle,
+              rawText: state.requirements.trim(),
+            },
+          }
+        : {}),
       crmData: {
         detaliiGenerale: {
           tranzactie: transactionType,
           categoria: canonicalCategory,
           localizare: {
-            zona: state.zoneList.length > 0 ? [...state.zoneList] : ["București"],
+            zona: [...state.zoneList],
           },
         },
         descriere: {
           titlu: title,
-          continut: noteParts.join(" | "),
+          continut: state.requirements.trim() || noteParts.join(" | "),
         },
         caracteristici: {
           detalii: {

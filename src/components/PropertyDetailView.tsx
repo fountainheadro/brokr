@@ -888,7 +888,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   const isRent = lead?.transactionType === "Închiriere" || crmData?.detaliiGenerale?.tranzactie === "Închiriere";
   const displayTitle = isPublicShared
     ? resolvePublicDisplayTitle(lead, "Proprietate Rezidențială")
-    : (crmData?.descriere?.titlu || lead?.title || "Proprietate Rezidențială");
+    : (lead?.title || crmData?.descriere?.titlu || "Proprietate Rezidențială");
   const internalCode = lead?.propertyId || (lead?.id ? `P${lead.id.slice(0, 4)}` : "P41");
   const exactId = lead?.propertyId || (lead?.id ? (lead.id.length > 8 ? lead.id.slice(-6).toUpperCase() : lead.id) : internalCode);
   const categoria = crmData?.detaliiGenerale?.categoria || lead?.categoria || "Apartament";

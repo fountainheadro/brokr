@@ -273,13 +273,32 @@ function syncLeadDerivedFields(
         return v !== undefined && v !== null ? String(v).trim() : null;
       })()
     : null;
-  const syncedTitle = patchedTopTitle || patchedCrmDotTitle || patchedOrigTitle || patchedNestedTitle;
+  const patchedCriteriaTitle =
+    p.criteriiFormular &&
+    typeof p.criteriiFormular === "object" &&
+    typeof p.criteriiFormular.propertyTitle === "string" &&
+    p.criteriiFormular.propertyTitle.trim()
+      ? p.criteriiFormular.propertyTitle.trim()
+      : null;
+  const syncedTitle =
+    patchedTopTitle ||
+    patchedCrmDotTitle ||
+    patchedOrigTitle ||
+    patchedNestedTitle ||
+    patchedCriteriaTitle;
+
+  const patchedManualTitleFlag =
+    p["extractedData.titleManuallyEdited"] === true ||
+    (hasExtractedPatch && p.extractedData?.titleManuallyEdited === true);
 
   if (syncedTitle) {
     target.title = syncedTitle;
     if (target.extractedData && typeof target.extractedData === "object") {
       const ext = ensureExtracted();
       ext.originalTitle = syncedTitle;
+      if (patchedManualTitleFlag) {
+        ext.titleManuallyEdited = true;
+      }
       if (ext.olxMeta && typeof ext.olxMeta === "object") {
         ext.olxMeta = { ...ext.olxMeta, originalTitle: syncedTitle };
       }
@@ -559,6 +578,9 @@ function syncLeadDerivedFields(
     }
     if (p.compartimentare !== undefined) {
       mergedCriteria.compartimentare = String(p.compartimentare || "").trim();
+    }
+    if (syncedTitle) {
+      mergedCriteria.propertyTitle = syncedTitle;
     }
     target.criteriiFormular = mergedCriteria;
     const ext = ensureExtracted();

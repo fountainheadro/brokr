@@ -1326,7 +1326,7 @@ Sarcina ta este să generezi un TITLU și o DESCRIERE DE MARKETING conform regul
 DATE PROPRIETATE:
 - Categorie: ${category || "Apartament"}
 - Tip Tranzacție: ${transactionType || "Vânzare"}
-- Zonă: ${zone || "București"}
+- Zonă: ${zone || "Nespecificată"}
 - Preț: ${price || "N/A"}
 - ID Proprietate: ${propertyId ? propertyId.trim() : ""}
 - Specificații tehnice: ${JSON.stringify(specs || {})}
@@ -1334,6 +1334,7 @@ DATE PROPRIETATE:
 - Descriere originală: "${(originalDescription || "").substring(0, 3000)}"${forcedTitleInstruction}
 
 REGULI STRICTE MANDATATE:
+0. EXCLUSIV DATE REALE DIN ANUNȚ: Folosește STRICT informațiile reale din datele proprietății, titlul original și descrierea originală. NICIODATĂ nu inventa, nu presupune și nu substitui cartiere/zone, stații de metrou, parcuri, puncte de interes, suprafețe, camere sau dotări care nu sunt menționate explicit în anunțul original! Dacă zona lipsește, NU adăuga un alt cartier.
 1. TITLUL IDENTIC: Titlul din câmpul 'title' TREBUIE să fie ABSOLUT IDENTIC cu titlul din corpul descrierii (situat pe linia direct de sub 📌 ID, după emojiul 🏡 sau 🏢).
 2. STRUCTURĂ TITLU: Tip imobil + număr camere/încăperi sau suprafață mp | Zonă | Pct. de interes | Pct forte imobil | Dotări | Parcare. Titlul TREBUIE să aibă SUB 70 de caractere (cu excepția cazului în care există un TITLU OBLIGATORIU furnizat mai sus).
 3. FĂRĂ NUMĂR STRADĂ, FĂRĂ COMPLEX REZIDENȚIAL: Niciodată nu include numărul străzii, numărul blocului, scara, apartamentul sau denumiri de complexe rezidențiale (ex: Astorium, Hills, etc.) nici în titlu, nici în descriere! Folosește doar zona/cartierul general.
@@ -4080,12 +4081,49 @@ Returnează un JSON strict cu următoarele chei:
           ? `${rawPriceNum.toLocaleString("ro-RO")} €${transactionType === "Închiriere" ? " / lună" : ""}`
           : "N/A";
 
-        // 4. City & Zone
+        // 4. Original Description FIRST (strictly scoped to the ad itself — never full HTML chrome / similar ads)
+        let rawDescription = "";
+        const olxDomDesc = extractOlxDomDescription($);
+        if (isOlxPage && olxDomDesc) {
+          rawDescription = olxDomDesc;
+        } else if (nextAdData?.description) {
+          rawDescription = convert(nextAdData.description, { wordwrap: false });
+        } else if (olxAd?.description) {
+          rawDescription = cleanHtmlDescriptionPreservingLines(String(olxAd.description));
+        } else if (olxDomDesc) {
+          rawDescription = olxDomDesc;
+        } else {
+          const descSelectors = [
+            'div.text-background-action-primary.whitespace-pre-line',
+            'div[class*="text-background-action-primary"][class*="whitespace-pre-line"]',
+            '[data-cy="ad_description"]',
+            '[data-testid="description-section"]',
+            '.offer-description',
+            '#descriere',
+            '.descriptioncontent',
+            '.ad-description'
+          ];
+          for (const sel of descSelectors) {
+            const htmlDesc = $(sel).html();
+            if (htmlDesc) {
+              rawDescription = convert(htmlDesc, { wordwrap: false });
+              break;
+            }
+          }
+          if (!rawDescription) {
+            rawDescription = ogDescription || "";
+          }
+        }
+
+        const adOnlyText = [title, rawDescription].filter(Boolean).join("\n");
+        const adOnlyLower = adOnlyText.toLowerCase();
+
+        // 5. City & Zone (strictly from structured ad metadata + original ad title/description, NEVER full-page HTML)
         let oras = "București";
-        let zona = "";
+        let rawStructuredZone = "";
 
         if (nextAdData?.location?.city?.name) oras = nextAdData.location.city.name;
-        if (nextAdData?.location?.district?.name) zona = nextAdData.location.district.name;
+        if (nextAdData?.location?.district?.name) rawStructuredZone = nextAdData.location.district.name;
 
         const storiaLocations = Array.isArray(nextAdData?.location?.reverseGeocoding?.locations)
           ? nextAdData.location.reverseGeocoding.locations
@@ -4093,32 +4131,34 @@ Returnează un JSON strict cu următoarele chei:
         for (const loc of storiaLocations) {
           if (loc?.locationLevel === "city" && loc?.name) oras = loc.name;
           if ((loc?.locationLevel === "district" || loc?.locationLevel === "quarter" || loc?.locationLevel === "subdistrict") && loc?.name) {
-            zona = loc.name;
+            rawStructuredZone = loc.name;
           }
         }
 
         if (olxAd?.location?.cityName) oras = olxAd.location.cityName;
-        if (olxAd?.location?.districtName) zona = olxAd.location.districtName;
+        if (olxAd?.location?.districtName) rawStructuredZone = olxAd.location.districtName;
 
-        zona = resolveAreaFromAd({
-          rawZone: zona,
+        const verifiedNeighborhoodZone = resolveAreaFromAd({
+          rawZone: rawStructuredZone,
           city: oras,
           title,
-          description: text,
+          description: rawDescription,
           url,
+          fallbackToCity: false,
         });
+        const zona = verifiedNeighborhoodZone || oras || "";
 
-        // 5. Specs (Surface, Rooms, Floor, Heating, Furnished)
+        // 6. Specs (Surface, Rooms, Floor, Heating, Furnished) — strictly from structured params or adOnlyText
         let suprafataUtila = "";
         let camere = "";
         let etaj = "";
         let anConstructie = "";
-        let compartimentare = "Decomandat";
-        let sistemIncalzire: string[] = ["Centrala proprie"];
+        let compartimentare = "";
+        let sistemIncalzire: string[] = [];
         let climatizare: string[] = [];
-        let mobilat = "Complet";
+        let mobilat = "";
 
-        // 5a. Storia characteristics
+        // 6a. Storia characteristics
         if (storiaChars.length > 0) {
           const chM = getStoriaChar("m");
           const chRooms = getStoriaChar("rooms_num");
@@ -4140,7 +4180,7 @@ Returnează un JSON strict cu următoarele chei:
           }
         }
 
-        // 5b. OLX DOM parameters container (div[data-testid="ad-parameters-container"])
+        // 6b. OLX DOM parameters container (div[data-testid="ad-parameters-container"])
         if (olxDomParams.hasContainer) {
           if (!suprafataUtila && olxDomParams.suprafataUtila) suprafataUtila = olxDomParams.suprafataUtila;
           if (!anConstructie && olxDomParams.anConstructie) anConstructie = olxDomParams.anConstructie;
@@ -4149,7 +4189,7 @@ Returnează un JSON strict cu următoarele chei:
           if (!camere && olxDomParams.camere) camere = olxDomParams.camere;
         }
 
-        // 5c. OLX structured params fallback
+        // 6c. OLX structured params fallback
         if (olxParams.length > 0) {
           const pm = getOlxParam("m");
           const pr = getOlxParam("rooms");
@@ -4197,27 +4237,25 @@ Returnează un JSON strict cu următoarele chei:
             if (!camere && p.key === "rooms_num") camere = String(p.value || "");
             if (!etaj && p.key === "floor_select") etaj = String(p.value || "");
             if (!anConstructie && p.key === "build_year") anConstructie = String(p.value || "");
-            if (p.key === "furniture") mobilat = String(p.value || "Complet");
+            if (!mobilat && p.key === "furniture" && p.value) mobilat = String(p.value);
           }
         }
 
         if (!suprafataUtila) {
-          const sMatch = text.match(/(?:suprafa[t\u021b\u0163]?[a\u0103]?\s*util[a\u0103]?|s\s*util[a\u0103]?|utila)\s*[:\-–]?\s*(\d+(?:[.,]\d+)?)\s*(?:mp|m2|m\u00b2)/i);
+          const sMatch = adOnlyText.match(/(?:suprafa[t\u021b\u0163]?[a\u0103]?\s*util[a\u0103]?|s\s*util[a\u0103]?|utila)\s*[:\-–]?\s*(\d+(?:[.,]\d+)?)\s*(?:mp|m2|m\u00b2)/i);
           if (sMatch) suprafataUtila = sMatch[1].replace(",", ".");
         }
         if (!camere) {
-          const cMatch = text.match(/(?:num[a\u0103]r\s*camere|camere|nr\s*camere)\s*[:\-–]?\s*(\d+)/i) || title.match(/(\d+)\s*camere/i);
+          const cMatch = adOnlyText.match(/(?:num[a\u0103]r\s*camere|nr\.?\s*camere)\s*[:\-–]?\s*(\d+)/i) || adOnlyText.match(/\b(\d+)\s*camere\b/i);
           if (cMatch) camere = cMatch[1];
-          else if (lowerCombo.includes("garsonier") || lowerCombo.includes("studio")) camere = "1";
-          else camere = "2";
+          else if (adOnlyLower.includes("garsonier") || adOnlyLower.includes("studio")) camere = "1";
         }
         if (!etaj) {
-          const eMatch = text.match(/(?:etaj|etajul)\s*[:\-–]?\s*(parter|demisol|mansarda|\d+\/\d+|\d+)/i);
+          const eMatch = adOnlyText.match(/(?:etaj|etajul)\s*[:\-–]?\s*(parter|demisol|mansarda|\d+\/\d+|\d+)/i);
           if (eMatch) etaj = eMatch[1];
-          else etaj = "1";
         }
         if (!anConstructie) {
-          const aMatch = text.match(/(?:an\s*construc[t\u021b]ie|construit\s*[îi]n|an\s*bloc)\s*[:\-–]?\s*(\d{4})/i);
+          const aMatch = adOnlyText.match(/(?:an\s*construc[t\u021b]ie|construit\s*[îi]n|an\s*bloc)\s*[:\-–]?\s*(\d{4})/i);
           if (aMatch) anConstructie = aMatch[1];
         }
 
@@ -4228,84 +4266,61 @@ Returnează un JSON strict cu următoarele chei:
           }
         }
         if (!balcoane) {
-          const bMatch = text.match(/(\d+)\s*balco?ane?/i);
+          const bMatch = adOnlyText.match(/(\d+)\s*balco?ane?/i);
           if (bMatch) balcoane = bMatch[1];
         }
-        const balcoaneFinal = balcoane || "1";
 
-        const numUtila = parseFloat(suprafataUtila) || 55;
+        const parsedUtila = parseFloat(suprafataUtila);
         const mult = (categoria === "Apartament" || categoria === "Casa/Vila") ? 1.2 : 1.1;
-        const suprafataConstruita = Math.round(numUtila * mult).toString();
+        const suprafataConstruita = Number.isFinite(parsedUtila) && parsedUtila > 0
+          ? Math.round(parsedUtila * mult).toString()
+          : "";
 
-        if (lowerCombo.includes("centrala proprie") || lowerCombo.includes("centrală proprie")) {
-          sistemIncalzire = ["Centrala proprie"];
-        } else if (lowerCombo.includes("termoficare") || lowerCombo.includes("centralizat") || lowerCombo.includes("radet")) {
-          sistemIncalzire = ["Termoficare"];
+        if (sistemIncalzire.length === 0) {
+          if (adOnlyLower.includes("centrala proprie") || adOnlyLower.includes("centrală proprie")) {
+            sistemIncalzire = ["Centrala proprie"];
+          } else if (adOnlyLower.includes("centrala de bloc") || adOnlyLower.includes("centrală de bloc") || adOnlyLower.includes("centrala imobil") || adOnlyLower.includes("centrală imobil")) {
+            sistemIncalzire = ["Centrala imobil"];
+          } else if (adOnlyLower.includes("termoficare") || adOnlyLower.includes("centralizat") || adOnlyLower.includes("radet")) {
+            sistemIncalzire = ["Termoficare"];
+          }
         }
 
-        if (lowerCombo.includes("aer conditionat") || lowerCombo.includes("aer condiționat") || lowerCombo.includes("climatizare")) {
+        if (adOnlyLower.includes("aer conditionat") || adOnlyLower.includes("aer condiționat") || adOnlyLower.includes("climatizare")) {
           climatizare = ["Aer conditionat"];
         }
 
-        if (lowerCombo.includes("semidecomandat")) compartimentare = "Semidecomandat";
-        else if (lowerCombo.includes("open space") || lowerCombo.includes("openspace")) compartimentare = "Open space";
-        else if (lowerCombo.includes("circular")) compartimentare = "Circular";
-        else if (lowerCombo.includes("nedecomandat")) compartimentare = "Nedecomandat";
-
-        if (lowerCombo.includes("nemobilat")) mobilat = "Nemobilat";
-        else if (lowerCombo.includes("partial mobilat")) mobilat = "Partial";
-
-        // 6. Original Description (prefer OLX DOM description container when present)
-        let rawDescription = "";
-        const olxDomDesc = extractOlxDomDescription($);
-        if (isOlxPage && olxDomDesc) {
-          rawDescription = olxDomDesc;
-        } else if (nextAdData?.description) {
-          rawDescription = convert(nextAdData.description, { wordwrap: false });
-        } else if (olxAd?.description) {
-          rawDescription = cleanHtmlDescriptionPreservingLines(String(olxAd.description));
-        } else if (olxDomDesc) {
-          rawDescription = olxDomDesc;
-        } else {
-          const descSelectors = [
-            'div.text-background-action-primary.whitespace-pre-line',
-            'div[class*="text-background-action-primary"][class*="whitespace-pre-line"]',
-            '[data-cy="ad_description"]',
-            '[data-testid="description-section"]',
-            '.offer-description',
-            '#descriere',
-            '.descriptioncontent',
-            '.ad-description'
-          ];
-          for (const sel of descSelectors) {
-            const htmlDesc = $(sel).html();
-            if (htmlDesc) {
-              rawDescription = convert(htmlDesc, { wordwrap: false });
-              break;
-            }
-          }
-          if (!rawDescription) {
-            rawDescription = ogDescription || text.substring(0, 3000);
-          }
+        if (!compartimentare) {
+          if (adOnlyLower.includes("semidecomandat")) compartimentare = "Semidecomandat";
+          else if (adOnlyLower.includes("open space") || adOnlyLower.includes("openspace")) compartimentare = "Open space";
+          else if (adOnlyLower.includes("circular")) compartimentare = "Circular";
+          else if (adOnlyLower.includes("nedecomandat")) compartimentare = "Nedecomandat";
+          else if (adOnlyLower.includes("decomandat")) compartimentare = "Decomandat";
         }
 
-        // Preserve structured automationSource so Title & Description rules can be applied
-        // later ONLY when the lead is moved to Lista Mea, Proprietăți, or Cereri.
+        if (!mobilat) {
+          if (adOnlyLower.includes("nemobilat")) mobilat = "Nemobilat";
+          else if (adOnlyLower.includes("partial mobilat") || adOnlyLower.includes("parțial mobilat")) mobilat = "Partial";
+          else if (adOnlyLower.includes("complet mobilat") || adOnlyLower.includes("mobilat complet") || adOnlyLower.includes("mobilat si utilat") || adOnlyLower.includes("mobilat și utilat")) mobilat = "Complet";
+        }
+
+        // Preserve strictly verified automationSource so Title & Description rules use ONLY
+        // real information from the original ad (never full-page chrome or fabricated defaults).
         const automationSource = {
           transactionType,
           categoria,
           camere,
-          suprafataUtila: suprafataUtila || numUtila,
+          suprafataUtila,
           suprafataConstruita,
           etaj,
-          zona,
+          zona: verifiedNeighborhoodZone,
           oras,
           compartimentare,
           sistemIncalzire: Array.isArray(sistemIncalzire) ? sistemIncalzire.join(", ") : sistemIncalzire,
           mobilat,
-          balcoane: balcoaneFinal,
+          balcoane,
           rawTitle: title,
-          rawText: rawDescription || text,
+          rawText: rawDescription,
         };
         const originalTitle = title;
         const originalDescription = rawDescription;
@@ -4321,7 +4336,7 @@ Returnează un JSON strict cu următoarele chei:
             ansambluRezidential: "",
             localizare: {
               oras: oras,
-              zona: [zona],
+              zona: verifiedNeighborhoodZone ? [verifiedNeighborhoodZone] : (zona ? [zona] : []),
               strada: "",
               numar: "",
               bloc: "",
@@ -4339,23 +4354,23 @@ Returnează un JSON strict cu următoarele chei:
               compartimentare: compartimentare,
               confort: "1",
               destinatie: "Rezidential",
-              camere: String(camere),
+              camere: String(camere || ""),
               bucatarii: "1",
-              dormitoare: String(Math.max(1, parseInt(camere) - 1 || 1)),
+              dormitoare: camere ? String(Math.max(1, parseInt(camere, 10) - 1 || 1)) : "",
               bai: "1",
-              balcoane: "0",
+              balcoane: balcoane || "0",
               terase: "0",
-              etaj: String(etaj),
+              etaj: String(etaj || ""),
               orientare: "",
               parcari: "0",
               garaje: "0",
               checkList: []
             },
             suprafete: {
-              utila: String(suprafataUtila || numUtila),
+              utila: String(suprafataUtila || ""),
               amprenta: "",
               construita: suprafataConstruita,
-              utilaTotala: String(suprafataUtila || numUtila),
+              utilaTotala: String(suprafataUtila || ""),
               balcoane: "0",
               terase: "0",
               gradina: "0",
@@ -4483,7 +4498,7 @@ Returnează un JSON strict cu următoarele chei:
             "An construcție": anConstructie || "-",
             "Număr camere": camere ? String(camere) : "-",
             "Număr băi": "1",
-            "Balcoane": balcoaneFinal,
+            "Balcoane": balcoane || "-",
             "Stare": "Buna"
           },
           finisaje: {
@@ -4611,7 +4626,7 @@ Returnează un JSON strict cu următoarele chei:
           publishedAtLabel: publishedAtLabel,
           sellerType: olxDomParams.sellerType || (isOlxPage ? "Persoana fizica" : ""),
           specs: {
-            utila: suprafataUtila || numUtila,
+            utila: suprafataUtila || "",
             construita: suprafataConstruita,
             camere: camere,
             etaj: etaj,
@@ -4867,13 +4882,15 @@ Returnează un JSON strict cu următoarele chei:
 
         // Location — never use a Sector ("Sector 1".."Sector 6") as area; match against areas database
         const oras = String(ad?.location?.cityName || "București").trim();
-        const zona = resolveAreaFromAd({
+        const verifiedOlxNeighborhood = resolveAreaFromAd({
           rawZone: ad?.location?.districtName,
           city: oras,
           title: rawTitle,
           description: rawDesc,
           url: adUrl,
+          fallbackToCity: false,
         });
+        const zona = verifiedOlxNeighborhood || oras;
 
         // Photos (promoted to 1000x700 and proxied)
         const rawPhotos: string[] = Array.isArray(ad?.photos)
@@ -4902,14 +4919,14 @@ Returnează un JSON strict cu următoarele chei:
           suprafataUtila: suprafataUtila || "",
           suprafataConstruita,
           etaj,
-          zona,
+          zona: verifiedOlxNeighborhood,
           oras,
           compartimentare,
           sistemIncalzire: "",
           mobilat: "",
           balcoane: "",
           rawTitle,
-          rawText: `${rawTitle}\n${rawDesc}`,
+          rawText: rawDesc,
         };
 
         const crmData = {

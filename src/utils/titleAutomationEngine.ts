@@ -3,6 +3,7 @@ import {
   TitleCategoryId,
   normalizeTitleAutomationRule,
 } from "../core/automation/typ_title-automation";
+import { hasRealNeighborhoodArea } from "./zoneResolutionUtils";
 
 export interface TitleExtractionInput {
   transactionType?: string;
@@ -173,42 +174,166 @@ function extractTotalFloors(input: TitleExtractionInput, combinedText: string, i
   return "";
 }
 
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildWordBoundaryRegex(phrase: string): RegExp {
+  const normalized = stripDiacriticsLower(phrase);
+  const pattern = escapeRegExp(normalized).replace(/\s+/g, "[\\s\\-.,/]+");
+  return new RegExp(`(?:^|[^a-z0-9])(${pattern})(?:$|[^a-z0-9])`, "gi");
+}
+
+// Sort metro stations longest first so multi-word stations ("Piata Unirii", "Parc Drumul Taberei",
+// "1 Decembrie 1918") match before shorter names.
+const METRO_STATION_MATCHERS = [...KNOWN_METRO_STATIONS]
+  .sort((a, b) => b.length - a.length)
+  .map((name) => ({
+    name,
+    norm: stripDiacriticsLower(name),
+    regex: buildWordBoundaryRegex(name),
+  }));
+
+const METRO_EXPLICIT_STOPWORDS = new Set([
+  "la",
+  "in",
+  "de",
+  "pe",
+  "cu",
+  "sau",
+  "si",
+  "din",
+  "langa",
+  "aproape",
+  "direct",
+  "acces",
+  "rapid",
+  "minute",
+  "min",
+  "mers",
+  "distanta",
+  "bucuresti",
+  "sector",
+  "zona",
+  "m1",
+  "m2",
+  "m3",
+  "m4",
+  "m5",
+  "statie",
+  "statia",
+  "pentru",
+  "este",
+  "sunt",
+  "catre",
+  "spre",
+  "doar",
+  "circa",
+  "aproximativ",
+]);
+
+const NON_PARK_WORDS = new Set([
+  "auto",
+  "industrial",
+  "logistic",
+  "logistica",
+  "comercial",
+  "rezidential",
+  "foto",
+  "de",
+  "cu",
+  "si",
+  "la",
+  "in",
+  "din",
+  "pentru",
+  "care",
+  "este",
+  "sunt",
+  "sau",
+  "nou",
+  "mare",
+  "mic",
+  "propriu",
+  "privat",
+]);
+
 function extractTransitInfo(input: TitleExtractionInput, combinedText: string): { statie: string; distantaStatie: string } {
   let statie = (input.statie || "").trim();
   let distantaStatie = (input.distantaStatie || "").trim();
 
   const normText = combinedText;
+  const textNoDia = stripDiacriticsLower(normText);
 
-  if (!statie) {
-    const metrouExplicit = normText.match(
-      /metrou\s+([A-ZĂÂÎȘȚ][a-zăâîșțA-ZĂÂÎȘȚ0-9\-]+(?:\s+[A-ZĂÂÎȘȚ][a-zăâîșț0-9\-]+){0,2})/
-    );
-    if (metrouExplicit && metrouExplicit[1]) {
-      const candidate = metrouExplicit[1].trim();
-      const candLower = stripDiacriticsLower(candidate);
-      if (!/^(la|in|de|pe|cu|sau|si|din|langa)$/.test(candLower)) {
-        statie = candidate;
-      }
-    }
+  // Only match metro stations when the original text genuinely mentions "metrou"
+  // (never trigger on generic "statie STB / tramvai / autobuz" + an unrelated word like "romana" or "1 mai").
+  const metroCueRegex = /\b(?:metrou(?:l)?|statia\s+de\s+metrou|statie\s+de\s+metrou)\b/gi;
+  const metroOffsets: number[] = [];
+  let cueMatch: RegExpExecArray | null;
+  while ((cueMatch = metroCueRegex.exec(textNoDia)) !== null) {
+    metroOffsets.push(cueMatch.index);
   }
 
-  if (!statie) {
-    const textNoDia = stripDiacriticsLower(normText);
-    if (textNoDia.includes("metrou") || textNoDia.includes("statia") || textNoDia.includes("statie")) {
-      for (const st of KNOWN_METRO_STATIONS) {
-        if (textNoDia.includes(stripDiacriticsLower(st))) {
-          statie = st;
-          break;
+  if (!statie && metroOffsets.length > 0) {
+    // 1. Find the known metro station that appears closest to an actual "metrou" mention (within +/- 50 chars)
+    let bestStation = "";
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let bestLength = 0;
+
+    for (const matcher of METRO_STATION_MATCHERS) {
+      matcher.regex.lastIndex = 0;
+      let m: RegExpExecArray | null;
+      while ((m = matcher.regex.exec(textNoDia)) !== null) {
+        const matchPos = m.index + (m[0].length - m[1].length - (m[0].endsWith(m[1]) ? 0 : 1));
+        for (const cuePos of metroOffsets) {
+          const dist = Math.abs(matchPos - cuePos);
+          // Station must appear within the same clause/window (<= 50 chars) and without a sentence break in between
+          if (dist <= 50) {
+            const between = textNoDia.slice(Math.min(matchPos, cuePos), Math.max(matchPos, cuePos));
+            if (/[.\n!?]/.test(between)) continue;
+            if (dist < bestDistance || (dist === bestDistance && matcher.norm.length > bestLength)) {
+              bestDistance = dist;
+              bestLength = matcher.norm.length;
+              bestStation = matcher.name;
+            }
+          }
+        }
+      }
+    }
+
+    if (bestStation) {
+      statie = bestStation;
+    } else {
+      // 2. Fallback: explicit "metrou <Proper Name>" immediately following "metrou", verified against stopwords
+      const metrouExplicit = normText.match(
+        /\bmetrou\s+([A-ZĂÂÎȘȚ][a-zăâîșțA-ZĂÂÎȘȚ0-9\-]+(?:\s+[A-ZĂÂÎȘȚ][a-zăâîșț0-9\-]+){0,2})/
+      );
+      if (metrouExplicit && metrouExplicit[1]) {
+        const candidate = metrouExplicit[1].trim();
+        const words = stripDiacriticsLower(candidate).split(/\s+/).filter(Boolean);
+        const firstWord = words[0] || "";
+        if (
+          words.length > 0 &&
+          !METRO_EXPLICIT_STOPWORDS.has(firstWord) &&
+          !/^\d+$/.test(firstWord)
+        ) {
+          // Only accept if it matches a known station or looks like a clean station name (not generic ad copy)
+          const matchedKnown = METRO_STATION_MATCHERS.find((st) =>
+            stripDiacriticsLower(candidate).includes(st.norm)
+          );
+          if (matchedKnown) {
+            statie = matchedKnown.name;
+          }
         }
       }
     }
   }
 
-  if (!distantaStatie) {
+  if (!distantaStatie && metroOffsets.length > 0) {
     const distMatches = [
-      normText.match(/(?:metrou|statia|statie)[^\n.,;]{0,45}?\b(?:la|la doar)?\s*(\d{1,2}\s*(?:min(?:ute)?|m))\b/i),
-      normText.match(/\b(\d{1,2}\s*(?:min(?:ute)?))\s*(?:de|pana la|mers(?:\s*pe\s*jos)?\s*(?:de|la)?)\s*(?:metrou|statia|statie)\b/i),
-      normText.match(/\b(\d{2,4}\s*m)\s*(?:de|la)?\s*(?:metrou|statia|statie)\b/i),
+      normText.match(/\bmetrou[^\n.,;]{0,45}?\b(?:la|la doar)?\s*(\d{1,2}\s*(?:min(?:ute)?|m))\b/i),
+      normText.match(/\b(\d{1,2}\s*(?:min(?:ute)?))\s*(?:de|pana la|mers(?:\s*pe\s*jos)?\s*(?:de|la)?)\s*(?:metrou|statia\s+de\s+metrou|statie\s+de\s+metrou)\b/i),
+      normText.match(/\b(\d{2,4}\s*m)\s*(?:de|la)?\s*(?:metrou|statia\s+de\s+metrou|statie\s+de\s+metrou)\b/i),
     ];
     for (const m of distMatches) {
       if (m && m[1]) {
@@ -226,15 +351,22 @@ function extractParkInfo(input: TitleExtractionInput, combinedText: string): { n
   let distantaParc = (input.distantaParc || "").trim();
 
   if (!numeParc) {
-    const m = combinedText.match(/\bParc(?:ul)?\s+([A-ZĂÂÎȘȚ][a-zăâîșț0-9\-]+(?:\s+[A-ZĂÂÎȘȚ][a-zăâîșț0-9\-]+){0,2})/);
-    if (m && m[1]) {
-      numeParc = `Parcul ${m[1].trim()}`;
-    } else if (/\b(?:langa parc|lângă parc|langa parcul|vedere la parc|vis-a-vis de parc)\b/i.test(combinedText)) {
+    const parkRe = /\bParc(?:ul)?\s+([A-ZĂÂÎȘȚ][a-zăâîșț0-9\-]+(?:\s+[A-ZĂÂÎȘȚ][a-zăâîșț0-9\-]+){0,2})/g;
+    let m: RegExpExecArray | null;
+    while ((m = parkRe.exec(combinedText)) !== null) {
+      const candidate = m[1].trim();
+      const firstWord = stripDiacriticsLower(candidate).split(/\s+/)[0] || "";
+      if (firstWord && !NON_PARK_WORDS.has(firstWord)) {
+        numeParc = `Parcul ${candidate}`;
+        break;
+      }
+    }
+    if (!numeParc && /\b(?:langa parc|lângă parc|langa parcul|lângă parcul|vedere la parc|vis-a-vis de parc|vizavi de parc)\b/i.test(combinedText)) {
       numeParc = "Parc";
     }
   }
 
-  if (!distantaParc) {
+  if (!distantaParc && numeParc) {
     const dm =
       combinedText.match(/\b(\d{1,2}\s*min(?:ute)?)\s*(?:de|pana la)?\s*(?:parc|parcul)\b/i) ||
       combinedText.match(/\bparc(?:ul)?[^\n.,;]{0,35}?\b(\d{1,2}\s*min(?:ute)?)\b/i);
@@ -267,7 +399,8 @@ function extractAttractionInfo(input: TitleExtractionInput, combinedText: string
     ];
     const lower = stripDiacriticsLower(combinedText);
     for (const attr of attractions) {
-      if (lower.includes(stripDiacriticsLower(attr))) {
+      const re = buildWordBoundaryRegex(attr);
+      if (re.test(lower)) {
         numeAtractie = attr;
         break;
       }
@@ -279,7 +412,7 @@ function extractAttractionInfo(input: TitleExtractionInput, combinedText: string
   }
 
   if (!distantaAtractie && numeAtractie) {
-    const escaped = numeAtractie.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escaped = escapeRegExp(numeAtractie);
     const dm =
       combinedText.match(new RegExp(`(\\d{1,2}\\s*min(?:ute)?)\\s*(?:de|pana la)?\\s*${escaped}`, "i")) ||
       combinedText.match(new RegExp(`${escaped}[^\\n.,;]{0,30}?(\\d{1,2}\\s*min(?:ute)?)`, "i"));
@@ -293,8 +426,8 @@ function extractAttractionInfo(input: TitleExtractionInput, combinedText: string
 
 function mapPropertyTypeLabel(categoria: string | undefined, lowerText: string): string {
   const c = stripDiacriticsLower(categoria || "");
-  if (c.includes("garsonier") || c.includes("studio") || lowerText.includes("garsonier") || lowerText.includes("studio")) {
-    if (c.includes("garsonier") || lowerText.includes("garsoniera")) return "Garsoniera";
+  if (c.includes("garsonier") || c.includes("studio") || /\b(?:garsonier[aă]?|studio)\b/.test(lowerText)) {
+    if (c.includes("garsonier") || /\bgarsonier[aă]?\b/.test(lowerText)) return "Garsoniera";
     return "Studio";
   }
   if (c.includes("cas") || c.includes("vil")) return "Vila";
@@ -355,21 +488,28 @@ function buildResolvedTagValues(
   const distSiNumeAtractie =
     distantaAtractie && numeAtractie ? `${distantaAtractie} ${numeAtractie}` : numeAtractie || distantaAtractie;
 
+  const rawZona = String(input.zona || "").trim();
+  const zonaStr = hasRealNeighborhoodArea(rawZona) ? sanitizeAdCopy(rawZona) : "";
+
   const mobNorm = stripDiacriticsLower(input.mobilat || "");
   let mobilareStr = "";
-  if (mobNorm.includes("nemobilat") || /\bnemobilat\b/.test(lower)) mobilareStr = "Nemobilat";
+  if (mobNorm.includes("nemobilat") || mobNorm === "fara" || /\bnemobilat\b/.test(lower)) mobilareStr = "Nemobilat";
   else if (mobNorm.includes("partial") || /\bsemimobilat|partial\s*mobilat\b/.test(lower)) mobilareStr = "Semimobilat";
   else if (mobNorm.includes("lux") || /\bmobilat\s*lux\b/.test(lower)) mobilareStr = "Mobilat Lux";
   else if (mobNorm.includes("complet") || mobNorm.includes("mobilat") || /\bmobilat\b/.test(lower)) mobilareStr = "Mobilat";
 
   const utilNorm = stripDiacriticsLower(input.utilare || "");
   let utilareStr = "";
-  if (utilNorm.includes("neutilat") || /\bneutilat\b/.test(lower)) utilareStr = "Neutilat";
-  else if (utilNorm.includes("utilat") || /\butilat\b|utilata\s*complet/.test(lower)) utilareStr = "Utilat";
+  if (utilNorm.includes("neutilat") || utilNorm === "fara" || /\bneutilat\b/.test(lower)) utilareStr = "Neutilat";
+  else if (utilNorm.includes("partial") || /\bpartial\s*utilat\b/.test(lower)) utilareStr = "Partial utilat";
+  else if (utilNorm.includes("complet") || utilNorm.includes("utilat") || /\butilat[aă]?\b/.test(lower)) utilareStr = "Utilat";
 
   let parcareStr = "";
   if (typeof input.parcare === "string" && input.parcare.trim()) {
-    parcareStr = sanitizeAdCopy(input.parcare);
+    const pNorm = stripDiacriticsLower(input.parcare);
+    if (!pNorm.includes("fara") && pNorm !== "0") {
+      parcareStr = sanitizeAdCopy(input.parcare);
+    }
   } else if (
     input.parcare === true ||
     /\b(?:loc\s*de\s*parcare|parcare\s*(?:inclusa|subterana|supraterana|proprie|rezervata|acoperita)?|garaj)\b/i.test(lower)
@@ -402,6 +542,8 @@ function buildResolvedTagValues(
     construita: { value: suprafataConstruitaStr, categoryId: "general", tagId: "construita" },
     etaj: { value: floorLabel, categoryId: "general", tagId: "etaj" },
     "etaje in total": { value: etajeTotalStr, categoryId: "general", tagId: "etaje_total" },
+    zona: { value: zonaStr, categoryId: "general", tagId: "zona" },
+    cartier: { value: zonaStr, categoryId: "general", tagId: "zona" },
     statie: { value: statie, categoryId: "transport", tagId: "statie" },
     "distanta statie": { value: distantaStatie, categoryId: "transport", tagId: "distanta_statie" },
     "nume parc": { value: numeParc, categoryId: "relaxare", tagId: "nume_parc" },
