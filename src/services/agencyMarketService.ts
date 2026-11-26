@@ -17,7 +17,6 @@ import {
   platformAutoCrawlService,
 } from "./platformAutoCrawlService";
 import { entityIdService } from "./entityIdService";
-import { applyLeadTitleAndDescriptionRules } from "../utils/applyLeadContentRules";
 import { isDailyLeadId } from "../utils/leadIdUtils";
 import { isSummaryLeadRecord } from "../core/crm/svc_lead-projection";
 import type { Lead, LeadStatus } from "./leadsService";
@@ -292,18 +291,11 @@ export const agencyMarketService = {
       }
     }
 
-    const agencyLeadId = await entityIdService.getNextId("lead");
+    const dailyPropertyId = isDailyLeadId(canonicalSharedLead.propertyId)
+      ? canonicalSharedLead.propertyId!
+      : await entityIdService.getNextId("daily_lead");
     const sourcePropertyId =
-      isDailyLeadId(canonicalSharedLead.propertyId) || canonicalSharedLead.propertyId
-        ? canonicalSharedLead.propertyId
-        : undefined;
-
-    const { formattedTitle, formattedDescription, updatedExtractedData } =
-      await applyLeadTitleAndDescriptionRules({
-        lead: canonicalSharedLead,
-        targetKind: "my_list",
-        propertyId: agencyLeadId,
-      });
+      canonicalSharedLead.propertyId || dailyPropertyId;
 
     const {
       isSharedLead: _ignored,
@@ -317,13 +309,10 @@ export const agencyMarketService = {
     const payload: Record<string, any> = stripUndefinedDeep({
       ...rest,
       ...(sharedId ? { id: sharedId, sharedLeadId: sharedId } : {}),
-      propertyId: agencyLeadId,
+      propertyId: dailyPropertyId,
       ...(sourcePropertyId ? { sourcePropertyId } : {}),
       isSharedLead: false,
-      status: "ListaMea" as LeadStatus,
-      title: formattedTitle,
-      notes: formattedDescription,
-      extractedData: updatedExtractedData,
+      status: "Noi" as LeadStatus,
       source: mode === "auto" ? "agency_market_auto_import" : "agency_market_manual_copy",
       agent: agentName,
       agentEmail: actor.email || "",
@@ -335,7 +324,7 @@ export const agencyMarketService = {
     });
 
     const created = await crmApiClient.create<Lead>("leads", payload);
-    const resolvedId = created?.propertyId || agencyLeadId;
+    const resolvedId = created?.propertyId || dailyPropertyId;
     return {
       lead: { ...created, propertyId: resolvedId },
       propertyId: resolvedId,

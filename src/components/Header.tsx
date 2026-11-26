@@ -17,7 +17,7 @@ import {
   CornerDownLeft
 } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { leadsService, Lead, isCerereLead } from "../services/leadsService";
+import { leadsService, Lead, isCerereLead, isUnprocessedLead } from "../services/leadsService";
 import { contactsService, Contact } from "../services/contactsService";
 import { personalService, PersonalMember } from "../services/personalService";
 import { documentService, DocumentItem } from "../services/documentService";
@@ -805,7 +805,7 @@ export const Header: React.FC<HeaderProps> = ({
                               </div>
                             </div>
                             <span className="text-[10px] font-normal px-2 py-1 rounded border border-emerald-200 bg-emerald-50 text-emerald-700 shrink-0">
-                              {lead.status === "ListaMea" ? "Noi" : lead.status}
+                              {isUnprocessedLead(lead) ? "Neprocesate" : lead.status === "ListaMea" ? "Procesate" : lead.status}
                             </span>
                           </div>
                         ))}

@@ -683,10 +683,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   onClick={handleAddToMyList}
                   disabled={saving}
                   className="h-8 px-3 bg-[#051D35] hover:bg-[#0a2b4a] text-white rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
-                  title="Mută leadul în Noi"
+                  title="Procesează și mută leadul în Procesate"
                 >
                   <Bookmark size={12} className="text-[#BE9662]" />
-                  <span>Adaugă în Noi</span>
+                  <span>Procesează</span>
                 </button>
               )}
 
@@ -696,10 +696,10 @@ export const NevalidataDetailsModal: React.FC<NevalidataDetailsModalProps> = ({
                   onClick={handleReactivate}
                   disabled={saving}
                   className="h-8 px-3 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-md text-xs font-medium transition-colors cursor-pointer flex items-center gap-2 disabled:opacity-50"
-                  title="Re-activează leadul în Noi"
+                  title="Re-activează leadul în Procesate"
                 >
                   <RotateCcw size={12} className="text-amber-600" />
-                  <span>Reactivează în Noi</span>
+                  <span>Reactivează în Procesate</span>
                 </button>
               ) : (
                 <button

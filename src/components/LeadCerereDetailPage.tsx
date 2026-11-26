@@ -15,11 +15,12 @@ import {
   Link as LinkIcon,
   Star,
   Bookmark,
-  Wand2
+  Wand2,
+  ClipboardList
 } from "lucide-react";
 import { toast } from "react-hot-toast";
 import { Contact } from "../services/contactsService";
-import { Lead, leadsService, isCerereLead, getLeadRole } from "../services/leadsService";
+import { Lead, leadsService, isCerereLead, isUnprocessedLead, getLeadRole } from "../services/leadsService";
 import { publishPublicShareSnapshot } from "../services/publicShareService";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
@@ -150,6 +151,7 @@ interface LeadCerereDetailPageProps {
   onMarkAsLost?: (leadId: string) => Promise<void>;
   onReactivateLead?: (leadId: string) => Promise<void>;
   onAddToMyList?: (leadId: string) => Promise<void>;
+  onConvertToCerere?: (leadId: string) => Promise<void>;
 }
 
 export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
@@ -160,9 +162,11 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
   onMarkAsLost,
   onReactivateLead,
   onAddToMyList,
+  onConvertToCerere,
 }) => {
   const { tenant } = useTenantContext();
   const [addingToMyList, setAddingToMyList] = useState(false);
+  const [convertingToCerere, setConvertingToCerere] = useState(false);
 
   const [editingPhotos, setEditingPhotos] = useState(false);
   const [savingPhotos, setSavingPhotos] = useState(false);
@@ -179,6 +183,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
   const [deleting, setDeleting] = useState(false);
 
   const isCerere = isCerereLead(lead);
+  const isUnprocessed = isUnprocessedLead(lead);
   const leadRole = getLeadRole(lead);
   const isPropertyLead = leadRole === "Proprietar";
   const criteriaMode: "lead" | "cerere" | "property" = isPropertyLead
@@ -723,12 +728,8 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
         </div>
         )}
 
-        {/* Footer Status & Actions */}
-        <div className="px-4 py-3 bg-white border border-gray-200 rounded-xl flex flex-wrap items-center justify-between gap-2 shadow-2xs">
-          <span className="text-[11px] text-gray-400 font-semibold">
-            Status: <span className="text-gray-700 font-normal">{lead.status === "ListaMea" || lead.status === "Noi" ? "Noi" : lead.status}</span>
-          </span>
-
+        {/* Footer Actions */}
+        <div className="px-4 py-3 bg-white border border-gray-200 rounded-xl flex flex-wrap items-center justify-end gap-2 shadow-2xs">
           <div className="flex items-center gap-2 flex-wrap">
             {isPropertyLead && activePhotos.length > 0 && lead.id && (
               <button
@@ -748,7 +749,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
               </button>
             )}
 
-            {!isCerere && lead.status !== "ListaMea" && onAddToMyList && lead.id && (
+            {isUnprocessed && onAddToMyList && lead.id && (
               <button
                 type="button"
                 disabled={addingToMyList}
@@ -768,7 +769,31 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 ) : (
                   <Bookmark size={12} className="text-[#BE9662]" />
                 )}
-                <span>{addingToMyList ? "Se adaugă..." : "Adaugă în Noi"}</span>
+                <span>{addingToMyList ? "Se procesează..." : "Procesează"}</span>
+              </button>
+            )}
+
+            {!isCerere && onConvertToCerere && lead.id && (
+              <button
+                type="button"
+                disabled={convertingToCerere}
+                onClick={async () => {
+                  setConvertingToCerere(true);
+                  try {
+                    await onConvertToCerere(lead.id!);
+                    onBack();
+                  } finally {
+                    setConvertingToCerere(false);
+                  }
+                }}
+                className="h-8 px-3 rounded-md bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 disabled:opacity-60 shadow-2xs"
+              >
+                {convertingToCerere ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <ClipboardList size={12} />
+                )}
+                <span>{convertingToCerere ? "Se transformă..." : "Transformă în Cerere"}</span>
               </button>
             )}
 
@@ -794,7 +819,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 }}
                 className="h-8 px-3 rounded-md border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition-colors cursor-pointer"
               >
-                Reactivează în Noi
+                Reactivează în Procesate
               </button>
             )}
 
@@ -803,7 +828,7 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(true)}
-                  className="h-8 px-3 rounded-md border border-gray-200 bg-white hover:bg-red-50 hover:border-red-200 text-gray-600 hover:text-red-700 text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1"
+                  className="h-8 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
                 >
                   <Trash2 size={12} />
                   <span>Șterge</span>
@@ -837,15 +862,6 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
                 </div>
               )
             )}
-
-            <button
-              type="button"
-              onClick={onBack}
-              className="h-8 px-3 border border-gray-200 text-gray-700 hover:text-gray-900 hover:bg-gray-50 rounded-md transition-colors cursor-pointer text-xs font-medium flex items-center gap-1"
-            >
-              <ChevronLeft size={13} />
-              <span>Înapoi la listă</span>
-            </button>
           </div>
         </div>
       </div>

@@ -369,7 +369,229 @@ async function runTests() {
     }
   }
 
-  console.log("=== All Storia All-Photos & Watermark Regeneration Tests PASSED ===");
+  // Helper to stamp multi-word bitmap text at arbitrary coordinates on an 800x600 image
+  const drawTextStamp = (
+    imageObj: any,
+    text: string,
+    startX: number,
+    startY: number,
+    scale: number,
+    alpha: number,
+    colorVal: number = 255
+  ) => {
+    const glyphMap: Record<string, string[]> = {
+      I: ["0111110", "0001100", "0001100", "0001100", "0001100", "0001100", "0001100", "0111110"],
+      O: ["0111110", "1100011", "1100011", "1100011", "1100011", "1100011", "1100011", "0111110"],
+      N: ["1100011", "1110011", "1111011", "1101111", "1100111", "1100011", "1100011", "1100011"],
+      P: ["1111110", "1100011", "1100011", "1111110", "1100000", "1100000", "1100000", "1100000"],
+      E: ["1111111", "1100000", "1100000", "1111110", "1100000", "1100000", "1100000", "1111111"],
+      S: ["0111110", "1100001", "1100000", "0111100", "0000110", "0000011", "1000011", "0111110"],
+      C: ["0111110", "1100011", "1100000", "1100000", "1100000", "1100000", "1100011", "0111110"],
+      U: ["1100011", "1100011", "1100011", "1100011", "1100011", "1100011", "1100011", "0111110"],
+      " ": ["0000000", "0000000", "0000000", "0000000", "0000000", "0000000", "0000000", "0000000"],
+    };
+    const w = imageObj.width;
+    const h = imageObj.height;
+    const data = imageObj.bitmap.data;
+    let cursorX = startX;
+    for (const ch of text) {
+      const g = glyphMap[ch];
+      if (!g) {
+        cursorX += 5 * scale;
+        continue;
+      }
+      if (ch === " ") {
+        cursorX += 5 * scale;
+        continue;
+      }
+      for (let gy = 0; gy < g.length; gy++) {
+        for (let gx = 0; gx < g[gy].length; gx++) {
+          if (g[gy][gx] !== "1") continue;
+          for (let sy = 0; sy < scale; sy++) {
+            for (let sx = 0; sx < scale; sx++) {
+              const px = cursorX + gx * scale + sx;
+              const py = startY + gy * scale + sy;
+              if (px < 0 || px >= w || py < 0 || py >= h) continue;
+              const idx = (py * w + px) * 4;
+              data[idx] = Math.round(data[idx] * (1 - alpha) + colorVal * alpha);
+              data[idx + 1] = Math.round(data[idx + 1] * (1 - alpha) + colorVal * alpha);
+              data[idx + 2] = Math.round(data[idx + 2] * (1 - alpha) + colorVal * alpha);
+            }
+          }
+        }
+      }
+      cursorX += 8 * scale;
+    }
+    return { startX, startY, w: cursorX - startX - scale, h: 8 * scale };
+  };
+
+  const createCleanGradientImage = () => {
+    const w = 800;
+    const h = 600;
+    const img = new Jimp({ width: w, height: h, color: 0x3b4a5aff });
+    const data = img.bitmap.data;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const idx = (y * w + x) * 4;
+        data[idx] = Math.round(70 + (x / w) * 45);
+        data[idx + 1] = Math.round(78 + (y / h) * 35);
+        data[idx + 2] = Math.round(88 + ((x + y) / (w + h)) * 30);
+        data[idx + 3] = 255;
+      }
+    }
+    return img;
+  };
+
+  const sampleRegionPeak = (imageObj: any, x0: number, y0: number, w: number, h: number) => {
+    let maxLuma = 0;
+    const d = imageObj.bitmap.data;
+    const imgW = imageObj.width;
+    for (let y = y0; y < y0 + h; y++) {
+      for (let x = x0; x < x0 + w; x++) {
+        const idx = (y * imgW + x) * 4;
+        const l = 0.299 * d[idx] + 0.587 * d[idx + 1] + 0.114 * d[idx + 2];
+        if (l > maxLuma) maxLuma = l;
+      }
+    }
+    return maxLuma;
+  };
+
+  // Test 6: Up to 9 multi-word owner-name texts (4 corners + top/bottom center + middle-left/right + center)
+  for (const aggressiveMode of [true, false]) {
+    const img = createCleanGradientImage();
+    const stampW = 110;
+    const stampH = 16;
+    const positions = [
+      { label: "top-left", x: 24, y: 20 },
+      { label: "top-center", x: Math.round((800 - stampW) / 2), y: 20 },
+      { label: "top-right", x: 800 - stampW - 24, y: 20 },
+      { label: "middle-left", x: 24, y: Math.round((600 - stampH) / 2) },
+      { label: "center", x: Math.round((800 - stampW) / 2), y: Math.round((600 - stampH) / 2) },
+      { label: "middle-right", x: 800 - stampW - 24, y: Math.round((600 - stampH) / 2) },
+      { label: "bottom-left", x: 24, y: 600 - stampH - 20 },
+      { label: "bottom-center", x: Math.round((800 - stampW) / 2), y: 600 - stampH - 20 },
+      { label: "bottom-right", x: 800 - stampW - 24, y: 600 - stampH - 20 },
+    ];
+
+    const stampedRects = positions.map((p) => ({
+      ...p,
+      rect: drawTextStamp(img, "ION POP", p.x, p.y, 2, 0.42, 255),
+    }));
+
+    const peaksBefore = stampedRects.map((s) => sampleRegionPeak(img, s.rect.startX, s.rect.startY, s.rect.w, s.rect.h));
+    // Clean pixel away from all 9 stamps
+    const cleanPixelBefore = [img.bitmap.data[(160 * 800 + 220) * 4], img.bitmap.data[(160 * 800 + 220) * 4 + 1]];
+
+    const boxes = detectLogoBoxes(img, { aggressive: aggressiveMode });
+    assert.ok(
+      boxes.length >= 9,
+      `Expected >= 9 boxes for 9-position owner-name grid (aggressive=${aggressiveMode}), found ${boxes.length}`
+    );
+
+    for (const box of boxes) {
+      inpaintLogoBox(img, box, { pad: aggressiveMode ? 5 : 3 });
+    }
+
+    stampedRects.forEach((s, idx) => {
+      const peakAfter = sampleRegionPeak(img, s.rect.startX, s.rect.startY, s.rect.w, s.rect.h);
+      assert.ok(
+        peakAfter < peaksBefore[idx] - 18,
+        `Expected ${s.label} text to be cleanly inpainted (aggressive=${aggressiveMode}, before=${peaksBefore[idx].toFixed(1)}, after=${peakAfter.toFixed(1)})`
+      );
+    });
+
+    const cleanPixelAfter = [img.bitmap.data[(160 * 800 + 220) * 4], img.bitmap.data[(160 * 800 + 220) * 4 + 1]];
+    assert.deepStrictEqual(cleanPixelAfter, cleanPixelBefore, "Expected clean background outside the 9 texts to remain untouched");
+    console.log(`PASS [6/${aggressiveMode ? "agg" : "std"}] All 9 multi-word owner-name texts (4 corners, horizontal/vertical edge middles, center) detected and inpainted`);
+  }
+
+  // Test 7: Big Storia logo (bottom-right) + 8 other owner-name texts on the same image
+  {
+    const { img } = await createSyntheticWatermarkedPng(true);
+    const ownerPositions = [
+      { label: "top-left", x: 24, y: 20 },
+      { label: "top-center", x: 345, y: 20 },
+      { label: "top-right", x: 660, y: 20 },
+      { label: "middle-left", x: 24, y: 292 },
+      { label: "center", x: 345, y: 292 },
+      { label: "middle-right", x: 660, y: 292 },
+      { label: "bottom-left", x: 24, y: 560 },
+      { label: "bottom-center", x: 345, y: 560 },
+    ];
+    const rects = ownerPositions.map((p) => ({
+      ...p,
+      rect: drawTextStamp(img, "ION POP", p.x, p.y, 2, 0.45, 255),
+    }));
+    const storiaPeakBefore = sampleRegionPeak(img, 590, 540, 170, 40);
+    const ownerPeaksBefore = rects.map((r) => sampleRegionPeak(img, r.rect.startX, r.rect.startY, r.rect.w, r.rect.h));
+
+    const boxes = detectLogoBoxes(img, { aggressive: true });
+    assert.ok(boxes.length >= 9, `Expected >= 9 boxes (Storia logo + 8 owner texts), got ${boxes.length}`);
+    for (const box of boxes) {
+      inpaintLogoBox(img, box, { pad: 5 });
+    }
+
+    const storiaPeakAfter = sampleRegionPeak(img, 590, 540, 170, 40);
+    assert.ok(storiaPeakAfter < storiaPeakBefore - 15, "Expected Storia logo to still be cleanly removed");
+    rects.forEach((r, idx) => {
+      const after = sampleRegionPeak(img, r.rect.startX, r.rect.startY, r.rect.w, r.rect.h);
+      assert.ok(after < ownerPeaksBefore[idx] - 18, `Expected ${r.label} owner text to be removed alongside Storia logo`);
+    });
+    console.log("PASS [7] Combined big Storia logo + 8 owner-name texts all detected and inpainted");
+  }
+
+  // Test 8: Partial grid (6 perimeter owner texts, NO center text) leaves center pixel 100% untouched
+  {
+    const img = createCleanGradientImage();
+    const partialPositions = [
+      { x: 24, y: 20 },
+      { x: 660, y: 20 },
+      { x: 24, y: 292 },
+      { x: 660, y: 292 },
+      { x: 24, y: 560 },
+      { x: 660, y: 560 },
+    ];
+    for (const p of partialPositions) {
+      drawTextStamp(img, "ION POP", p.x, p.y, 2, 0.45, 255);
+    }
+    const centerBefore = [img.bitmap.data[(300 * 800 + 400) * 4], img.bitmap.data[(300 * 800 + 400) * 4 + 1]];
+    const boxes = detectLogoBoxes(img, { aggressive: true });
+    assert.strictEqual(boxes.length, 6, `Expected exactly 6 boxes for 6-stamp partial grid, got ${boxes.length}`);
+    for (const box of boxes) {
+      inpaintLogoBox(img, box, { pad: 5 });
+    }
+    const centerAfter = [img.bitmap.data[(300 * 800 + 400) * 4], img.bitmap.data[(300 * 800 + 400) * 4 + 1]];
+    assert.deepStrictEqual(centerAfter, centerBefore, "Expected empty center slot to remain 100% untouched");
+    console.log("PASS [8] Partial 6-stamp grid removes all 6 texts without false-positiving on empty center");
+  }
+
+  // Test 9: Clean interior photo with window blinds + vertical wall edges yields 0 false positives
+  {
+    const img = createCleanGradientImage();
+    const d = img.bitmap.data;
+    // Draw horizontal blinds in center-top and vertical doorframe on left edge
+    for (let y = 120; y < 260; y += 10) {
+      for (let x = 250; x < 550; x++) {
+        const idx = (y * 800 + x) * 4;
+        d[idx] = 230;
+        d[idx + 1] = 230;
+        d[idx + 2] = 230;
+      }
+    }
+    for (let y = 0; y < 600; y++) {
+      for (let x = 35; x < 41; x++) {
+        const idx = (y * 800 + x) * 4;
+        d[idx] = 235;
+        d[idx + 1] = 235;
+        d[idx + 2] = 235;
+      }
+    }
+    const boxes = detectLogoBoxes(img, { aggressive: true });
+    assert.strictEqual(boxes.length, 0, `Expected 0 false positives on clean interior blinds/doorframe, got ${boxes.length}`);
+    console.log("PASS [9] Clean interior blinds & wall edges produce 0 false positives");
+  }
+
+  console.log("=== All Storia & 9-Position Owner Watermark Tests PASSED ===");
 }
 
 runTests().catch((err) => {

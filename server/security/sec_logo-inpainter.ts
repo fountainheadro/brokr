@@ -9,8 +9,15 @@ export interface DetectLogoOptions {
   aggressive?: boolean;
 }
 
+type GridRow = 0 | 1 | 2;
+type GridCol = 0 | 1 | 2;
+type MaskPolarity = "light" | "dark";
+type MaskTier = "whiteCore" | "brightOverlay" | "crisp" | "medium" | "softTranslucent";
+
 interface RoisSpec {
   name: string;
+  row: GridRow;
+  col: GridCol;
   x0: number;
   y0: number;
   x1: number;
@@ -20,15 +27,39 @@ interface RoisSpec {
   innerTop: boolean;
   innerBottom: boolean;
   strictZone: boolean;
+  isCenter?: boolean;
+}
+
+interface RawComponent {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  fgCount: number;
+  gradXSum: number;
+  gradYSum: number;
+  wordCount: number;
+}
+
+interface DetectedWorkBox {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  row: GridRow;
+  col: GridCol;
+  polarity: MaskPolarity;
+  tier: MaskTier;
 }
 
 /**
- * Deterministic (non-AI) logo / watermark detector.
- * Scans outer margin/corner ROIs at a normalized working resolution (~1000px long edge),
- * evaluates multi-tier local-contrast stroke masks (separating crisp white watermarks,
- * translucent light marks, and dark/colored logos so background textures like brick/grass/tiles
- * do not bridge into letters), groups horizontally with tight dilation (dx=2, dy=0),
- * and strictly verifies dimensions, 2D edge sharpness, stroke complexity, continuity, and halo.
+ * Deterministic (non-AI) logo & owner-name text watermark detector.
+ * Scans all 9 grid zones (4 corners, top/bottom center, middle-left/middle-right edges,
+ * and center) at a normalized working resolution (~1000px long edge).
+ * Evaluates multi-tier local-contrast stroke masks, groups same-line multi-word owner names
+ * (e.g. "ION POPESCU") without bridging vertical background textures, supports repeated
+ * 3x3 grid corroboration (including center and faint/busy-background grid slots), and
+ * strictly verifies dimensions, 2D edge sharpness, stroke complexity, continuity, and halo.
  */
 export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBox[] {
   const aggressive = Boolean(options?.aggressive);
@@ -107,9 +138,18 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
 
   const cornerW = Math.round(workW * (aggressive ? 0.40 : 0.36));
   const cornerH = Math.round(workH * (aggressive ? 0.26 : 0.23));
-  const rois: RoisSpec[] = [
+  const sideW = Math.round(workW * (aggressive ? 0.38 : 0.34));
+  const midY0 = Math.round(workH * 0.27);
+  const midY1 = Math.round(workH * 0.73);
+  const centerX0 = Math.round(workW * 0.25);
+  const centerX1 = Math.round(workW * 0.75);
+
+  // Full 3x3 watermark grid: 8 perimeter ROIs + 1 center ROI (up to 9 positions)
+  const perimeterRois: RoisSpec[] = [
     {
       name: "bottom-left",
+      row: 2,
+      col: 0,
       x0: 0,
       y0: workH - cornerH,
       x1: cornerW,
@@ -122,6 +162,8 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
     },
     {
       name: "bottom-right",
+      row: 2,
+      col: 2,
       x0: workW - cornerW,
       y0: workH - cornerH,
       x1: workW,
@@ -134,9 +176,11 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
     },
     {
       name: "bottom-center",
-      x0: Math.round(workW * 0.28),
-      y0: workH - Math.round(workH * 0.21),
-      x1: Math.round(workW * 0.72),
+      row: 2,
+      col: 1,
+      x0: centerX0,
+      y0: workH - Math.round(workH * 0.22),
+      x1: centerX1,
       y1: workH,
       innerLeft: true,
       innerRight: true,
@@ -146,6 +190,8 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
     },
     {
       name: "top-left",
+      row: 0,
+      col: 0,
       x0: 0,
       y0: 0,
       x1: cornerW,
@@ -158,6 +204,8 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
     },
     {
       name: "top-right",
+      row: 0,
+      col: 2,
       x0: workW - cornerW,
       y0: 0,
       x1: workW,
@@ -170,19 +218,67 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
     },
     {
       name: "top-center",
-      x0: Math.round(workW * 0.28),
+      row: 0,
+      col: 1,
+      x0: centerX0,
       y0: 0,
-      x1: Math.round(workW * 0.72),
-      y1: Math.round(workH * 0.20),
+      x1: centerX1,
+      y1: Math.round(workH * 0.21),
       innerLeft: true,
       innerRight: true,
       innerTop: false,
       innerBottom: true,
       strictZone: true,
     },
+    {
+      name: "middle-left",
+      row: 1,
+      col: 0,
+      x0: 0,
+      y0: midY0,
+      x1: sideW,
+      y1: midY1,
+      innerLeft: false,
+      innerRight: true,
+      innerTop: true,
+      innerBottom: true,
+      strictZone: false,
+    },
+    {
+      name: "middle-right",
+      row: 1,
+      col: 2,
+      x0: workW - sideW,
+      y0: midY0,
+      x1: workW,
+      y1: midY1,
+      innerLeft: true,
+      innerRight: false,
+      innerTop: true,
+      innerBottom: true,
+      strictZone: false,
+    },
   ];
 
-  // Multi-tier stroke masks prevent bright/textured backgrounds from welding onto crisp vector logos
+  const centerRoi: RoisSpec = {
+    name: "center",
+    row: 1,
+    col: 1,
+    x0: centerX0,
+    y0: midY0,
+    x1: centerX1,
+    y1: midY1,
+    innerLeft: true,
+    innerRight: true,
+    innerTop: true,
+    innerBottom: true,
+    strictZone: true,
+    isCenter: true,
+  };
+
+  const allRois: RoisSpec[] = [...perimeterRois, centerRoi];
+
+  // Multi-tier stroke masks prevent bright/textured backgrounds from welding onto crisp vector logos or text
   const ultraWhiteMask = new Uint8Array(totalPixels);
   const whiteCoreMask = new Uint8Array(totalPixels);
   const brightOverlayMask = new Uint8Array(totalPixels);
@@ -191,8 +287,8 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
   const crispDarkMask = new Uint8Array(totalPixels);
   const medLightMask = new Uint8Array(totalPixels);
   const medDarkMask = new Uint8Array(totalPixels);
-  const softTranslucentLightMask = aggressive ? new Uint8Array(totalPixels) : null;
-  const softTranslucentDarkMask = aggressive ? new Uint8Array(totalPixels) : null;
+  const softTranslucentLightMask = new Uint8Array(totalPixels);
+  const softTranslucentDarkMask = new Uint8Array(totalPixels);
   const computedMask = new Uint8Array(totalPixels);
   const gradXArr = new Float32Array(totalPixels);
   const gradYArr = new Float32Array(totalPixels);
@@ -201,11 +297,11 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
   const radiusWide = 16;
   const roiMargin = 16;
 
-  for (const roi of rois) {
-    const ex0 = Math.max(0, roi.x0 - roiMargin);
-    const ey0 = Math.max(0, roi.y0 - roiMargin);
-    const ex1 = Math.min(workW, roi.x1 + roiMargin);
-    const ey1 = Math.min(workH, roi.y1 + roiMargin);
+  const ensureFeaturesComputed = (x0: number, y0: number, x1: number, y1: number) => {
+    const ex0 = Math.max(0, x0 - roiMargin);
+    const ey0 = Math.max(0, y0 - roiMargin);
+    const ex1 = Math.min(workW, x1 + roiMargin);
+    const ey1 = Math.min(workH, y1 + roiMargin);
 
     for (let y = ey0; y < ey1; y++) {
       const ny0 = Math.max(0, y - radius);
@@ -273,28 +369,77 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
         if ((-lumaDiff >= 22 && (grad >= 12 || -lumaDiff >= 34)) || (colorDiff >= 64 && grad >= 14)) {
           medDarkMask[idx] = 1;
         }
-        if (softTranslucentLightMask && luma >= 150 && wideLumaDiff >= 9 && (grad >= 6 || wideLumaDiff >= 14)) {
+        if (luma >= 115 && wideLumaDiff >= 8.5 && (grad >= 5.5 || wideLumaDiff >= 13)) {
           softTranslucentLightMask[idx] = 1;
         }
-        if (softTranslucentDarkMask && luma <= 120 && -wideLumaDiff >= 11 && (grad >= 6 || -wideLumaDiff >= 16)) {
+        if (luma <= 215 && -wideLumaDiff >= 10 && (grad >= 5.5 || -wideLumaDiff >= 15)) {
           softTranslucentDarkMask[idx] = 1;
         }
       }
     }
+  };
+
+  for (const roi of allRois) {
+    ensureFeaturesComputed(roi.x0, roi.y0, roi.x1, roi.y1);
   }
 
-  const minLogoW = Math.max(aggressive ? 36 : 44, Math.round(workW * (aggressive ? 0.045 : 0.06)));
-  const maxLogoW = Math.min(aggressive ? 420 : 380, Math.round(workW * (aggressive ? 0.42 : 0.38)));
-  const minLogoH = aggressive ? 10 : 12;
+  const minLogoW = Math.max(aggressive ? 28 : 34, Math.round(workW * (aggressive ? 0.032 : 0.040)));
+  const maxLogoW = Math.min(aggressive ? 440 : 400, Math.round(workW * (aggressive ? 0.44 : 0.40)));
+  const minLogoH = aggressive ? 8 : 9;
   const maxLogoH = Math.min(aggressive ? 110 : 90, Math.round(workH * (aggressive ? 0.17 : 0.14)));
   const maxLogoArea = workW * workH * (aggressive ? 0.045 : 0.035);
 
-  const workBoxes: Array<{ minX: number; minY: number; maxX: number; maxY: number }> = [];
+  const workBoxes: DetectedWorkBox[] = [];
+  const softGridCandidates: DetectedWorkBox[] = [];
+
+  const addOrMergeIntoList = (list: DetectedWorkBox[], candidate: DetectedWorkBox) => {
+    const h = candidate.maxY - candidate.minY + 1;
+    const existingIdx = list.findIndex((b) => {
+      const overlaps = !(
+        candidate.maxX + 4 < b.minX ||
+        candidate.minX - 4 > b.maxX ||
+        candidate.maxY + 4 < b.minY ||
+        candidate.minY - 4 > b.maxY
+      );
+      if (overlaps) return true;
+      const vertOverlap = Math.min(candidate.maxY, b.maxY) - Math.max(candidate.minY, b.minY);
+      const sameLine = vertOverlap >= Math.min(h, b.maxY - b.minY + 1) * 0.5;
+      const horizGap = Math.max(0, Math.max(candidate.minX - b.maxX, b.minX - candidate.maxX));
+      return sameLine && horizGap <= 18;
+    });
+
+    if (existingIdx !== -1) {
+      const b = list[existingIdx];
+      const mergedMinX = Math.min(b.minX, candidate.minX);
+      const mergedMinY = Math.min(b.minY, candidate.minY);
+      const mergedMaxX = Math.max(b.maxX, candidate.maxX);
+      const mergedMaxY = Math.max(b.maxY, candidate.maxY);
+      if (mergedMaxX - mergedMinX + 1 <= maxLogoW && mergedMaxY - mergedMinY + 1 <= maxLogoH) {
+        b.minX = mergedMinX;
+        b.minY = mergedMinY;
+        b.maxX = mergedMaxX;
+        b.maxY = mergedMaxY;
+      }
+    } else {
+      list.push(candidate);
+    }
+  };
+
+  interface ScanOptions {
+    targetList: DetectedWorkBox[];
+    polarity: MaskPolarity;
+    relaxedForGrid?: {
+      expectedW: number;
+      expectedH: number;
+    };
+    verticalText?: boolean;
+  }
 
   const scanRoiWithMask = (
     roi: RoisSpec,
     fgMask: Uint8Array,
-    tier: "whiteCore" | "brightOverlay" | "crisp" | "medium" | "softTranslucent"
+    tier: MaskTier,
+    scanOpts: ScanOptions
   ) => {
     const ex0 = Math.max(0, roi.x0 - roiMargin);
     const ey0 = Math.max(0, roi.y0 - roiMargin);
@@ -304,18 +449,36 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
     const rh = ey1 - ey0;
     if (rw <= 0 || rh <= 0) return;
 
-    // Horizontal-only glyph grouping joins side-by-side characters/icons without vertical bridges
+    const isVertical = Boolean(scanOpts.verticalText);
     const dil = new Uint8Array(rw * rh);
-    const dxPad = tier === "whiteCore" || tier === "brightOverlay" || tier === "softTranslucent" ? 3 : 2;
-    for (let ly = 0; ly < rh; ly++) {
-      const gy = ey0 + ly;
-      for (let lx = 0; lx < rw; lx++) {
-        if (fgMask[gy * workW + ex0 + lx] === 1) {
-          const xA = Math.max(0, lx - dxPad);
-          const xB = Math.min(rw - 1, lx + dxPad);
-          const off = ly * rw;
-          for (let xx = xA; xx <= xB; xx++) {
-            dil[off + xx] = 1;
+    const padSpan = tier === "whiteCore" || tier === "brightOverlay" || tier === "softTranslucent" ? 3 : 2;
+
+    if (isVertical) {
+      // Vertical-only glyph grouping for 90-degree rotated edge owner-name texts
+      for (let ly = 0; ly < rh; ly++) {
+        const gy = ey0 + ly;
+        for (let lx = 0; lx < rw; lx++) {
+          if (fgMask[gy * workW + ex0 + lx] === 1) {
+            const yA = Math.max(0, ly - padSpan);
+            const yB = Math.min(rh - 1, ly + padSpan);
+            for (let yy = yA; yy <= yB; yy++) {
+              dil[yy * rw + lx] = 1;
+            }
+          }
+        }
+      }
+    } else {
+      // Horizontal-only glyph grouping joins side-by-side characters/icons without vertical bridges
+      for (let ly = 0; ly < rh; ly++) {
+        const gy = ey0 + ly;
+        for (let lx = 0; lx < rw; lx++) {
+          if (fgMask[gy * workW + ex0 + lx] === 1) {
+            const xA = Math.max(0, lx - padSpan);
+            const xB = Math.min(rw - 1, lx + padSpan);
+            const off = ly * rw;
+            for (let xx = xA; xx <= xB; xx++) {
+              dil[off + xx] = 1;
+            }
           }
         }
       }
@@ -324,6 +487,8 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
     const visited = new Uint8Array(rw * rh);
     const queueX = new Int32Array(rw * rh);
     const queueY = new Int32Array(rw * rh);
+
+    const atomicComponents: RawComponent[] = [];
 
     for (let ly = 0; ly < rh; ly++) {
       for (let lx = 0; lx < rw; lx++) {
@@ -381,8 +546,7 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
           }
         }
 
-        const minFgCount = tier === "softTranslucent" ? 65 : aggressive ? 75 : 95;
-        if (fgCount < minFgCount || maxX < minX || maxY < minY) continue;
+        if (fgCount < 10 || maxX < minX || maxY < minY) continue;
 
         // Reject structures extending beyond the ROI interior edges (walls, radiators, furniture)
         if (roi.innerTop && minY <= ey0 + 2) continue;
@@ -390,70 +554,256 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
         if (roi.innerLeft && minX <= ex0 + 2) continue;
         if (roi.innerRight && maxX >= ex1 - 3) continue;
 
-        const centerX = (minX + maxX) * 0.5;
-        const centerY = (minY + maxY) * 0.5;
-        if (centerX < roi.x0 || centerX >= roi.x1 || centerY < roi.y0 || centerY >= roi.y1) continue;
-
         const w = maxX - minX + 1;
         const h = maxY - minY + 1;
-        const area = w * h;
+        if (isVertical) {
+          if (w > maxLogoH || h > maxLogoW || w < 5 || h < 5) continue;
+        } else {
+          if (w > maxLogoW || h > maxLogoH || w < 4 || h < 5) continue;
+        }
 
-        if (w < minLogoW || w > maxLogoW || h < minLogoH || h > maxLogoH) continue;
-        if (area > maxLogoArea) continue;
-        const aspect = w / h;
-        const minAspect = aggressive ? 1.15 : 1.35;
-        const maxAspect = aggressive ? 13.5 : 12.0;
-        if (aspect < minAspect || aspect > maxAspect) continue;
+        atomicComponents.push({
+          minX,
+          minY,
+          maxX,
+          maxY,
+          fgCount,
+          gradXSum,
+          gradYSum,
+          wordCount: 1,
+        });
+      }
+    }
 
-        // Watermarks have visual breathing margin; reject tall dark/scene edges flush against frame boundary
-        const touchesOuterFrameEdge = minX <= 1 || maxX >= workW - 2 || minY <= 1 || maxY >= workH - 2;
-        if (touchesOuterFrameEdge && h > 42) continue;
+    if (atomicComponents.length === 0) return;
 
-        // Enforce outer margin/corner band placement so interior ceiling fixtures/blinds/railings never false-positive
-        const nearBottomEdge = maxY >= workH - Math.round(workH * (aggressive ? 0.20 : 0.14));
-        const nearTopCorner =
-          minY <= Math.round(workH * (aggressive ? 0.16 : 0.12)) &&
+    // Group adjacent words on the same baseline (e.g., "ION POPESCU", "MARIA IONESCU") before full validation
+    const candidates: RawComponent[] = [];
+    if (isVertical) {
+      atomicComponents.sort((a, b) => a.minY - b.minY || a.minX - b.minX);
+      for (const comp of atomicComponents) {
+        const ch = comp.maxY - comp.minY + 1;
+        const cw = comp.maxX - comp.minX + 1;
+        const matchIdx = candidates.findIndex((g) => {
+          const gw = g.maxX - g.minX + 1;
+          const horizOverlap = Math.min(comp.maxX, g.maxX) - Math.max(comp.minX, g.minX) + 1;
+          if (horizOverlap < Math.min(cw, gw) * 0.45) return false;
+          const gap = comp.minY - g.maxY;
+          const maxGap = Math.max(10, Math.min(24, Math.round(Math.max(cw, gw) * 1.15)));
+          if (gap < -4 || gap > maxGap) return false;
+          if (gap > 5 && Math.min(cw, gw) < Math.max(cw, gw) * 0.48) return false;
+          const nextH = Math.max(g.maxY, comp.maxY) - Math.min(g.minY, comp.minY) + 1;
+          const nextW = Math.max(g.maxX, comp.maxX) - Math.min(g.minX, comp.minX) + 1;
+          return nextH <= maxLogoW && nextW <= maxLogoH && ch >= 5;
+        });
+
+        if (matchIdx !== -1) {
+          const g = candidates[matchIdx];
+          g.minX = Math.min(g.minX, comp.minX);
+          g.minY = Math.min(g.minY, comp.minY);
+          g.maxX = Math.max(g.maxX, comp.maxX);
+          g.maxY = Math.max(g.maxY, comp.maxY);
+          g.fgCount += comp.fgCount;
+          g.gradXSum += comp.gradXSum;
+          g.gradYSum += comp.gradYSum;
+          g.wordCount += 1;
+        } else {
+          candidates.push({ ...comp });
+        }
+      }
+    } else {
+      atomicComponents.sort((a, b) => a.minX - b.minX || a.minY - b.minY);
+      for (const comp of atomicComponents) {
+        const ch = comp.maxY - comp.minY + 1;
+        const matchIdx = candidates.findIndex((g) => {
+          const gh = g.maxY - g.minY + 1;
+          const vertOverlap = Math.min(comp.maxY, g.maxY) - Math.max(comp.minY, g.minY) + 1;
+          if (vertOverlap < Math.min(ch, gh) * 0.45) return false;
+          const gap = comp.minX - g.maxX;
+          const maxGap = Math.max(11, Math.min(26, Math.round(Math.max(ch, gh) * 1.15)));
+          if (gap < -4 || gap > maxGap) return false;
+          if (gap > 5 && Math.min(ch, gh) < Math.max(ch, gh) * 0.48) return false;
+          const nextW = Math.max(g.maxX, comp.maxX) - Math.min(g.minX, comp.minX) + 1;
+          const nextH = Math.max(g.maxY, comp.maxY) - Math.min(g.minY, comp.minY) + 1;
+          return nextW <= maxLogoW && nextH <= maxLogoH;
+        });
+
+        if (matchIdx !== -1) {
+          const g = candidates[matchIdx];
+          g.minX = Math.min(g.minX, comp.minX);
+          g.minY = Math.min(g.minY, comp.minY);
+          g.maxX = Math.max(g.maxX, comp.maxX);
+          g.maxY = Math.max(g.maxY, comp.maxY);
+          g.fgCount += comp.fgCount;
+          g.gradXSum += comp.gradXSum;
+          g.gradYSum += comp.gradYSum;
+          g.wordCount += 1;
+        } else {
+          candidates.push({ ...comp });
+        }
+      }
+    }
+
+    const gridMatch = scanOpts.relaxedForGrid;
+
+    for (const cand of candidates) {
+      const { minX, minY, maxX, maxY, fgCount, gradXSum, gradYSum, wordCount } = cand;
+      const w = maxX - minX + 1;
+      const h = maxY - minY + 1;
+      const area = w * h;
+
+      const primarySpan = isVertical ? h : w;
+      const thicknessSpan = isVertical ? w : h;
+
+      const baseMinFg = tier === "softTranslucent" ? 60 : aggressive ? 70 : 90;
+      const scaledMinFg = gridMatch
+        ? Math.max(24, Math.min(55, Math.round(thicknessSpan * 3.2)))
+        : Math.max(aggressive ? 36 : 44, Math.min(baseMinFg, Math.round(thicknessSpan * 4.5)));
+      if (fgCount < scaledMinFg) continue;
+
+      const centerX = (minX + maxX) * 0.5;
+      const centerY = (minY + maxY) * 0.5;
+      if (centerX < roi.x0 || centerX >= roi.x1 || centerY < roi.y0 || centerY >= roi.y1) continue;
+
+      if (gridMatch) {
+        if (
+          w < Math.max(20, gridMatch.expectedW * 0.48) ||
+          w > Math.min(maxLogoW, gridMatch.expectedW * 1.65) ||
+          h < Math.max(6, gridMatch.expectedH * 0.48) ||
+          h > Math.min(maxLogoH, gridMatch.expectedH * 1.65)
+        ) {
+          continue;
+        }
+      } else {
+        if (
+          primarySpan < minLogoW ||
+          primarySpan > maxLogoW ||
+          thicknessSpan < minLogoH ||
+          thicknessSpan > maxLogoH
+        ) {
+          continue;
+        }
+      }
+      if (area > maxLogoArea) continue;
+
+      const aspect = primarySpan / thicknessSpan;
+      const minAspect = isVertical ? 1.55 : gridMatch ? 1.10 : aggressive ? 1.15 : 1.35;
+      const maxAspect = aggressive || gridMatch ? 15.0 : 13.5;
+      if (aspect < minAspect || aspect > maxAspect) continue;
+
+      // Watermarks have visual breathing margin; reject tall scene edges flush against frame boundary
+      const touchesOuterFrameEdge = minX <= 1 || maxX >= workW - 2 || minY <= 1 || maxY >= workH - 2;
+      if (touchesOuterFrameEdge && thicknessSpan > 42) continue;
+
+      // Enforce outer margin/corner/middle-edge band placement unless scanning corroborated/strict center
+      if (!roi.isCenter && !gridMatch) {
+        const nearBottomEdge = maxY >= workH - Math.round(workH * (aggressive ? 0.21 : 0.16));
+        const nearTopEdge =
+          minY <= Math.round(workH * (aggressive ? 0.18 : 0.14)) &&
           (roi.strictZone
-            ? minY <= Math.round(workH * (aggressive ? 0.11 : 0.09))
-            : minX <= Math.round(workW * (aggressive ? 0.18 : 0.14)) || maxX >= workW - Math.round(workW * (aggressive ? 0.18 : 0.14)));
-        const nearSideEdge = minX <= Math.round(workW * (aggressive ? 0.12 : 0.08)) || maxX >= workW - Math.round(workW * (aggressive ? 0.12 : 0.08));
-        if (!nearBottomEdge && !nearTopCorner && !nearSideEdge) continue;
+            ? minY <= Math.round(workH * (aggressive ? 0.15 : 0.12))
+            : minX <= Math.round(workW * (aggressive ? 0.20 : 0.16)) ||
+              maxX >= workW - Math.round(workW * (aggressive ? 0.20 : 0.16)));
+        const nearSideEdge =
+          minX <= Math.round(workW * (aggressive ? 0.16 : 0.13)) ||
+          maxX >= workW - Math.round(workW * (aggressive ? 0.16 : 0.13));
+        if (!nearBottomEdge && !nearTopEdge && !nearSideEdge) continue;
+      }
 
-        const fillRatio = fgCount / area;
-        const minFill =
-          tier === "whiteCore"
-            ? 0.11
-            : tier === "softTranslucent"
-            ? 0.16
-            : tier === "brightOverlay"
-            ? 0.20
-            : 0.21;
-        if (fillRatio < minFill || fillRatio > 0.78) continue;
-
-        const meanGrad = (gradXSum + gradYSum) / fgCount;
-        const reqGrad = roi.strictZone
-          ? aggressive ? 38 : 46
+      const fillRatio = fgCount / area;
+      const baseMinFill =
+        tier === "whiteCore"
+          ? 0.11
           : tier === "softTranslucent"
-          ? 10
+          ? 0.15
           : tier === "brightOverlay"
-          ? aggressive ? 11 : 14
-          : tier === "whiteCore"
-          ? aggressive ? 32 : 40
-          : tier === "crisp"
-          ? aggressive ? 26 : 32
-          : aggressive ? 42 : 52;
-        if (meanGrad < reqGrad) continue;
-        const minAx = Math.min(gradXSum, gradYSum);
-        const maxAx = Math.max(gradXSum, gradYSum);
-        const minAxRatio = tier === "brightOverlay" ? 0.38 : tier === "softTranslucent" ? 0.30 : 0.26;
-        if (maxAx > 0 && minAx / maxAx < minAxRatio) continue;
+          ? 0.19
+          : 0.20;
+      const minFill = wordCount >= 2 ? baseMinFill * 0.78 : gridMatch ? baseMinFill * 0.75 : baseMinFill;
+      if (fillRatio < minFill || fillRatio > 0.78) continue;
 
-        let totalRowTransitions = 0;
-        let maxRowTransitions = 0;
-        let activeRows = 0;
-        let multiRows = 0;
-        const colHasFg = new Uint8Array(w);
+      const meanGrad = (gradXSum + gradYSum) / fgCount;
+      const reqGrad = gridMatch
+        ? 7.5
+        : roi.isCenter
+        ? tier === "softTranslucent"
+          ? 12
+          : aggressive
+          ? 34
+          : 44
+        : roi.strictZone
+        ? tier === "softTranslucent"
+          ? 11
+          : tier === "brightOverlay"
+          ? aggressive
+            ? 12
+            : 15
+          : aggressive
+          ? 32
+          : 42
+        : tier === "softTranslucent"
+        ? 9.5
+        : tier === "brightOverlay"
+        ? aggressive
+          ? 11
+          : 14
+        : tier === "whiteCore"
+        ? aggressive
+          ? 30
+          : 38
+        : tier === "crisp"
+        ? aggressive
+          ? 24
+          : 30
+        : aggressive
+        ? 38
+        : 48;
+      if (meanGrad < reqGrad) continue;
 
+      const minAx = Math.min(gradXSum, gradYSum);
+      const maxAx = Math.max(gradXSum, gradYSum);
+      const minAxRatio = gridMatch
+        ? 0.22
+        : roi.isCenter
+        ? 0.32
+        : isVertical
+        ? 0.30
+        : tier === "brightOverlay"
+        ? 0.36
+        : tier === "softTranslucent"
+        ? 0.28
+        : 0.25;
+      if (maxAx > 0 && minAx / maxAx < minAxRatio) continue;
+
+      // Measure stroke transitions along the reading axis & glyph clusters
+      let totalLineTransitions = 0;
+      let maxLineTransitions = 0;
+      let activeLines = 0;
+      let multiLines = 0;
+      const axisHasFg = new Uint8Array(primarySpan);
+
+      if (isVertical) {
+        for (let gx = minX; gx <= maxX; gx++) {
+          let colTransitions = 0;
+          let prev = 0;
+          let colFg = 0;
+          for (let gy = minY; gy <= maxY; gy++) {
+            const cur = fgMask[gy * workW + gx];
+            if (cur === 1) {
+              colFg++;
+              axisHasFg[gy - minY] = 1;
+              if (prev === 0) colTransitions++;
+            }
+            prev = cur;
+          }
+          if (colFg > 0) {
+            activeLines++;
+            totalLineTransitions += colTransitions;
+            if (colTransitions > maxLineTransitions) maxLineTransitions = colTransitions;
+            if (colTransitions >= 3) multiLines++;
+          }
+        }
+      } else {
         for (let gy = minY; gy <= maxY; gy++) {
           let rowTransitions = 0;
           let prev = 0;
@@ -463,134 +813,404 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
             const cur = fgMask[rowOff + gx];
             if (cur === 1) {
               rowFg++;
-              colHasFg[gx - minX] = 1;
+              axisHasFg[gx - minX] = 1;
               if (prev === 0) rowTransitions++;
             }
             prev = cur;
           }
           if (rowFg > 0) {
-            activeRows++;
-            totalRowTransitions += rowTransitions;
-            if (rowTransitions > maxRowTransitions) maxRowTransitions = rowTransitions;
-            if (rowTransitions >= 3) multiRows++;
+            activeLines++;
+            totalLineTransitions += rowTransitions;
+            if (rowTransitions > maxLineTransitions) maxLineTransitions = rowTransitions;
+            if (rowTransitions >= 3) multiLines++;
           }
-        }
-
-        let colClusters = 0;
-        let prevCol = 0;
-        for (let i = 0; i < w; i++) {
-          if (colHasFg[i] === 1 && prevCol === 0) colClusters++;
-          prevCol = colHasFg[i];
-        }
-
-        const avgTransitionsPerRow = activeRows > 0 ? totalRowTransitions / activeRows : 0;
-        const multiRowRatio = activeRows > 0 ? multiRows / activeRows : 0;
-        const reqMaxT =
-          roi.strictZone
-            ? 6
-            : tier === "softTranslucent"
-            ? 4
-            : tier === "brightOverlay"
-            ? aggressive ? 5 : 6
-            : aggressive ? 4 : 5;
-        const reqAvgT =
-          roi.strictZone
-            ? 3.4
-            : tier === "softTranslucent"
-            ? 2.4
-            : tier === "brightOverlay"
-            ? aggressive ? 3.0 : 3.8
-            : aggressive ? 2.4 : 2.8;
-        const reqMrr =
-          roi.strictZone
-            ? 0.70
-            : tier === "whiteCore"
-            ? 0.44
-            : tier === "softTranslucent"
-            ? 0.45
-            : tier === "brightOverlay"
-            ? aggressive ? 0.52 : 0.62
-            : aggressive ? 0.52 : 0.60;
-
-        if (maxRowTransitions < reqMaxT || avgTransitionsPerRow < reqAvgT || multiRowRatio < reqMrr) continue;
-        if (aspect > 1.7 && colClusters < (aggressive ? 3 : 4)) continue;
-
-        let haloTotal = 0;
-        let haloFg = 0;
-        const hx0 = Math.max(ex0, minX - 7);
-        const hx1 = Math.min(ex1 - 1, maxX + 7);
-        const hy0 = Math.max(ey0, minY - 7);
-        const hy1 = Math.min(ey1 - 1, maxY + 7);
-
-        for (let gy = hy0; gy <= hy1; gy++) {
-          const inInnerY = gy >= minY - 2 && gy <= maxY + 2;
-          const rowOff = gy * workW;
-          for (let gx = hx0; gx <= hx1; gx++) {
-            const inInnerX = gx >= minX - 2 && gx <= maxX + 2;
-            if (inInnerX && inInnerY) continue;
-            haloTotal++;
-            if (fgMask[rowOff + gx] === 1) haloFg++;
-          }
-        }
-
-        const maxHalo =
-          roi.strictZone || tier === "brightOverlay"
-            ? 0.05
-            : tier === "softTranslucent"
-            ? 0.06
-            : tier === "medium"
-            ? 0.04
-            : 0.08;
-        if (haloTotal > 20 && haloFg / haloTotal > maxHalo) continue;
-
-        // If a tight overlapping or horizontally adjacent same-baseline box exists (e.g. icon + wordmark), merge them
-        const existingIdx = workBoxes.findIndex((b) => {
-          const overlaps = !(maxX + 4 < b.minX || minX - 4 > b.maxX || maxY + 4 < b.minY || minY - 4 > b.maxY);
-          if (overlaps) return true;
-          const vertOverlap = Math.min(maxY, b.maxY) - Math.max(minY, b.minY);
-          const sameLine = vertOverlap >= Math.min(h, b.maxY - b.minY + 1) * 0.5;
-          const horizGap = Math.max(0, Math.max(minX - b.maxX, b.minX - maxX));
-          return sameLine && horizGap <= 18;
-        });
-
-        if (existingIdx !== -1) {
-          const b = workBoxes[existingIdx];
-          const mergedMinX = Math.min(b.minX, minX);
-          const mergedMinY = Math.min(b.minY, minY);
-          const mergedMaxX = Math.max(b.maxX, maxX);
-          const mergedMaxY = Math.max(b.maxY, maxY);
-          if (mergedMaxX - mergedMinX + 1 <= maxLogoW && mergedMaxY - mergedMinY + 1 <= maxLogoH) {
-            b.minX = mergedMinX;
-            b.minY = mergedMinY;
-            b.maxX = mergedMaxX;
-            b.maxY = mergedMaxY;
-          }
-        } else {
-          workBoxes.push({ minX, minY, maxX, maxY });
         }
       }
+
+      let glyphClusters = 0;
+      let prevCluster = 0;
+      for (let i = 0; i < primarySpan; i++) {
+        if (axisHasFg[i] === 1 && prevCluster === 0) glyphClusters++;
+        prevCluster = axisHasFg[i];
+      }
+
+      const avgTransitionsPerLine = activeLines > 0 ? totalLineTransitions / activeLines : 0;
+      const multiLineRatio = activeLines > 0 ? multiLines / activeLines : 0;
+
+      const reqMaxT = gridMatch
+        ? 3
+        : roi.isCenter
+        ? 6
+        : roi.strictZone
+        ? tier === "softTranslucent"
+          ? 5
+          : 5
+        : tier === "softTranslucent"
+        ? 4
+        : tier === "brightOverlay"
+        ? aggressive
+          ? 5
+          : 6
+        : aggressive
+        ? 4
+        : 5;
+
+      const reqAvgT = gridMatch
+        ? 1.9
+        : roi.isCenter
+        ? 3.4
+        : roi.strictZone
+        ? tier === "softTranslucent"
+          ? 2.8
+          : 3.1
+        : tier === "softTranslucent"
+        ? 2.3
+        : tier === "brightOverlay"
+        ? aggressive
+          ? 2.9
+          : 3.6
+        : aggressive
+        ? 2.4
+        : 2.8;
+
+      const reqMrr = gridMatch
+        ? 0.38
+        : roi.isCenter
+        ? 0.64
+        : roi.strictZone
+        ? tier === "softTranslucent"
+          ? 0.55
+          : 0.62
+        : tier === "whiteCore"
+        ? 0.44
+        : tier === "softTranslucent"
+        ? 0.44
+        : tier === "brightOverlay"
+        ? aggressive
+          ? 0.50
+          : 0.60
+        : aggressive
+        ? 0.50
+        : 0.58;
+
+      if (
+        maxLineTransitions < reqMaxT ||
+        avgTransitionsPerLine < reqAvgT ||
+        multiLineRatio < reqMrr
+      ) {
+        continue;
+      }
+
+      const reqClusters = gridMatch ? 3 : roi.isCenter ? 5 : isVertical ? 4 : aggressive ? 3 : 4;
+      if (aspect > 1.7 && glyphClusters < reqClusters) continue;
+
+      let haloTotal = 0;
+      let haloFg = 0;
+      const hx0 = Math.max(ex0, minX - 7);
+      const hx1 = Math.min(ex1 - 1, maxX + 7);
+      const hy0 = Math.max(ey0, minY - 7);
+      const hy1 = Math.min(ey1 - 1, maxY + 7);
+
+      for (let gy = hy0; gy <= hy1; gy++) {
+        const inInnerY = gy >= minY - 2 && gy <= maxY + 2;
+        const rowOff = gy * workW;
+        for (let gx = hx0; gx <= hx1; gx++) {
+          const inInnerX = gx >= minX - 2 && gx <= maxX + 2;
+          if (inInnerX && inInnerY) continue;
+          haloTotal++;
+          if (fgMask[rowOff + gx] === 1) haloFg++;
+        }
+      }
+
+      const maxHalo = gridMatch
+        ? 0.14
+        : roi.isCenter
+        ? 0.025
+        : roi.strictZone || tier === "brightOverlay"
+        ? 0.05
+        : tier === "softTranslucent"
+        ? 0.06
+        : tier === "medium"
+        ? 0.04
+        : 0.08;
+      if (haloTotal > 20 && haloFg / haloTotal > maxHalo) continue;
+
+      addOrMergeIntoList(scanOpts.targetList, {
+        minX,
+        minY,
+        maxX,
+        maxY,
+        row: roi.row,
+        col: roi.col,
+        polarity: scanOpts.polarity,
+        tier,
+      });
     }
   };
 
-  for (const roi of rois) {
-    scanRoiWithMask(roi, whiteCoreMask, "whiteCore");
-    scanRoiWithMask(roi, ultraWhiteMask, "whiteCore");
+  // Pass 1: Scan all 8 perimeter ROIs (4 corners + top/bottom center + middle-left/middle-right)
+  for (const roi of perimeterRois) {
+    scanRoiWithMask(roi, whiteCoreMask, "whiteCore", { targetList: workBoxes, polarity: "light" });
+    scanRoiWithMask(roi, ultraWhiteMask, "whiteCore", { targetList: workBoxes, polarity: "light" });
+    scanRoiWithMask(roi, brightOverlayMask, "brightOverlay", { targetList: workBoxes, polarity: "light" });
+    scanRoiWithMask(roi, pureBrightMask, "crisp", { targetList: workBoxes, polarity: "light" });
+    scanRoiWithMask(roi, crispLightMask, "crisp", { targetList: workBoxes, polarity: "light" });
+    scanRoiWithMask(roi, crispDarkMask, "crisp", { targetList: workBoxes, polarity: "dark" });
+
     if (!roi.strictZone) {
-      scanRoiWithMask(roi, brightOverlayMask, "brightOverlay");
+      scanRoiWithMask(roi, medLightMask, "medium", { targetList: workBoxes, polarity: "light" });
+      scanRoiWithMask(roi, medDarkMask, "medium", { targetList: workBoxes, polarity: "dark" });
     }
-    scanRoiWithMask(roi, pureBrightMask, "crisp");
-    scanRoiWithMask(roi, crispLightMask, "crisp");
-    scanRoiWithMask(roi, crispDarkMask, "crisp");
-    if (!roi.strictZone) {
-      scanRoiWithMask(roi, medLightMask, "medium");
-      scanRoiWithMask(roi, medDarkMask, "medium");
-      if (softTranslucentLightMask) {
-        scanRoiWithMask(roi, softTranslucentLightMask, "softTranslucent");
-      }
-      if (softTranslucentDarkMask) {
-        scanRoiWithMask(roi, softTranslucentDarkMask, "softTranslucent");
+
+    // Translucent owner-name texts: directly accepted in aggressive mode; collected for grid corroboration otherwise
+    const softTarget = aggressive ? workBoxes : softGridCandidates;
+    scanRoiWithMask(roi, softTranslucentLightMask, "softTranslucent", {
+      targetList: softTarget,
+      polarity: "light",
+    });
+    scanRoiWithMask(roi, softTranslucentDarkMask, "softTranslucent", {
+      targetList: softTarget,
+      polarity: "dark",
+    });
+  }
+
+  // Pass 1b: Also check 90-degree vertical owner-name texts hugging the left/right vertical mid-edges
+  const verticalSideW = Math.round(workW * 0.14);
+  const verticalEdgeRois: RoisSpec[] = [
+    {
+      name: "middle-left-vertical",
+      row: 1,
+      col: 0,
+      x0: 0,
+      y0: Math.round(workH * 0.18),
+      x1: verticalSideW,
+      y1: Math.round(workH * 0.82),
+      innerLeft: false,
+      innerRight: true,
+      innerTop: true,
+      innerBottom: true,
+      strictZone: false,
+    },
+    {
+      name: "middle-right-vertical",
+      row: 1,
+      col: 2,
+      x0: workW - verticalSideW,
+      y0: Math.round(workH * 0.18),
+      x1: workW,
+      y1: Math.round(workH * 0.82),
+      innerLeft: true,
+      innerRight: false,
+      innerTop: true,
+      innerBottom: true,
+      strictZone: false,
+    },
+  ];
+  for (const vRoi of verticalEdgeRois) {
+    ensureFeaturesComputed(vRoi.x0, vRoi.y0, vRoi.x1, vRoi.y1);
+    scanRoiWithMask(vRoi, whiteCoreMask, "whiteCore", {
+      targetList: workBoxes,
+      polarity: "light",
+      verticalText: true,
+    });
+    scanRoiWithMask(vRoi, crispLightMask, "crisp", {
+      targetList: workBoxes,
+      polarity: "light",
+      verticalText: true,
+    });
+    scanRoiWithMask(vRoi, crispDarkMask, "crisp", {
+      targetList: workBoxes,
+      polarity: "dark",
+      verticalText: true,
+    });
+    const softTarget = aggressive ? workBoxes : softGridCandidates;
+    scanRoiWithMask(vRoi, softTranslucentLightMask, "softTranslucent", {
+      targetList: softTarget,
+      polarity: "light",
+      verticalText: true,
+    });
+    scanRoiWithMask(vRoi, softTranslucentDarkMask, "softTranslucent", {
+      targetList: softTarget,
+      polarity: "dark",
+      verticalText: true,
+    });
+  }
+
+  // Pass 2: Repeated 3x3 grid watermark corroboration (up to 9 owner-name texts)
+  // Cluster perimeter detections (and soft candidates when non-aggressive) by compatible size & polarity
+  const gridPool: DetectedWorkBox[] = [...workBoxes, ...softGridCandidates];
+  const clusters: DetectedWorkBox[][] = [];
+
+  for (const box of gridPool) {
+    const bw = box.maxX - box.minX + 1;
+    const bh = box.maxY - box.minY + 1;
+    let placed = false;
+
+    for (const cluster of clusters) {
+      const ref = cluster[0];
+      if (ref.polarity !== box.polarity) continue;
+      const rw = ref.maxX - ref.minX + 1;
+      const rh = ref.maxY - ref.minY + 1;
+      const wRatio = Math.max(bw, rw) / Math.max(1, Math.min(bw, rw));
+      const hRatio = Math.max(bh, rh) / Math.max(1, Math.min(bh, rh));
+      if (wRatio <= 1.55 && (hRatio <= 1.55 || Math.abs(bh - rh) <= 5)) {
+        // Avoid duplicating the exact same box in the same slot
+        const sameSlotOverlap = cluster.some(
+          (c) =>
+            c.row === box.row &&
+            c.col === box.col &&
+            !(box.maxX + 6 < c.minX || box.minX - 6 > c.maxX || box.maxY + 6 < c.minY || box.minY - 6 > c.maxY)
+        );
+        if (!sameSlotOverlap) {
+          cluster.push(box);
+        }
+        placed = true;
+        break;
       }
     }
+
+    if (!placed) {
+      clusters.push([box]);
+    }
+  }
+
+  const confirmedGridClusters = clusters.filter((cluster) => {
+    const distinctSlots = new Set(cluster.map((b) => `${b.row},${b.col}`));
+    return distinctSlots.size >= 2;
+  });
+
+  // Promote any softGridCandidates that belong to a confirmed repeated watermark grid
+  for (const cluster of confirmedGridClusters) {
+    for (const item of cluster) {
+      addOrMergeIntoList(workBoxes, item);
+    }
+  }
+
+  // Pass 3: For each confirmed repeated-text grid, scan the center (9th slot) & any missed grid slots
+  const median = (vals: number[]): number => {
+    const sorted = [...vals].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5;
+  };
+
+  for (const cluster of confirmedGridClusters) {
+    const expectedW = median(cluster.map((b) => b.maxX - b.minX + 1));
+    const expectedH = median(cluster.map((b) => b.maxY - b.minY + 1));
+    const polarity = cluster[0].polarity;
+    const isVerticalCluster = expectedH > expectedW * 1.4;
+
+    // Estimate 3x3 row Y-centers and column X-centers from detected stamps (with symmetric fallbacks)
+    const rowYs: Array<number[]> = [[], [], []];
+    const colXs: Array<number[]> = [[], [], []];
+    for (const b of cluster) {
+      rowYs[b.row].push((b.minY + b.maxY) * 0.5);
+      colXs[b.col].push((b.minX + b.maxX) * 0.5);
+    }
+
+    const rowCenter: [number, number, number] = [
+      rowYs[0].length > 0 ? median(rowYs[0]) : rowYs[2].length > 0 ? Math.max(expectedH, workH - median(rowYs[2])) : Math.round(workH * 0.08),
+      rowYs[1].length > 0
+        ? median(rowYs[1])
+        : rowYs[0].length > 0 && rowYs[2].length > 0
+        ? (median(rowYs[0]) + median(rowYs[2])) * 0.5
+        : workH * 0.5,
+      rowYs[2].length > 0 ? median(rowYs[2]) : rowYs[0].length > 0 ? Math.min(workH - expectedH, workH - median(rowYs[0])) : Math.round(workH * 0.92),
+    ];
+
+    const colCenter: [number, number, number] = [
+      colXs[0].length > 0 ? median(colXs[0]) : colXs[2].length > 0 ? Math.max(expectedW * 0.6, workW - median(colXs[2])) : Math.round(workW * 0.14),
+      colXs[1].length > 0
+        ? median(colXs[1])
+        : colXs[0].length > 0 && colXs[2].length > 0
+        ? (median(colXs[0]) + median(colXs[2])) * 0.5
+        : workW * 0.5,
+      colXs[2].length > 0 ? median(colXs[2]) : colXs[0].length > 0 ? Math.min(workW - expectedW * 0.6, workW - median(colXs[0])) : Math.round(workW * 0.86),
+    ];
+
+    const halfWinW = Math.max(Math.round(expectedW * 0.95), Math.round(workW * 0.13));
+    const halfWinH = Math.max(Math.round(expectedH * 1.9), Math.round(workH * 0.08));
+
+    const masksForPolarity: Array<{ mask: Uint8Array; tier: MaskTier }> =
+      polarity === "light"
+        ? [
+            { mask: whiteCoreMask, tier: "whiteCore" },
+            { mask: brightOverlayMask, tier: "brightOverlay" },
+            { mask: pureBrightMask, tier: "crisp" },
+            { mask: crispLightMask, tier: "crisp" },
+            { mask: medLightMask, tier: "medium" },
+            { mask: softTranslucentLightMask, tier: "softTranslucent" },
+          ]
+        : [
+            { mask: crispDarkMask, tier: "crisp" },
+            { mask: medDarkMask, tier: "medium" },
+            { mask: softTranslucentDarkMask, tier: "softTranslucent" },
+          ];
+
+    for (let r = 0 as GridRow; r <= 2; r = (r + 1) as GridRow) {
+      for (let c = 0 as GridCol; c <= 2; c = (c + 1) as GridCol) {
+        // Skip slots that already have a detected box near this grid cell
+        const targetCx = colCenter[c];
+        const targetCy = rowCenter[r];
+        const alreadyCovered = workBoxes.some((b) => {
+          const bcx = (b.minX + b.maxX) * 0.5;
+          const bcy = (b.minY + b.maxY) * 0.5;
+          return (
+            Math.abs(bcx - targetCx) <= halfWinW * 0.9 &&
+            Math.abs(bcy - targetCy) <= halfWinH * 0.9
+          );
+        });
+        if (alreadyCovered) continue;
+
+        const sx0 = Math.max(0, Math.round(targetCx - halfWinW));
+        const sy0 = Math.max(0, Math.round(targetCy - halfWinH));
+        const sx1 = Math.min(workW, Math.round(targetCx + halfWinW));
+        const sy1 = Math.min(workH, Math.round(targetCy + halfWinH));
+        if (sx1 - sx0 < 24 || sy1 - sy0 < 12) continue;
+
+        ensureFeaturesComputed(sx0, sy0, sx1, sy1);
+
+        const slotRoi: RoisSpec = {
+          name: `grid-slot-${r}-${c}`,
+          row: r,
+          col: c,
+          x0: sx0,
+          y0: sy0,
+          x1: sx1,
+          y1: sy1,
+          innerLeft: sx0 > 0,
+          innerRight: sx1 < workW,
+          innerTop: sy0 > 0,
+          innerBottom: sy1 < workH,
+          strictZone: false,
+          isCenter: r === 1 && c === 1,
+        };
+
+        for (const { mask, tier } of masksForPolarity) {
+          scanRoiWithMask(slotRoi, mask, tier, {
+            targetList: workBoxes,
+            polarity,
+            relaxedForGrid: { expectedW, expectedH },
+            verticalText: isVerticalCluster,
+          });
+        }
+      }
+    }
+  }
+
+  // Pass 4: Standalone strict scan of the center ROI (catches single centered text watermarks without false positives)
+  scanRoiWithMask(centerRoi, whiteCoreMask, "whiteCore", { targetList: workBoxes, polarity: "light" });
+  scanRoiWithMask(centerRoi, ultraWhiteMask, "whiteCore", { targetList: workBoxes, polarity: "light" });
+  scanRoiWithMask(centerRoi, crispLightMask, "crisp", { targetList: workBoxes, polarity: "light" });
+  scanRoiWithMask(centerRoi, crispDarkMask, "crisp", { targetList: workBoxes, polarity: "dark" });
+  if (aggressive) {
+    scanRoiWithMask(centerRoi, softTranslucentLightMask, "softTranslucent", {
+      targetList: workBoxes,
+      polarity: "light",
+    });
+    scanRoiWithMask(centerRoi, softTranslucentDarkMask, "softTranslucent", {
+      targetList: workBoxes,
+      polarity: "dark",
+    });
   }
 
   return workBoxes.map((b) => {
@@ -609,7 +1229,7 @@ export function detectLogoBoxes(image: any, options?: DetectLogoOptions): LogoBo
 
 /**
  * Applies clean local perimeter-interpolated inpainting + smooth local blur
- * strictly inside the detected small logo box (+3px..+5px tight margin).
+ * strictly inside the detected small logo/text box (+3px..+5px tight margin).
  * Zero pixels outside that small region are modified.
  */
 export function inpaintLogoBox(image: any, box: LogoBox, options?: { pad?: number }): void {

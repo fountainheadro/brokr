@@ -232,11 +232,11 @@ export const PgAgencyAdminPiataImobiliara: React.FC = () => {
         mode: "manual",
       });
       toast.success(
-        `Anunțul a fost copiat în Lead-uri → Noi cu ID #${result.propertyId} (titlu și descriere formatate).`
+        `Anunțul a fost adăugat în Lead-uri → Neprocesate cu ID #${result.propertyId}.`
       );
     } catch (err: any) {
       console.error("[PgAgencyAdminPiataImobiliara] Manual copy failed:", err);
-      toast.error(err?.message || "Nu s-a putut copia anunțul în Lead-uri → Noi.");
+      toast.error(err?.message || "Nu s-a putut copia anunțul în Lead-uri → Neprocesate.");
     } finally {
       setCopyingIds((prev) => {
         const next = { ...prev };

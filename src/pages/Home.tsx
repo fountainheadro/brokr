@@ -8,7 +8,7 @@ import { PersonalView } from "../components/PersonalView";
 import { AddLeadModal } from "../components/AddLeadModal";
 import { LeadList } from "../components/LeadList";
 import { LeadCard } from "../components/LeadCard";
-import { leadsService, Lead, LeadStatus, LeadRole, getLeadRole, CERERI_STATUSES, PROPRIETATI_STATUSES, isCerereLead } from "../services/leadsService";
+import { leadsService, Lead, LeadStatus, LeadRole, getLeadRole, CERERI_STATUSES, PROPRIETATI_STATUSES, isCerereLead, isUnprocessedLead } from "../services/leadsService";
 import { isSummaryLeadRecord } from "../core/crm/svc_lead-projection";
 import { entityIdService } from "../services/entityIdService";
 import { contactsService, Contact } from "../services/contactsService";
@@ -133,15 +133,15 @@ const TABS: LeadStatus[] = [
   "Sterse"
 ];
 
-const LEADS_TABS: LeadStatus[] = ["ListaMea", "Pierdute"];
+const LEADS_TABS: LeadStatus[] = ["Noi", "ListaMea", "Pierdute"];
 
 const CERERI_TABS: LeadStatus[] = ["Noua", "Calificare", "Matching", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
 const PROPRIETATI_TABS: LeadStatus[] = ["Noua", "Prospectare", "Colaborare", "Vizionare", "Ofertare", "Antecontract", "Contract"];
 
 const STATUS_LABELS: Record<string, string> = {
-  "Noi": "Noi",
-  "ListaMea": "Noi",
+  "Noi": "Neprocesate",
+  "ListaMea": "Procesate",
   "Pierdute": "Pierdute",
   "Nevalidata": "Nevalidate",
   "Calificata": "Calificate",
@@ -350,7 +350,7 @@ const CellCopyButton = ({ text, isImage = false, url = "", isRowDownload = false
 };
 
 export const Home: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<LeadStatus>("ListaMea");
+  const [activeTab, setActiveTab] = useState<LeadStatus>("Noi");
   const [lastVisitedTimes, setLastVisitedTimes] = useState<Record<string, number>>(() => {
     try {
       const saved = localStorage.getItem('lastVisited_tabs');
@@ -386,7 +386,7 @@ export const Home: React.FC = () => {
     const normalized = subItem === 'Imobile' || subItem === 'Proprietăți' ? 'Proprietati' : (subItem === 'Clienți' ? 'Contacte' : subItem);
     setActiveSidebarItem(normalized);
     if (normalized === 'Lead-uri') {
-      setActiveTab('ListaMea');
+      setActiveTab('Noi');
     } else if (normalized === 'Cereri') {
       setActiveTab('Noua');
     } else if (normalized === 'Proprietati') {
@@ -1204,12 +1204,12 @@ export const Home: React.FC = () => {
           if (activeTab === 'Pierdute') {
             return lead.status === 'Pierdute' && matchesLeadAgentFilter(lead, selectedLeadAgentOption);
           }
-          // Default tab 'ListaMea' (displayed as "Noi") includes copied & agency-local leads
+          if (activeTab === 'Noi') {
+            return isUnprocessedLead(lead) && matchesLeadAgentFilter(lead, selectedLeadAgentOption);
+          }
           return (
-            (lead.status === 'ListaMea' ||
-              lead.status === 'Noi' ||
-              lead.status === 'Nevalidata' ||
-              lead.status === 'Calificata') &&
+            lead.status === 'ListaMea' &&
+            !isUnprocessedLead(lead) &&
             matchesLeadAgentFilter(lead, selectedLeadAgentOption)
           );
         }
@@ -1433,7 +1433,7 @@ export const Home: React.FC = () => {
 
       if (leadMatch) {
         setActiveSidebarItem("Lead-uri");
-        setActiveTab((prev) => (prev === "ListaMea" || prev === "Pierdute" ? prev : "ListaMea"));
+        setActiveTab((prev) => (prev === "Noi" || prev === "ListaMea" || prev === "Pierdute" ? prev : "Noi"));
       } else if (cerereMatch) {
         setActiveSidebarItem("Cereri");
         setActiveTab((prev) => (CERERI_TABS.includes(prev) ? prev : "Noua"));
@@ -1989,8 +1989,11 @@ export const Home: React.FC = () => {
   const handleConvertToCerere = async (leadId: string, updatedData: Partial<Lead>) => {
     try {
       const newCerereId = await entityIdService.getNextId('cerere');
-      const leadObj = leads.find(l => l.id === leadId);
+      const leadObj = leads.find(l => l.id === leadId) || (selectedLead?.id === leadId ? selectedLead : undefined);
       const mergedLead = { ...leadObj, ...updatedData };
+      const sourcePropertyId =
+        leadObj?.sourcePropertyId ||
+        (leadObj?.propertyId && leadObj.propertyId !== newCerereId ? leadObj.propertyId : undefined);
 
       const {
         formattedTitle,
@@ -2005,6 +2008,8 @@ export const Home: React.FC = () => {
       const finalPayload: Partial<Lead> = {
         ...updatedData,
         propertyId: newCerereId,
+        ...(sourcePropertyId ? { sourcePropertyId } : {}),
+        isSharedLead: false,
         status: "Noua" as LeadStatus,
         title: formattedTitle,
         notes: formattedDescription,
@@ -2013,7 +2018,8 @@ export const Home: React.FC = () => {
       };
       await leadsService.updateLeadData(leadId, finalPayload);
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...finalPayload } : l));
-      toast.success(`Leadul a fost concretizat în Cererea #${newCerereId} cu titlul și descrierea formatate!`);
+      setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...finalPayload } : prev);
+      toast.success(`Leadul a fost transformat în Cererea #${newCerereId}!`);
     } catch (e) {
       console.error("Failed to convert lead to cerere:", e);
       toast.error("Eroare la crearea cererii!");
@@ -2045,8 +2051,8 @@ export const Home: React.FC = () => {
         setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...fallbackPatch } : prev);
         toast.success(
           persisted?.propertyId
-            ? `Leadul a fost adăugat în Noi (#${persisted.propertyId}).`
-            : "Leadul a fost adăugat în Noi."
+            ? `Leadul a fost procesat și mutat în Procesate (#${persisted.propertyId}).`
+            : "Leadul a fost procesat și mutat în Procesate."
         );
         return;
       }
@@ -2089,10 +2095,10 @@ export const Home: React.FC = () => {
       };
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPayload } : l));
       setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...mergedPayload } : prev);
-      toast.success(`Leadul a fost adăugat în Noi (#${resolvedPropertyId}) cu titlul și descrierea formatate!`);
+      toast.success(`Leadul a fost procesat și mutat în Procesate (#${resolvedPropertyId})!`);
     } catch (e) {
-      console.error("Failed to add lead to Noi:", e);
-      toast.error("Eroare la adăugarea în Noi!");
+      console.error("Failed to process lead:", e);
+      toast.error("Eroare la procesarea leadului!");
       throw e;
     }
   };
@@ -2146,7 +2152,8 @@ export const Home: React.FC = () => {
     try {
       await leadsService.updateLeadStatus(leadId, 'ListaMea');
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, status: 'ListaMea' } : l));
-      toast.success("Leadul a fost reactivat în Noi.");
+      setSelectedLead(prev => prev?.id === leadId ? { ...prev, status: 'ListaMea' } : prev);
+      toast.success("Leadul a fost reactivat în Procesate.");
     } catch (e) {
       console.error("Failed to reactivate lead:", e);
       toast.error("Eroare la reactivarea leadului!");
@@ -2383,8 +2390,10 @@ export const Home: React.FC = () => {
                           if (isCerereLead(l)) return false;
                           if (l.status === 'Sterse' || l.isSharedLead) return false;
                           if (tab === 'Pierdute') return l.status === 'Pierdute' && matchesLeadAgentFilter(l, selectedLeadAgentOption);
+                          if (tab === 'Noi') return isUnprocessedLead(l) && matchesLeadAgentFilter(l, selectedLeadAgentOption);
                           return (
-                            (l.status === 'ListaMea' || l.status === 'Noi' || l.status === 'Nevalidata' || l.status === 'Calificata') &&
+                            l.status === 'ListaMea' &&
+                            !isUnprocessedLead(l) &&
                             matchesLeadAgentFilter(l, selectedLeadAgentOption)
                           );
                         }
@@ -2406,7 +2415,9 @@ export const Home: React.FC = () => {
                           isMatch = !isCerereLead(lead) && lead.status !== 'Sterse' && !lead.isSharedLead && (
                             tab === 'Pierdute'
                               ? (lead.status === 'Pierdute' && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
-                              : ((lead.status === 'ListaMea' || lead.status === 'Noi' || lead.status === 'Nevalidata' || lead.status === 'Calificata') && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
+                              : tab === 'Noi'
+                                ? (isUnprocessedLead(lead) && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
+                                : (lead.status === 'ListaMea' && !isUnprocessedLead(lead) && matchesLeadAgentFilter(lead, selectedLeadAgentOption))
                           );
                         } else if (activeSidebarItem === 'Cereri') {
                           isMatch = isCerereLead(lead) && (tab === 'Noua' ? lead.status === 'Noua' || lead.status === 'AreInteres' : lead.status === tab);
@@ -2481,7 +2492,7 @@ export const Home: React.FC = () => {
                         <Users size={12} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
                         <select
                           aria-label="Filtrează după agent"
-                          title="Filtrează lead-urile din Noi și Pierdute după agent"
+                          title="Filtrează lead-urile după agent"
                           value={selectedLeadAgent}
                           onChange={(e) => setSelectedLeadAgent(e.target.value)}
                           className={`h-7 max-w-[180px] border rounded-md pl-7 pr-6 text-xs font-normal appearance-none focus:outline-none transition-colors cursor-pointer truncate ${
@@ -2627,7 +2638,7 @@ export const Home: React.FC = () => {
                           </span>
                         )}
                         <span className="text-[10px] font-normal px-2 py-0.5 rounded bg-gray-100 text-gray-700 border border-gray-200 shrink-0 leading-none">
-                          {STATUS_LABELS[selectedLead.status] || selectedLead.status}
+                          {isUnprocessedLead(selectedLead) ? "Neprocesate" : (STATUS_LABELS[selectedLead.status] || selectedLead.status)}
                         </span>
                         {isEditingDetails && (
                           <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-amber-50 text-[#BE9662] border border-[#BE9662]/30 shrink-0 leading-none">
@@ -2827,6 +2838,9 @@ export const Home: React.FC = () => {
                 onMarkAsLost={handleMarkAsLost}
                 onReactivateLead={handleReactivateLead}
                 onAddToMyList={handleAddToMyList}
+                onConvertToCerere={async (leadId) => {
+                  await handleConvertToCerere(leadId, {});
+                }}
               />
             ) : (
               <PropertyDetailView 

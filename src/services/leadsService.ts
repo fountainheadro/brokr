@@ -37,6 +37,7 @@ export type LeadStatus =
   | 'Contract';
 
 export const LEADS_STATUSES: LeadStatus[] = [
+  'Noi',
   'ListaMea',
   'Pierdute'
 ];
@@ -69,6 +70,14 @@ export const isCerereLead = (l?: { status?: string; title?: string; notes?: stri
   if (l.title && l.title.toLowerCase().startsWith('cerere')) return true;
   if (l.status === 'AreInteres' || l.status === 'Calificare' || l.status === 'Matching') return true;
   if (l.notes && (l.notes.toLowerCase().includes('cerințe cerere') || l.notes.toLowerCase().includes('cerere:'))) return true;
+  return false;
+};
+
+export const isUnprocessedLead = (l?: Partial<Lead> | null): boolean => {
+  if (!l || isCerereLead(l)) return false;
+  if (l.status === 'Pierdute' || l.status === 'Sterse') return false;
+  if (l.status === 'Noi' || l.status === 'Nevalidata' || l.status === 'Calificata') return true;
+  if (l.status === 'ListaMea' && isDailyLeadId(l.propertyId)) return true;
   return false;
 };
 

@@ -41,8 +41,8 @@ interface OlxLeadFilterFormProps {
 }
 
 const LOCAL_STATUS_LABELS: Record<string, string> = {
-  ListaMea: "Noi",
-  Noi: "Noi",
+  ListaMea: "Procesate",
+  Noi: "Neprocesate",
   Pierdute: "Pierdute",
   Noua: "Nouă",
   Activa: "Active",

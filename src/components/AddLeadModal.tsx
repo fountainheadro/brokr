@@ -158,7 +158,7 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({
           state: formState,
           role: manualAccordionRole,
           mode: "property",
-          status: propertyOnly ? "Noua" : "Noi",
+          status: propertyOnly ? "Noua" : "ListaMea",
         });
 
         await leadsService.addLead(payload);
@@ -177,7 +177,7 @@ export const AddLeadModal: React.FC<AddLeadModalProps> = ({
           state: formState,
           role: activeRole,
           mode: "lead",
-          status: "Noi",
+          status: "ListaMea",
         });
 
         await leadsService.addLead(payload);
