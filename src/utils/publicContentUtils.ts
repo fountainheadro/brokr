@@ -94,6 +94,18 @@ export function resolvePublicDisplayDescription(
     nonEmptyString(lead.originalDescription) ||
     nonEmptyString(lead.description);
 
+  // If an agent explicitly edited the description (even on an unprocessed / raw lead),
+  // ALWAYS display the edited text immediately on external shared pages & OpenGraph tags.
+  if (ext?.descriptionManuallyEdited === true) {
+    return (
+      crmDescription ||
+      introSummary ||
+      originalDescription ||
+      marketingDescription ||
+      fallbackSummary
+    );
+  }
+
   if (shouldUseModifiedAdContent(lead)) {
     return (
       crmDescription ||
@@ -106,7 +118,7 @@ export function resolvePublicDisplayDescription(
 
   // For raw leads (Listate / Noi, Pierdute, Nevalidata, etc.), strictly prefer the exact
   // original ad description from the advertising platform (e.g. OLX), NOT the short auto-generated summary.
-  return originalDescription || crmDescription || fallbackSummary;
+  return originalDescription || crmDescription || introSummary || fallbackSummary;
 }
 
 function extractImageUrlFromItem(item: unknown): string {

@@ -9,12 +9,15 @@ import {
 } from "../../core/automation/typ_title-automation";
 import { automationSettingsService } from "../../services/automationSettingsService";
 import { CmpTitleAutomationEditor } from "../../ui/automation/cmp_title-automation-editor";
+import { CmpDescriptionAutomationEditor } from "../../ui/automation/cmp_description-automation-editor";
+import { FileText, Type } from "lucide-react";
 import toast from "react-hot-toast";
 
 export const PgAgencyAdminAutomatizare: React.FC = () => {
   const { tenant } = useTenantContext();
   const { user } = useAuth();
 
+  const [activeTab, setActiveTab] = useState<"titlu" | "descriere">("titlu");
   const [rule, setRule] = useState<TitleAutomationRule>(() =>
     normalizeTitleAutomationRule(DEFAULT_TITLE_AUTOMATION_RULE)
   );
@@ -86,20 +89,64 @@ export const PgAgencyAdminAutomatizare: React.FC = () => {
     }
   };
 
+  const tabsBar = (
+    <div className="bg-white border-b border-gray-200 shrink-0 px-6 h-[42px] min-h-[42px] max-h-[42px] box-border flex items-center gap-1.5 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setActiveTab("titlu")}
+        className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer shrink-0 font-semibold ${
+          activeTab === "titlu"
+            ? "bg-[#051D35] text-white shadow-xs"
+            : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+        }`}
+      >
+        <Type size={13} />
+        <span>Titlu</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => setActiveTab("descriere")}
+        className={`h-7 px-3 flex items-center gap-2 text-xs rounded-md transition-colors whitespace-nowrap cursor-pointer shrink-0 font-semibold ${
+          activeTab === "descriere"
+            ? "bg-[#051D35] text-white shadow-xs"
+            : "text-gray-600 hover:text-[#051D35] hover:bg-gray-100"
+        }`}
+      >
+        <FileText size={13} />
+        <span>Descriere</span>
+      </button>
+    </div>
+  );
+
   return (
-    <CmpAgencyAdminLayout title="Automatizare">
-      <CmpTitleAutomationEditor
-        mode="agency"
-        rule={rule}
-        onChangeRule={setRule}
-        isCustomOverride={isCustomOverride}
-        isLoading={isLoading}
-        isSaving={isSaving}
-        saveSuccess={saveSuccess}
-        error={error}
-        onSave={handleSave}
-        onReset={handleReset}
-      />
+    <CmpAgencyAdminLayout title="Automatizare" subHeader={tabsBar}>
+      {activeTab === "titlu" ? (
+        <CmpTitleAutomationEditor
+          mode="agency"
+          rule={rule}
+          onChangeRule={setRule}
+          isCustomOverride={isCustomOverride}
+          isLoading={isLoading}
+          isSaving={isSaving}
+          saveSuccess={saveSuccess}
+          error={error}
+          onSave={handleSave}
+          onReset={handleReset}
+        />
+      ) : (
+        <CmpDescriptionAutomationEditor
+          mode="agency"
+          rule={rule}
+          onChangeRule={setRule}
+          isCustomOverride={isCustomOverride}
+          isLoading={isLoading}
+          isSaving={isSaving}
+          saveSuccess={saveSuccess}
+          error={error}
+          onSave={handleSave}
+          onReset={handleReset}
+        />
+      )}
     </CmpAgencyAdminLayout>
   );
 };

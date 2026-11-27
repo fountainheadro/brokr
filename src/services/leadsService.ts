@@ -11,6 +11,10 @@ import { buildTitleFromAutomationRule } from '../utils/titleAutomationEngine';
 import { platformAutoCrawlService } from './platformAutoCrawlService';
 import { isAgencyLeadId, isDailyLeadId } from '../utils/leadIdUtils';
 import { deletePublicShareSnapshot, publishPublicShareSnapshot } from './publicShareService';
+import type {
+  CanonicalPropertySpecs,
+  PortalExtensionsMap,
+} from '../core/portals/typ_portal-provider';
 
 export { toCanonicalLeadStatus, toDisplayLeadStatus, type CanonicalLeadStatus };
 
@@ -272,6 +276,8 @@ export interface Lead {
   coverThumbUrl?: string;
   publishedAt?: string;
   searchTokens?: string[];
+  canonicalSpecs?: CanonicalPropertySpecs;
+  portalExtensions?: PortalExtensionsMap;
   createdAt: any;
   updatedAt: any;
   lastMovedAt?: any;
@@ -292,7 +298,7 @@ async function syncLeadPublicShareAfterSave(persisted: Lead | null | undefined):
   if (!persisted) return;
   try {
     await publishPublicShareSnapshot(persisted, {
-      tenantId: getActiveCrmTenantId(),
+      tenantId: (persisted as any).tenantId || getActiveCrmTenantId(),
       force: true,
     });
   } catch {

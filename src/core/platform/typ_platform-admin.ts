@@ -34,7 +34,9 @@ export type AuditActionType =
   | "AGENCY_PREVIEW_ROLE_SWITCH"
   | "AGENCY_PREVIEW_EXIT"
   | "CRM_DATA_MIGRATION_DRY_RUN"
-  | "CRM_DATA_MIGRATION_EXECUTE";
+  | "CRM_DATA_MIGRATION_EXECUTE"
+  | "outbox_dead_letter_replayed"
+  | "telemetry_rollup_flushed";
 
 export interface PlatformAuditLogEntry {
   id: string;
@@ -43,7 +45,17 @@ export interface PlatformAuditLogEntry {
   actorRole?: string;
   actorId?: string;
   action: AuditActionType;
-  targetType: "agency" | "user" | "domain" | "settings" | "plan" | "module" | "billing" | "migration";
+  targetType:
+    | "agency"
+    | "user"
+    | "domain"
+    | "settings"
+    | "plan"
+    | "module"
+    | "billing"
+    | "migration"
+    | "outbox"
+    | "telemetry";
   targetId: string;
   targetName?: string;
   tenantId?: string;
@@ -67,6 +79,8 @@ export interface PlatformGlobalStats {
   totalAiRequests: number;
   estimatedAiCostEur: number;
   recentActivityCount: number;
+  provenance?: string;
+  provenanceLabel?: string;
 }
 
 export interface PlatformSettingsRecord {

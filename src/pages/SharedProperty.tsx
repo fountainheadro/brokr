@@ -79,10 +79,10 @@ export const SharedProperty: React.FC = () => {
   const [isInspectBlocked, setIsInspectBlocked] = useState<boolean>(false);
   const lastRefreshAtRef = useRef<number>(0);
 
-  const refreshPublicProperty = useCallback(async () => {
+  const refreshPublicProperty = useCallback(async (force = false) => {
     if (!id) return;
     const now = Date.now();
-    if (now - lastRefreshAtRef.current < 15000) return;
+    if (!force && now - lastRefreshAtRef.current < 15000) return;
     lastRefreshAtRef.current = now;
     try {
       const res = await fetch(`/api/public-property/${encodeURIComponent(id)}`, {
@@ -101,6 +101,18 @@ export const SharedProperty: React.FC = () => {
       // silent background refresh failure
     }
   }, [id]);
+
+  useEffect(() => {
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) {
+        void refreshPublicProperty(true);
+      }
+    };
+    window.addEventListener("pageshow", handlePageShow);
+    return () => {
+      window.removeEventListener("pageshow", handlePageShow);
+    };
+  }, [refreshPublicProperty]);
 
   useEffect(() => {
     let isMounted = true;

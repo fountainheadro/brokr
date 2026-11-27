@@ -32,6 +32,11 @@ import {
   reconcileAllLeadSummaries,
   reconcileTenantLeadSummaries,
 } from "../migration/job_reconcile-summaries";
+import {
+  PROVENANCE_LABELS,
+  TelemetryCollectorService,
+} from "../../src/core/telemetry/svc_telemetry-collector";
+import { TransactionalOutboxService } from "../../src/core/jobs/svc_transactional-outbox";
 
 export const platformRouter = Router();
 
@@ -115,7 +120,7 @@ async function listAgencyAdminNotes(tenantId: string): Promise<AgencyAdminNoteRe
  * GET /api/platform/dashboard/stats
  * Aggregates live platform metrics across all registered agencies and members.
  */
-platformRouter.get("/dashboard/stats", async (req: Request, res: Response) => {
+platformRouter.get("/dashboard/stats", async (_req: Request, res: Response) => {
   const agencies = TenantResolutionService.getAllTenants();
 
   let activeAgencies = 0;
@@ -136,6 +141,11 @@ platformRouter.get("/dashboard/stats", async (req: Request, res: Response) => {
     activeUsers += members.filter((m) => m.status === "active").length;
   }
 
+  const [snapshot, auditSummary] = await Promise.all([
+    TelemetryCollectorService.buildPerformanceSnapshot(),
+    PlatformAuditLogRepository.list({ limit: 250 }),
+  ]);
+
   const stats: PlatformGlobalStats = {
     totalAgencies: agencies.length,
     activeAgencies,
@@ -144,11 +154,13 @@ platformRouter.get("/dashboard/stats", async (req: Request, res: Response) => {
     cancelledAgencies,
     totalUsers,
     activeUsers,
-    totalStorageMb: 4850,
-    totalAiTokensUsed: 1420000,
-    totalAiRequests: 3840,
-    estimatedAiCostEur: 18.45,
-    recentActivityCount: 142,
+    totalStorageMb: snapshot.summary.totalStorageMb,
+    totalAiTokensUsed: snapshot.summary.aiTotalTokens,
+    totalAiRequests: snapshot.summary.aiRequests,
+    estimatedAiCostEur: snapshot.summary.estimatedAiCostEur,
+    recentActivityCount: auditSummary.total,
+    provenance: "core_api_measured",
+    provenanceLabel: PROVENANCE_LABELS.core_api_measured,
   };
 
   res.json(createSuccessResponse(stats));
@@ -381,18 +393,35 @@ platformRouter.get("/domains", (req: Request, res: Response) => {
  * GET /api/platform/analytics
  * Returns global platform metrics.
  */
-platformRouter.get("/analytics", (req: Request, res: Response) => {
-  const agencies = TenantResolutionService.getAllTenants();
+platformRouter.get("/analytics", async (_req: Request, res: Response) => {
+  const snapshot = await TelemetryCollectorService.buildPerformanceSnapshot();
+  const totalStorageLimitMb = snapshot.agencies.reduce((sum, a) => {
+    const { quotas } = QuotaService.getEffectiveQuotas(a.tenantId);
+    return sum + (quotas.storageMb > 0 ? quotas.storageMb : 0);
+  }, 0);
+  const totalAiTokenLimit = snapshot.agencies.reduce((sum, a) => sum + Math.max(0, a.aiTokenLimit), 0);
+
+  const storageUtilizationPercent =
+    totalStorageLimitMb > 0
+      ? Math.min(100, Math.round((snapshot.summary.totalStorageMb / totalStorageLimitMb) * 100))
+      : 0;
+  const aiTokensMonthlyUtilizationPercent =
+    totalAiTokenLimit > 0
+      ? Math.min(100, Math.round((snapshot.summary.aiTotalTokens / totalAiTokenLimit) * 100))
+      : 0;
+  const monthlyActiveAgents = snapshot.agencies.reduce((sum, a) => sum + a.activeAgents, 0);
 
   const metrics = {
-    totalAgencies: agencies.length,
-    activeAgencies: agencies.filter((a) => a.status === "active").length,
-    trialAgencies: agencies.filter((a) => a.status === "trial").length,
-    suspendedAgencies: agencies.filter((a) => a.status === "suspended").length,
-    agenciesGrowthRate: "+18% lună-la-lună",
-    monthlyActiveAgents: 42,
-    storageUtilizationPercent: 48,
-    aiTokensMonthlyUtilizationPercent: 62,
+    totalAgencies: snapshot.summary.totalAgencies,
+    activeAgencies: snapshot.summary.activeAgencies,
+    trialAgencies: snapshot.summary.trialAgencies,
+    suspendedAgencies: snapshot.summary.suspendedAgencies,
+    agenciesGrowthRate: `${snapshot.summary.activeAgencies}/${snapshot.summary.totalAgencies} active`,
+    monthlyActiveAgents,
+    storageUtilizationPercent,
+    aiTokensMonthlyUtilizationPercent,
+    provenance: "core_api_measured",
+    provenanceLabel: PROVENANCE_LABELS.core_api_measured,
   };
 
   res.json(createSuccessResponse(metrics));
@@ -400,24 +429,10 @@ platformRouter.get("/analytics", (req: Request, res: Response) => {
 
 /**
  * GET /api/platform/ai-usage
- * Returns global AI consumption by agency.
+ * Returns real measured Gemini AI consumption by agency (`Core API · Measured`).
  */
-platformRouter.get("/ai-usage", (req: Request, res: Response) => {
-  const agencies = TenantResolutionService.getAllTenants();
-
-  const usageByAgency = agencies.map((a) => {
-    const isPrimary = a.id === "ten_brokr_default";
-    return {
-      tenantId: a.id,
-      agencyName: a.name,
-      tokensUsed: isPrimary ? 820000 : a.id === "ten_agency_a" ? 410000 : 190000,
-      tokenLimit: isPrimary ? 2500000 : 1000000,
-      requestCount: isPrimary ? 2180 : a.id === "ten_agency_a" ? 1120 : 540,
-      estimatedCostEur: isPrimary ? 10.66 : a.id === "ten_agency_a" ? 5.33 : 2.46,
-      topModel: "gemini-4-hydrogen",
-    };
-  });
-
+platformRouter.get("/ai-usage", (_req: Request, res: Response) => {
+  const usageByAgency = TelemetryCollectorService.getRealAgencyAiUsage();
   res.json(createSuccessResponse(usageByAgency));
 });
 
@@ -906,6 +921,114 @@ platformRouter.get("/observability/metrics", (_req: Request, res: Response) => {
       environmentValidation,
     })
   );
+});
+
+/* ========================================================================== */
+/* PHASE 9: SUPER ADMIN PILOT PERFORMANCE, TRAFFIC & AGENCY ATTRIBUTION       */
+/* ========================================================================== */
+
+/**
+ * GET /api/platform/performance
+ * Returns the complete Phase 9 Pilot Performance & Traffic snapshot (Super Admin only).
+ * Gated behind `ENABLE_PLATFORM_PERFORMANCE_DASHBOARD`.
+ */
+platformRouter.get("/performance", async (_req: Request, res: Response) => {
+  try {
+    if (!TelemetryCollectorService.isDashboardEnabled()) {
+      res.json(
+        createSuccessResponse({
+          dashboardEnabled: false,
+          collectedAt: new Date().toISOString(),
+          message:
+            "Tabloul de bord Performanță & Trafic este dezactivat prin flag-ul ENABLE_PLATFORM_PERFORMANCE_DASHBOARD=false.",
+        })
+      );
+      return;
+    }
+
+    const snapshot = await TelemetryCollectorService.buildPerformanceSnapshot();
+    res.json(createSuccessResponse(snapshot));
+  } catch (err: any) {
+    res
+      .status(500)
+      .json(createErrorResponse("INTERNAL_ERROR", err?.message || "Eroare la colectarea datelor de performanță."));
+  }
+});
+
+/**
+ * POST /api/platform/performance/flush
+ * Manually triggers a PII-free 5-minute rollup flush to Firestore (audited).
+ */
+platformRouter.post("/performance/flush", async (req: Request, res: Response) => {
+  try {
+    const result = await TelemetryCollectorService.flushRollups();
+
+    await PlatformAuditLogRepository.record({
+      actorUserId: req.authUser!.uid,
+      actorEmail: req.authUser!.email,
+      actorRole: req.platformAdmin?.role || "super_admin",
+      action: "telemetry_rollup_flushed",
+      targetType: "telemetry",
+      targetId: result.bucketId,
+      targetName: "Platform Telemetry Rollup",
+      details: {
+        flushed: result.flushed,
+        writtenDocs: result.writtenDocs,
+        skippedReason: result.skippedReason || null,
+      },
+      result: "success",
+    });
+
+    res.json(createSuccessResponse(result));
+  } catch (err: any) {
+    res
+      .status(500)
+      .json(createErrorResponse("INTERNAL_ERROR", err?.message || "Eroare la salvarea rollup-ului de telemetrie."));
+  }
+});
+
+/**
+ * POST /api/platform/performance/outbox/:eventId/replay
+ * Audited manual replay of a dead-lettered background job from the Super Admin dashboard.
+ */
+platformRouter.post("/performance/outbox/:eventId/replay", async (req: Request, res: Response) => {
+  try {
+    const eventId = String(req.params.eventId || "").trim();
+    if (!eventId) {
+      res.status(400).json(createErrorResponse("VALIDATION_ERROR", "eventId este obligatoriu."));
+      return;
+    }
+
+    const replayed = await TransactionalOutboxService.replayDeadLetterEvent({
+      eventId,
+      replayedBy: req.authUser!.email,
+    });
+
+    await PlatformAuditLogRepository.record({
+      actorUserId: req.authUser!.uid,
+      actorEmail: req.authUser!.email,
+      actorRole: req.platformAdmin?.role || "super_admin",
+      action: "outbox_dead_letter_replayed",
+      targetType: "outbox",
+      targetId: replayed.id,
+      targetName: replayed.eventType,
+      tenantId: replayed.tenantId,
+      details: {
+        eventType: replayed.eventType,
+        replayCount: replayed.replayCount,
+        previousErrorKind: replayed.lastErrorKind || null,
+      },
+      result: "success",
+    });
+
+    res.json(createSuccessResponse(replayed));
+  } catch (err: any) {
+    const statusCode = Number(err?.statusCode) || 500;
+    const code = err?.code || (statusCode === 404 ? "NOT_FOUND" : statusCode === 400 ? "VALIDATION_ERROR" : "INTERNAL_ERROR");
+    res
+      .status(statusCode)
+      .json(createErrorResponse(code, err?.message || "Eroare la reluarea job-ului dead-letter."));
+  }
 });
 
 /* ========================================================================== */

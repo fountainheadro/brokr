@@ -17,6 +17,7 @@ export type OperationalMetricName =
   | "twilio_signature_rejection"
   | "ssrf_block"
   | "api_request"
+  | "api_4xx"
   | "api_error";
 
 const SECRET_KEY_RE =
@@ -69,6 +70,7 @@ class Logger {
     twilio_signature_rejection: 0,
     ssrf_block: 0,
     api_request: 0,
+    api_4xx: 0,
     api_error: 0,
   };
 
@@ -89,22 +91,32 @@ class Logger {
 
   public getOperationalMetrics(): {
     counters: Record<OperationalMetricName, number>;
-    latency: { samples: number; avgMs: number; p95Ms: number; maxMs: number };
+    latency: { samples: number; avgMs: number; p50Ms: number; p95Ms: number; maxMs: number };
     collectedAt: string;
   } {
     const sorted = [...this.latenciesMs].sort((a, b) => a - b);
     const count = sorted.length;
     const sum = sorted.reduce((acc, v) => acc + v, 0);
     const avgMs = count > 0 ? Math.round(sum / count) : 0;
+    const p50Idx = count > 0 ? Math.min(count - 1, Math.floor(count * 0.5)) : 0;
+    const p50Ms = count > 0 ? sorted[p50Idx] : 0;
     const p95Idx = count > 0 ? Math.min(count - 1, Math.floor(count * 0.95)) : 0;
     const p95Ms = count > 0 ? sorted[p95Idx] : 0;
     const maxMs = count > 0 ? sorted[count - 1] : 0;
 
     return {
       counters: { ...this.metrics },
-      latency: { samples: count, avgMs, p95Ms, maxMs },
+      latency: { samples: count, avgMs, p50Ms, p95Ms, maxMs },
       collectedAt: new Date().toISOString(),
     };
+  }
+
+  public resetMetricsForTests(): void {
+    if (process.env.NODE_ENV !== "test") return;
+    for (const key of Object.keys(this.metrics) as OperationalMetricName[]) {
+      this.metrics[key] = 0;
+    }
+    this.latenciesMs = [];
   }
 
   private formatMessage(level: LogLevel, message: string, context?: LogContext): string {

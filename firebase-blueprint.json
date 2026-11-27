@@ -70,6 +70,8 @@
         "serviciiImobil": { "type": "array", "items": { "type": "string" } },
         "criteriiFormular": { "type": "object" },
         "extractedData": { "type": "object" },
+        "canonicalSpecs": { "type": "object" },
+        "portalExtensions": { "type": "object" },
         "createdByUid": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" },
@@ -567,6 +569,147 @@
         "updatedAt": { "type": "string", "format": "date-time", "maxLength": 64 }
       },
       "required": ["objectKey", "tenantId", "entityId", "mimeType", "dataBase64", "sizeBytes", "updatedAt"]
+    },
+    "PortalConnection": {
+      "title": "External Portal Connection Metadata",
+      "description": "Phase 7 tenant-scoped external portal connection configuration and health status (zero secrets stored here)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "providerId": { "type": "string", "maxLength": 64 },
+        "accountLabel": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["disconnected", "connected", "expired", "error"] },
+        "hasCredentials": { "type": "boolean" },
+        "credentialKeyVersion": { "type": "number" },
+        "lastTestedAt": { "type": "string", "format": "date-time" },
+        "lastSyncedAt": { "type": "string", "format": "date-time" },
+        "lastError": { "type": "string", "maxLength": 1000 },
+        "settings": { "type": "object" },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "providerId", "accountLabel", "status", "hasCredentials", "createdAt", "updatedAt"]
+    },
+    "PortalSecret": {
+      "title": "Envelope-Encrypted Portal Credentials",
+      "description": "Phase 7 backend-only AES-256-GCM envelope-encrypted external portal credentials (denied to all clients in Firestore Rules)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "providerId": { "type": "string", "maxLength": 64 },
+        "algorithm": { "type": "string", "enum": ["aes-256-gcm"] },
+        "keyVersion": { "type": "number" },
+        "aadVersion": { "type": "string", "enum": ["v1"] },
+        "wrappedDekBase64": { "type": "string", "maxLength": 1024 },
+        "wrappedDekIvBase64": { "type": "string", "maxLength": 256 },
+        "wrappedDekTagBase64": { "type": "string", "maxLength": 256 },
+        "ciphertextBase64": { "type": "string", "maxLength": 16384 },
+        "ivBase64": { "type": "string", "maxLength": 256 },
+        "authTagBase64": { "type": "string", "maxLength": 256 },
+        "updatedBy": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "providerId", "algorithm", "keyVersion", "wrappedDekBase64", "ciphertextBase64", "updatedAt"]
+    },
+    "PortalPublication": {
+      "title": "Per-Property External Portal Publication Record",
+      "description": "Phase 7 publication lifecycle state, external listing ID, validation errors, and version sync tracking per property and portal",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "propertyId": { "type": "string", "maxLength": 128 },
+        "providerId": { "type": "string", "maxLength": 64 },
+        "status": {
+          "type": "string",
+          "enum": [
+            "not_published",
+            "pending",
+            "publishing",
+            "published",
+            "update_pending",
+            "paused",
+            "withdrawal_pending",
+            "withdrawn",
+            "rejected",
+            "sync_error"
+          ]
+        },
+        "externalListingId": { "type": "string", "maxLength": 200 },
+        "externalUrl": { "type": "string", "maxLength": 1024 },
+        "submittedVersion": { "type": "number" },
+        "syncedVersion": { "type": "number" },
+        "lastAttemptAt": { "type": "string", "format": "date-time" },
+        "lastSyncedAt": { "type": "string", "format": "date-time" },
+        "lastError": { "type": "string", "maxLength": 1000 },
+        "lastErrorCode": { "type": "string", "maxLength": 100 },
+        "retryCount": { "type": "number" },
+        "validationErrors": { "type": "array" },
+        "providerMeta": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "tenantId", "propertyId", "providerId", "status", "submittedVersion", "createdAt", "updatedAt"]
+    },
+    "PlatformTelemetryRollup": {
+      "title": "Platform 5-Minute Telemetry Rollup",
+      "description": "Phase 9 PII-free 5-minute platform performance rollup written only on non-zero activity with TTL expiration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64 },
+        "bucketStartIso": { "type": "string", "format": "date-time" },
+        "bucketEndIso": { "type": "string", "format": "date-time" },
+        "windowMinutes": { "type": "number" },
+        "provenance": { "type": "string", "enum": ["core_api_measured"] },
+        "apiRequests": { "type": "number" },
+        "api4xx": { "type": "number" },
+        "api5xx": { "type": "number" },
+        "latencyP50Ms": { "type": "number" },
+        "latencyP95Ms": { "type": "number" },
+        "aiRequests": { "type": "number" },
+        "aiPromptTokens": { "type": "number" },
+        "aiOutputTokens": { "type": "number" },
+        "aiTotalTokens": { "type": "number" },
+        "estimatedAiCostEur": { "type": "number" },
+        "activeUsersCount": { "type": "number" },
+        "outboxCompleted": { "type": "number" },
+        "outboxDeadLetter": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "bucketStartIso", "bucketEndIso", "provenance", "apiRequests", "aiTotalTokens", "createdAt", "expiresAt"]
+    },
+    "PlatformAgencyUsageRollup": {
+      "title": "Per-Agency 5-Minute Usage Rollup",
+      "description": "Phase 9 PII-free per-agency usage attribution rollup (API, Gemini tokens/EUR, storage MB, portal sync counts) with TTL expiration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "bucketId": { "type": "string", "maxLength": 64 },
+        "tenantId": { "type": "string", "maxLength": 128 },
+        "bucketStartIso": { "type": "string", "format": "date-time" },
+        "provenance": { "type": "string", "enum": ["core_api_measured"] },
+        "apiRequests": { "type": "number" },
+        "api4xx": { "type": "number" },
+        "api5xx": { "type": "number" },
+        "latencyP95Ms": { "type": "number" },
+        "aiRequests": { "type": "number" },
+        "aiPromptTokens": { "type": "number" },
+        "aiOutputTokens": { "type": "number" },
+        "aiTotalTokens": { "type": "number" },
+        "estimatedAiCostEur": { "type": "number" },
+        "topModel": { "type": "string", "maxLength": 64 },
+        "storageMb": { "type": "number" },
+        "portalPublishedCount": { "type": "number" },
+        "portalSyncErrorCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "expiresAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "bucketId", "tenantId", "bucketStartIso", "provenance", "apiRequests", "aiTotalTokens", "createdAt", "expiresAt"]
     }
   },
   "firestore": {
@@ -678,6 +821,18 @@
       "schema": { "$ref": "CallSessionEvent" },
       "description": "Phase 6 ordered AI voice transcript events keyed by zero-padded monotonic seq"
     },
+    "tenants/{tenantId}/portal_connections/{providerId}": {
+      "schema": { "$ref": "PortalConnection" },
+      "description": "Phase 7 tenant external portal connection metadata (no secrets; backend-written only)"
+    },
+    "tenants/{tenantId}/portal_secrets/{providerId}": {
+      "schema": { "$ref": "PortalSecret" },
+      "description": "Phase 7 envelope-encrypted portal credentials (100% locked from clients via Firestore Rules)"
+    },
+    "tenants/{tenantId}/portal_publications/{publicationId}": {
+      "schema": { "$ref": "PortalPublication" },
+      "description": "Phase 7 per-property external portal publication lifecycle tracking (backend-written only)"
+    },
     "worker_leases/{lockKey}": {
       "schema": { "$ref": "WorkerLease" },
       "description": "Phase 6 distributed Firestore worker leases with monotonic fencing tokens"
@@ -689,6 +844,14 @@
     "job_runs/{runId}": {
       "schema": { "$ref": "JobRun" },
       "description": "Phase 6 backend worker execution audit ledger"
+    },
+    "platform_telemetry_rollups/{rollupId}": {
+      "schema": { "$ref": "PlatformTelemetryRollup" },
+      "description": "Phase 9 PII-free 5-minute platform performance rollups (Super Admin read-only, backend-written only, 60-day TTL)"
+    },
+    "platform_agency_usage_rollups/{rollupId}": {
+      "schema": { "$ref": "PlatformAgencyUsageRollup" },
+      "description": "Phase 9 PII-free 5-minute per-agency usage attribution rollups (Super Admin read-only, backend-written only, 90-day TTL)"
     }
   }
 }

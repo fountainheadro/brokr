@@ -7,6 +7,7 @@ import { fileURLToPath } from "url";
 import fs from "fs";
 import { spawn } from "child_process";
 import axios from "axios";
+import sharp from "sharp";
 import { convert } from "html-to-text";
 import * as cheerio from "cheerio";
 import { aiCallRouter, setupWebSocket } from "./server/ai-call/router";
@@ -19,6 +20,8 @@ import { requireTenantContext } from "./server/middleware/mw_tenant-context";
 import { requireQuota } from "./server/middleware/mw_entitlement";
 import { requireWorkerOidc } from "./server/middleware/mw_worker-oidc";
 import { internalWorkersRouter, workerAdminRouter } from "./server/workers/rtr_internal-workers";
+import { portalsRouter } from "./server/portals/rtr_portals";
+import { PortalPublishingOrchestrator } from "./src/core/portals/svc_portal-orchestrator";
 import { safeAxiosGet, safeFetchExternal, validateSafeExternalUrl, DEFAULT_MAX_EXTERNAL_BYTES } from "./server/security/sec_url-validator";
 import { createRateLimiter } from "./server/middleware/mw_rate-limiter";
 import { mwObservability } from "./server/middleware/mw_observability";
@@ -67,6 +70,18 @@ import {
   extractStoriaNextDataAndPhotos,
 } from "./server/utils/storiaPhotoExtractor";
 import {
+  isImobiliareUrl,
+  extractImobiliareGalleryPhotos,
+  mergeImobiliareGalleryResults,
+  upgradeRemainingImobiliareThumbnails,
+  extractImobiliareGalleryViaBrowser,
+  getImobiliarePhotoKey,
+  scoreImobiliareImageResolution,
+  parseSrcsetCandidates,
+  isImobiliareThumbnailUrl,
+  isImobiliareNonGalleryAsset,
+} from "./server/utils/imobiliarePhotoExtractor";
+import {
   extractPhoneFromOlxHtml,
   extractPhoneFromVisibleText,
   extractValidRoPhone,
@@ -100,6 +115,7 @@ import { TenantMembershipService } from "./src/core/tenancy/svc_tenant-membershi
 import { PreviewSessionService } from "./src/core/tenancy/svc_preview-session";
 import { BillingManager } from "./src/core/subscription/svc_billing-manager";
 import { QuotaService } from "./src/core/subscription/svc_quota";
+import { TelemetryCollectorService } from "./src/core/telemetry/svc_telemetry-collector";
 
 
 import { GoogleGenAI, Type } from "@google/genai";
@@ -367,6 +383,80 @@ async function cleanImageWatermarksDetailed(
         buffer[3] === 0x46 &&
         buffer.toString("ascii", 8, 12) === "WEBP");
     const isAvif = mimeType.includes("avif");
+
+    // Fast native C++ libvips path via sharp: avoids spawning ImageMagick `convert` and pure-JS Jimp
+    // decoding (50x faster on WebP/JPEG/PNG/AVIF), while feeding the exact `{ width, height, bitmap }`
+    // raw RGBA shape expected by detectLogoBoxes() / inpaintLogoBox().
+    try {
+      const { data: rawRgba, info } = await sharp(buffer, {
+        failOn: "none",
+        limitInputPixels: 40_000_000,
+      })
+        .rotate()
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+
+      const width = info.width;
+      const height = info.height;
+      if (width < 200 || height < 200) {
+        return { buffer, mimeType, inpaintedBoxes: 0 };
+      }
+
+      const sharpImage = {
+        width,
+        height,
+        bitmap: {
+          width,
+          height,
+          data: rawRgba,
+        },
+      };
+
+      const logoBoxes = detectLogoBoxes(sharpImage, { aggressive });
+      if (logoBoxes.length === 0) {
+        return { buffer, mimeType, inpaintedBoxes: 0 };
+      }
+
+      let totalInpainted = 0;
+      for (const box of logoBoxes) {
+        console.log(
+          `[Logo Inpainter] Inpainting detected logo area (${imageUrl}${aggressive ? ", aggressive" : ""}): x=${box.startX}, y=${box.startY}, w=${box.w}, h=${box.h}`
+        );
+        inpaintLogoBox(sharpImage, box, { pad: inpaintPad });
+        totalInpainted++;
+      }
+
+      const residualBoxes = detectLogoBoxes(sharpImage, { aggressive });
+      if (residualBoxes.length > 0) {
+        for (const box of residualBoxes) {
+          console.log(
+            `[Logo Inpainter] Second-pass inpainting residual area (${imageUrl}): x=${box.startX}, y=${box.startY}, w=${box.w}, h=${box.h}`
+          );
+          inpaintLogoBox(sharpImage, box, { pad: inpaintPad });
+          totalInpainted++;
+        }
+      }
+
+      const reencode = sharp(sharpImage.bitmap.data, {
+        raw: { width, height, channels: 4 },
+      });
+      if (isWebP) {
+        const cleanedWebp = await reencode.webp({ quality: 90, effort: 3 }).toBuffer();
+        return { buffer: cleanedWebp, mimeType: "image/webp", inpaintedBoxes: totalInpainted };
+      }
+      if (mimeType.includes("jpeg") || mimeType.includes("jpg")) {
+        const cleanedJpeg = await reencode
+          .flatten({ background: { r: 255, g: 255, b: 255 } })
+          .jpeg({ quality: 90, mozjpeg: true })
+          .toBuffer();
+        return { buffer: cleanedJpeg, mimeType: "image/jpeg", inpaintedBoxes: totalInpainted };
+      }
+      const cleanedPng = await reencode.png({ compressionLevel: 6 }).toBuffer();
+      return { buffer: cleanedPng, mimeType: "image/png", inpaintedBoxes: totalInpainted };
+    } catch (sharpErr: any) {
+      console.warn("[Watermark Remover] sharp decode failed, falling back to Jimp:", sharpErr?.message);
+    }
 
     let workBuffer = buffer;
     if (isWebP || isAvif) {
@@ -1055,6 +1145,10 @@ async function startServer() {
   // Phase 6 Super Admin & Agency Admin worker status / outbox DLQ replay routes
   app.use("/api/workers", workerAdminRouter);
 
+  // Phase 7 External Property Portal Publishing Foundation (mock provider only; feature-flagged UI)
+  PortalPublishingOrchestrator.registerOutboxHandlers();
+  app.use("/api/portals", portalsRouter);
+
   // Internal worker OIDC verification probe (Cloud Tasks / Cloud Scheduler SA authentication)
   app.post("/api/internal/workers/ping", requireWorkerOidc(), (req, res) => {
     res.json({
@@ -1118,8 +1212,14 @@ async function startServer() {
       reservationId = QuotaService.reserveAiQuota(tenantId, estimatedTokens);
 
       console.log(`[Server] Process /api/extract-basic for Title: ${finalTitle}`);
-      const result = await serverExtractBasicData(finalContent, finalTitle, titleRule);
-      QuotaService.commitAiQuota(reservationId, estimatedTokens);
+      let actualTokens: number | null = null;
+      const result = await serverExtractBasicData(finalContent, finalTitle, titleRule, {
+        tenantId,
+        onUsage: (usage) => {
+          if (usage.totalTokens > 0) actualTokens = usage.totalTokens;
+        },
+      });
+      QuotaService.commitAiQuota(reservationId, actualTokens ?? estimatedTokens);
       res.json(result);
     } catch (e: any) {
       if (reservationId) QuotaService.refundAiQuota(reservationId);
@@ -1147,8 +1247,22 @@ async function startServer() {
       reservationId = QuotaService.reserveAiQuota(tenantId, estimatedTokens);
 
       console.log(`[Server] Process /api/extract-data for Property ID: ${propertyId || "GOL"}`);
-      const result = await serverExtractData(finalContent, finalTitle, imageUrls, propertyId, propertyUrl, titleRule);
-      QuotaService.commitAiQuota(reservationId, estimatedTokens);
+      let actualTokens: number | null = null;
+      const result = await serverExtractData(
+        finalContent,
+        finalTitle,
+        imageUrls,
+        propertyId,
+        propertyUrl,
+        titleRule,
+        {
+          tenantId,
+          onUsage: (usage) => {
+            if (usage.totalTokens > 0) actualTokens = usage.totalTokens;
+          },
+        }
+      );
+      QuotaService.commitAiQuota(reservationId, actualTokens ?? estimatedTokens);
       res.json(result);
     } catch (e: any) {
       if (reservationId) QuotaService.refundAiQuota(reservationId);
@@ -1421,13 +1535,23 @@ Returnează un JSON strict cu următoarele chei:
         fallbackPromptChars: prompt.length,
         fallbackOutputChars: text?.length || 0,
       });
+      const textUsage = TelemetryCollectorService.recordGeminiResponseForTenant({
+        tenantId: req.tenantContext!.tenantId,
+        model: "gemini-3.1-flash-lite",
+        response,
+        fallbackPromptChars: prompt.length,
+        fallbackOutputChars: text?.length || 0,
+      });
       if (!text) throw new Error("Nu s-a primit niciun răspuns de la Gemini");
       const parsed = JSON.parse(text);
       const finalTitle = cleanForcedTitle || String(parsed.title || "").trim();
       const finalDescription = syncDescriptionHeadingTitle(String(parsed.description || "").trim(), finalTitle);
       if (reservationId) {
-        const approxTokens = Math.max(400, Math.ceil((prompt.length + text.length) / 4));
-        QuotaService.commitAiQuota(reservationId, approxTokens);
+        const committedTokens =
+          textUsage.totalTokens > 0
+            ? textUsage.totalTokens
+            : Math.max(400, Math.ceil((prompt.length + text.length) / 4));
+        QuotaService.commitAiQuota(reservationId, committedTokens);
       }
       res.json({ title: finalTitle, description: finalDescription });
     } catch (e: any) {
@@ -1442,6 +1566,31 @@ Returnează un JSON strict cu următoarele chei:
       const fallback = generateLocalTemplateText(req.body);
       res.json(fallback);
     }
+  });
+
+  // Phase 9 lightweight client telemetry heartbeat (strictly capped, PII-free, tagged "Client Heartbeat · Estimated")
+  const telemetryHeartbeatLimiter = createRateLimiter({
+    windowMs: 60_000,
+    maxRequests: 30,
+    name: "telemetry_heartbeat",
+  });
+  app.post("/api/telemetry/heartbeat", ...requireTenantContext, telemetryHeartbeatLimiter, (req, res) => {
+    const sessionId = typeof req.body?.sessionId === "string" ? req.body.sessionId.trim() : "";
+    const activeListeners = Number(req.body?.activeListeners || 0);
+    const clientReadsDelta = Number(req.body?.clientReadsDelta || 0);
+
+    if (!sessionId || sessionId.length > 64) {
+      res.status(400).json({ success: false, error: "Invalid sessionId" });
+      return;
+    }
+
+    TelemetryCollectorService.recordClientHeartbeat({
+      tenantId: req.tenantContext!.tenantId,
+      sessionId,
+      activeListeners,
+      clientReadsDelta,
+    });
+    res.status(204).end();
   });
 
   function resolvePublicShareTenantIdFromHost(rawHost?: string | null): string | null {
@@ -1508,7 +1657,9 @@ Returnează un JSON strict cu următoarele chei:
 
     const preferredTenantId = options?.preferredTenantId || null;
     const candidates = buildShareLookupCandidates(cleanId);
-    const isGlobalLeadCode = /^L\d+$/i.test(cleanId) || /^\d{4}-\d{2}-\d{2}-\d+$/.test(cleanId);
+    // Only daily unprocessed codes (e.g. 2026-11-27-2) live on the global root domain first;
+    // agency-processed codes (L32, P..., C...) resolve against the agency tenant first.
+    const isGlobalLeadCode = /^\d{4}-\d{2}-\d{2}-\d+$/.test(cleanId);
 
     const parseFirestoreDoc = (docObj: any, fallbackId: string): Record<string, any> => {
       const parseValue = (fieldObj: any): any => {
@@ -1662,26 +1813,44 @@ Returnează un JSON strict cu următoarele chei:
       }
 
       const seenShareKeys = new Set<string>();
+      let bestPubDoc: any = null;
+      let bestPubMs = -1;
       for (const shareKey of publicShareKeys) {
         if (seenShareKeys.has(shareKey)) continue;
         seenShareKeys.add(shareKey);
         const pubDoc = await getFirestoreDocDirect(`public_shares/${encodeURIComponent(shareKey)}`);
-        if (pubDoc) {
-          if (!preferredTenantId && isGlobalLeadCode) {
-            const tenantLocalLead = await CrmTenantStoreService.findPublicPropertyAcrossTenants(
-              cleanId,
-              null
-            );
-            if (tenantLocalLead) {
-              const localMs = Date.parse(String(tenantLocalLead.updatedAt || "")) || 0;
-              const pubMs = Date.parse(String(pubDoc.updatedAt || "")) || 0;
-              if (localMs >= pubMs) {
-                return tenantLocalLead;
-              }
+        if (!pubDoc) continue;
+
+        const pubMs = Date.parse(String(pubDoc.updatedAt || "")) || 0;
+        if (preferredTenantId && shareKey.startsWith(`${preferredTenantId}__`)) {
+          bestPubDoc = pubDoc;
+          bestPubMs = pubMs;
+          break;
+        }
+        if (!bestPubDoc || pubMs > bestPubMs) {
+          bestPubDoc = pubDoc;
+          bestPubMs = pubMs;
+        }
+        // For daily global unprocessed codes, `global__<CODE>` is canonical; check tenant store freshness below.
+        if (isGlobalLeadCode && shareKey.startsWith("global__")) {
+          break;
+        }
+      }
+
+      if (bestPubDoc) {
+        if (!preferredTenantId && isGlobalLeadCode) {
+          const tenantLocalLead = await CrmTenantStoreService.findPublicPropertyAcrossTenants(
+            cleanId,
+            null
+          );
+          if (tenantLocalLead) {
+            const localMs = Date.parse(String(tenantLocalLead.updatedAt || "")) || 0;
+            if (localMs >= bestPubMs) {
+              return tenantLocalLead;
             }
           }
-          return pubDoc;
         }
+        return bestPubDoc;
       }
     }
 
@@ -1765,7 +1934,12 @@ Returnează un JSON strict cu următoarele chei:
     return null;
   }
 
-  function buildPublicPropertyPayload(property: any, id: string, req: express.Request) {
+  function buildPublicPropertyPayload(
+    property: any,
+    id: string,
+    req: express.Request,
+    preferredTenantId?: string
+  ) {
     const clientIp =
       String(req.headers["x-forwarded-for"] || req.socket?.remoteAddress || "anon")
         .split(",")[0]
@@ -1783,7 +1957,11 @@ Returnează un JSON strict cu următoarele chei:
       .toUpperCase();
     const nowTime = new Date().toISOString().slice(11, 16).replace(":", "");
     const viewerStamp = `${ipHash}-${nowTime}`;
-    const propCode = String(property.propertyId || id).slice(0, 10).toUpperCase();
+    const propCode = String(property.propertyId || id)
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9_-]/g, "")
+      .slice(0, 32) || "BROKR";
 
     const publicTokenTtlMs = 24 * 60 * 60 * 1000;
     const tokenUrlBySource = new Map<string, string>();
@@ -1808,8 +1986,26 @@ Returnează un JSON strict cu următoarele chei:
     };
 
     const sanitized = sanitizePublicProperty(property, { tokenizeImageUrl });
+    const resolvedTenantId =
+      (typeof property?.tenantId === "string" && property.tenantId.trim()) ||
+      (typeof preferredTenantId === "string" && preferredTenantId.trim()) ||
+      "ten_brokr_default";
+    let automationDescriptionLayout: any = undefined;
+    try {
+      automationDescriptionLayout =
+        AutomationConfigRepository.getByTenantId(resolvedTenantId).titleRule?.descriptionLayout;
+    } catch {
+      try {
+        automationDescriptionLayout =
+          AutomationConfigRepository.getByTenantId("ten_brokr_default").titleRule?.descriptionLayout;
+      } catch {
+        automationDescriptionLayout = undefined;
+      }
+    }
+
     const payload = {
       ...sanitized,
+      ...(automationDescriptionLayout ? { automationDescriptionLayout } : {}),
       publicProtection: {
         viewerStamp,
         expiresAt: Date.now() + publicTokenTtlMs,
@@ -1833,6 +2029,8 @@ Returnează un JSON strict cu următoarele chei:
       prefetchUrls,
     };
   }
+
+  const pendingRawPublicBuffers = new Map<string, Promise<Buffer | null>>();
 
   async function resolvePublicImageRawBuffer(rawSourceUrl: string): Promise<Buffer | null> {
     let sourceUrl = rawSourceUrl.trim().replace(/&amp;/g, "&");
@@ -1862,6 +2060,28 @@ Returnează un JSON strict cu următoarele chei:
     if (sourceUrl.startsWith("//")) {
       sourceUrl = `https:${sourceUrl}`;
     }
+
+    if (sourceUrl.startsWith("data:image/")) {
+      const parts = sourceUrl.split(",");
+      if (parts.length === 2) {
+        return Buffer.from(parts[1], "base64");
+      }
+      return null;
+    }
+
+    const inflight = pendingRawPublicBuffers.get(sourceUrl);
+    if (inflight) {
+      return inflight;
+    }
+
+    const work = resolvePublicImageRawBufferUncached(sourceUrl).finally(() => {
+      pendingRawPublicBuffers.delete(sourceUrl);
+    });
+    pendingRawPublicBuffers.set(sourceUrl, work);
+    return work;
+  }
+
+  async function resolvePublicImageRawBufferUncached(sourceUrl: string): Promise<Buffer | null> {
 
     let localPathCandidate = sourceUrl;
     if (/^https?:\/\//i.test(sourceUrl)) {
@@ -2016,6 +2236,7 @@ Returnează un JSON strict cu următoarele chei:
           viewerStamp: "PUBLIC",
           maxWidth: targetWidth,
           preferWebp: true,
+          skipPersistedLookup: true,
         });
       })().catch(() => {
         // Best-effort background pre-warm; never fails page render
@@ -2037,7 +2258,12 @@ Returnează un JSON strict cu următoarele chei:
         return res.status(404).json({ error: "Property not found" });
       }
 
-      const { payload, propCode, mosaicSources } = buildPublicPropertyPayload(property, id, req);
+      const { payload, propCode, mosaicSources } = buildPublicPropertyPayload(
+        property,
+        id,
+        req,
+        preferredTenantId
+      );
       warmPublicShareMosaicImages(propCode, mosaicSources);
 
       res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
@@ -2120,6 +2346,7 @@ Returnează un JSON strict cu următoarele chei:
         viewerStamp: verified.payload.st || "PUBLIC",
         maxWidth: targetWidth,
         preferWebp,
+        skipPersistedLookup: true,
       });
 
       res.setHeader("Content-Type", protectedImg.mimeType);
@@ -2508,7 +2735,8 @@ Returnează un JSON strict cu următoarele chei:
         const { payload, propCode, mosaicSources, prefetchUrls } = buildPublicPropertyPayload(
           property,
           id,
-          req
+          req,
+          preferredTenantId
         );
         warmPublicShareMosaicImages(propCode, mosaicSources);
         const safeJson = JSON.stringify({ routeId: id, data: payload })
@@ -2526,7 +2754,7 @@ Returnează un JSON strict cu următoarele chei:
             .replace(/>/g, "\\u003e")
             .replace(/&/g, "\\u0026");
           scripts.push(
-            `    <script>(function(){try{var u=${safeUrlsJson};var m=window.__BROKR_PREFETCHED_PUBLIC_IMAGES__=window.__BROKR_PREFETCHED_PUBLIC_IMAGES__||{};for(var i=0;i<u.length;i++){(function(s){if(m[s])return;var p=fetch(s,{credentials:"same-origin",headers:{"X-Brokr-Public-View":"1"},cache:"default"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.blob();});p.catch(function(){delete m[s];});m[s]=p;})(u[i]);}}catch(e){}})();</script>`
+            `    <script>(function(){try{var u=${safeUrlsJson};var m=window.__BROKR_PREFETCHED_PUBLIC_IMAGES__=window.__BROKR_PREFETCHED_PUBLIC_IMAGES__||{};for(var i=0;i<u.length;i++){(function(s){if(m[s])return;var p=fetch(s,{credentials:"same-origin",headers:{"X-Brokr-Public-View":"1","Accept":"image/webp,image/*;q=0.8"},cache:"default"}).then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.blob();});p.catch(function(){delete m[s];});m[s]=p;})(u[i]);}}catch(e){}})();</script>`
           );
         }
         initialPayloadScript = scripts.join("\n");
@@ -2639,7 +2867,9 @@ Returnează un JSON strict cu următoarele chei:
       html = html.replace(/<head[^>]*>/i, (match) => `${match}\n${ogTags}\n`);
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.setHeader("Cache-Control", "no-cache, must-revalidate");
+      res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
+      res.setHeader("Pragma", "no-cache");
+      res.setHeader("Expires", "0");
       res.send(html);
     } catch (err: any) {
       console.warn("[Server] /share/:id OpenGraph error:", err.message);
@@ -3373,6 +3603,11 @@ Returnează un JSON strict cu următoarele chei:
         // Helper to identify and reject icons, logos, badges, layouts, avatars, maps, buttons, etc.
         const isForbiddenGraphic = (urlStr: string): boolean => {
           const lower = urlStr.toLowerCase();
+          // For signed RoamCDN URLs, inspect only preset + filename so random base64url HMAC tokens
+          // never false-positive on short English substrings like "pin", "pdf", or "logo".
+          if (lower.includes("roamcdn.net")) {
+            return isImobiliareNonGalleryAsset(urlStr);
+          }
           const badPatterns = [
             "logo", "avatar", "watermark-logo", "badge", "icon", "placeholder",
             "sprite", "layout", "banner", "staticmap", "google-map", "/map/", "maps.googleapis",
@@ -3390,16 +3625,15 @@ Returnează un JSON strict cu următoarele chei:
           let cleaned = rawUrl.trim().replace(/\\/g, "");
           if (cleaned.startsWith("//")) cleaned = "https:" + cleaned;
 
-          // Imobiliare.ro & Roamcdn high-resolution promotions
-          if (cleaned.includes("imobiliare.ro") || cleaned.includes("roamcdn")) {
+          // Legacy Imobiliare.ro (non-signed roamcdn) high-resolution promotions.
+          // Signed `i.roamcdn.net` URLs are resolved & verified cleanly by `imobiliarePhotoExtractor`
+          // so we never blindly rewrite signed `{preset}` segments into 403/404 URLs.
+          if (cleaned.includes("imobiliare.ro") && !cleaned.toLowerCase().includes("roamcdn.net")) {
             cleaned = cleaned
-              .replace(/_(?:75x75|100x100|150x150|160x120|200x150|400x300|640x480)\.jpg/gi, "_800x600.jpg")
+              .replace(/_(?:75x75|100x100|150x150|160x120|200x150|400x300|640x480)\.jpg/gi, "_1200x900.jpg")
               .replace(/\/thumb\//gi, "/large/")
               .replace(/\/small\//gi, "/large/")
               .replace(/\/medium\//gi, "/large/");
-            if (cleaned.toLowerCase().includes("roamcdn")) {
-              cleaned = cleaned.replace(/gallery-[a-zA-Z0-9]+-watermark/gi, "gallery-full-1200w-watermark");
-            }
           }
 
           // Publi24 promotions
@@ -3438,6 +3672,59 @@ Returnează un JSON strict cu următoarele chei:
         const getBaseUrlPath = (u: string) => u.split(/[?;]/)[0].toLowerCase();
         const blockedAgencyPaths = new Set(blockedAgencyUrls.map(getBaseUrlPath));
 
+        // Priority 0A: Dedicated Imobiliare.ro gallery extractor anchored strictly to
+        // `<div id="detail-gallery-modal-panel-gallery" role="tabpanel" aria-labelledby="detail-gallery-modal-tab-gallery">`
+        const isImobiliarePage =
+          isImobiliareUrl(url) ||
+          $("#detail-gallery-modal-panel-gallery").length > 0 ||
+          $('[role="tabpanel"][aria-labelledby="detail-gallery-modal-tab-gallery"]').length > 0;
+
+        let imobiliareGalleryImages: string[] = [];
+        if (isImobiliarePage) {
+          let imobiliareExtraction = extractImobiliareGalleryPhotos({
+            $,
+            html,
+            pageUrl: url,
+            isForbiddenGraphic,
+            blockedAgencyPaths,
+            getBaseUrlPath,
+          });
+
+          const needsBrowserSweep =
+            imobiliareExtraction.images.length <= 1 ||
+            imobiliareExtraction.remainingThumbnailsCount > 0;
+
+          if (needsBrowserSweep && isImobiliareUrl(url)) {
+            const browserExtraction = await extractImobiliareGalleryViaBrowser(url, {
+              isForbiddenGraphic,
+              blockedAgencyPaths,
+              getBaseUrlPath,
+            });
+            if (browserExtraction && browserExtraction.images.length > 0) {
+              imobiliareExtraction = mergeImobiliareGalleryResults(
+                imobiliareExtraction,
+                browserExtraction
+              );
+            }
+          }
+
+          if (imobiliareExtraction.remainingThumbnailsCount > 0) {
+            imobiliareGalleryImages = await upgradeRemainingImobiliareThumbnails(
+              imobiliareExtraction.images,
+              {
+                observedHighResPresets: imobiliareExtraction.observedHighResPresets,
+              }
+            );
+          } else {
+            imobiliareGalleryImages = imobiliareExtraction.images;
+          }
+
+          logger.info(
+            `Imobiliare gallery extracted (${imobiliareExtraction.source}, primaryPanel=${imobiliareExtraction.primaryPanelFound}, folders=${imobiliareExtraction.authoritativeFolders.length}, count=${imobiliareGalleryImages.length}, remainingThumbs=${imobiliareGalleryImages.filter(isImobiliareThumbnailUrl).length})`,
+            { module: "crawler" }
+          );
+        }
+
         // Priority 0: Dedicated Storia mosaic gallery view ([data-cy="mosaic-gallery-main-view"])
         let mosaicGalleryImages: string[] = [];
         const mosaicSelectors = [
@@ -3448,7 +3735,7 @@ Returnează un JSON strict cu următoarele chei:
           '[data-cy*="gallery-main-view"]'
         ];
         const $mosaic = $(mosaicSelectors.join(", "));
-        if ($mosaic.length > 0) {
+        if (!isImobiliarePage && $mosaic.length > 0) {
           $mosaic.find("img, source, a, button, div, picture").each((_, el) => {
             const $el = $(el);
             const src = $el.attr("src");
@@ -3457,7 +3744,10 @@ Returnează un JSON strict cu următoarele chei:
             const style = $el.attr("style");
             let candidates = [src, dataSrc];
             if (srcset) {
-              candidates.push(...srcset.split(",").map(s => s.trim().split(" ")[0]));
+              const bestSrcset = parseSrcsetCandidates(srcset, url);
+              if (bestSrcset.length > 0) {
+                candidates.push(bestSrcset[0].url);
+              }
             }
             if (style && style.includes("url(")) {
               const m = style.match(/url\(['"]?([^'"]+)['"]?\)/);
@@ -3534,7 +3824,10 @@ Returnează un JSON strict cu următoarele chei:
         });
 
         const hasStructuredGallery =
-          mosaicGalleryImages.length > 0 || nextDataTargetImages.length > 0 || olxPhotos.length > 0;
+          isImobiliarePage ||
+          mosaicGalleryImages.length > 0 ||
+          nextDataTargetImages.length > 0 ||
+          olxPhotos.length > 0;
 
         // Priority 3: DOM Gallery elements (only scraped when structured gallery sources are empty, preventing agency avatar leaks)
         let domGalleryImages: string[] = [];
@@ -3583,8 +3876,10 @@ Returnează un JSON strict cu următoarele chei:
 
             let candidates = [dataSrc, src, href];
             if (srcset) {
-              const sources = srcset.split(",").map(s => s.trim().split(" ")[0]);
-              candidates = [...candidates, ...sources];
+              const parsedSrcset = parseSrcsetCandidates(srcset, url);
+              if (parsedSrcset.length > 0) {
+                candidates = [parsedSrcset[0].url, ...candidates];
+              }
             }
 
             candidates.forEach(raw => {
@@ -3627,14 +3922,16 @@ Returnează un JSON strict cu următoarele chei:
           }
         }
 
-        const rawCandidates = hasStructuredGallery
-          ? [
-              ...nextDataTargetImages,
-              ...mosaicGalleryImages,
-              ...olxPhotos,
-              ...(isStoriaPage && nextDataTargetImages.length + mosaicGalleryImages.length <= 6 ? jsonLdImages : []),
-            ]
-          : [...jsonLdImages, ...domGalleryImages, ...ogImages];
+        const rawCandidates = isImobiliarePage
+          ? imobiliareGalleryImages
+          : hasStructuredGallery
+            ? [
+                ...nextDataTargetImages,
+                ...mosaicGalleryImages,
+                ...olxPhotos,
+                ...(isStoriaPage && nextDataTargetImages.length + mosaicGalleryImages.length <= 6 ? jsonLdImages : []),
+              ]
+            : [...jsonLdImages, ...domGalleryImages, ...ogImages];
 
         // Deduplicate images and keep highest resolution version
         const deduplicateImages = (urls: string[]) => {
@@ -3642,7 +3939,14 @@ Returnează un JSON strict cu următoarele chei:
 
           const getCanonical = (u: string) => {
             const base = u.split(/[?;]/)[0];
-            // 1. OLX / Storia file ID or JWT token
+            const lowerBase = base.toLowerCase();
+
+            // 1. Imobiliare.ro / RoamCDN canonical photo identity (ignores per-variant preset & hashes)
+            if (lowerBase.includes("roamcdn.net") || lowerBase.includes("imobiliare.ro")) {
+              return getImobiliarePhotoKey(u);
+            }
+
+            // 2. OLX / Storia file ID or JWT token
             const olxMatch = base.match(/\/v1\/files\/([^/]+)/i);
             if (olxMatch) {
               const token = olxMatch[1];
@@ -3662,15 +3966,18 @@ Returnează un JSON strict cu următoarele chei:
             const filename = segments.pop() || base;
             const parentFolder = segments.pop() || "";
 
-            // 2. Filename cleaning (strip dimensions and responsive suffixes)
+            // 3. Filename cleaning (strip dimensions and responsive suffixes)
             const cleanFilename = filename
               .replace(/_\d+x\d+(?=\.[a-z]+)/i, "")
-              .replace(/-(?:full|small|medium|thumb|large|mini|1200w|1600w|800w|400w|600w|300w)/gi, "");
+              .replace(/-(?:full|small|medium|thumb|large|mini|1200w|1600w|800w|400w|600w|300w|140w|200w)/gi, "");
             return `${parentFolder}-${cleanFilename}`.toLowerCase();
           };
 
           const getScore = (u: string) => {
             const lower = u.toLowerCase();
+            if (lower.includes("roamcdn.net") || lower.includes("imobiliare.ro")) {
+              return isForbiddenGraphic(u) ? -10000 : scoreImobiliareImageResolution(u);
+            }
             let score = 0;
             if (lower.includes("1200w") || lower.includes("1600w")) score += 200;
             if (lower.includes("1000x700") || lower.includes("1280x") || lower.includes("900w")) score += 100;
@@ -3679,7 +3986,9 @@ Returnează un JSON strict cu următoarele chei:
             if (lower.includes("/large/") || lower.includes("/galerie/")) score += 40;
             if (lower.includes("/medium/")) score += 20;
             if (lower.includes("/top/")) score += 10;
-            if (lower.includes("/small/") || lower.includes("/thumb/") || lower.includes("140w")) score += 5;
+            if (lower.includes("/small/") || lower.includes("/thumb/") || lower.includes("140w") || lower.includes("200w") || lower.includes("300w")) {
+              score -= 200;
+            }
             if (isForbiddenGraphic(u)) score -= 10000;
             return score;
           };
@@ -3698,8 +4007,8 @@ Returnează un JSON strict cu următoarele chei:
 
         const dedupedImages = deduplicateImages(rawCandidates).slice(0, 100);
         const uniqueImages = await preCleanCrawlImages(dedupedImages, {
-          aggressive: isStoriaPage || isOlxPage,
-          syncBudgetMs: isStoriaPage ? 45000 : 35000,
+          aggressive: isStoriaPage || isOlxPage || isImobiliarePage,
+          syncBudgetMs: isStoriaPage || isImobiliarePage ? 45000 : 35000,
         });
         console.log(`Found ${dedupedImages.length} unique images (${uniqueImages.length} pre-checked & cleaned) for ${url}`);
 
@@ -5973,11 +6282,21 @@ Returnează un JSON strict cu următoarele chei:
   // Initialize offline / background Web Push notification listener for upcoming viewings
   const stopBackgroundNotifications = setupBackgroundNotifications();
 
+  // Start Phase 9 lightweight 5-minute Firestore telemetry rollup flusher (zero writes on idle)
+  TelemetryCollectorService.startPeriodicFlusher();
+
   // Graceful SIGTERM/SIGINT draining for Cloud Run zero-downtime deploys and scaling
   attachGracefulShutdown({
     server,
     lifecycle,
     cleanupTasks: [
+      {
+        name: "telemetry-rollup-flusher",
+        run: async () => {
+          TelemetryCollectorService.stopPeriodicFlusher();
+          await TelemetryCollectorService.flushRollups().catch(() => {});
+        },
+      },
       {
         name: "background-notifications",
         run: () => {

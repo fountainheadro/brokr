@@ -61,7 +61,7 @@ export function schedulePublicShareImagePrewarm(
     .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9_-]/g, "")
-    .slice(0, 16) || "BROKR";
+    .slice(0, 32) || "BROKR";
   const sources = sanitizePrewarmImageUrls(rawSources);
   if (sources.length === 0) return 0;
 

@@ -153,7 +153,10 @@ async function fetchAndDecodeWithRetries(
           const response = await fetch(src, {
             credentials: "same-origin",
             headers: isProtectedEndpoint
-              ? { "X-Brokr-Public-View": "1" }
+              ? {
+                  "X-Brokr-Public-View": "1",
+                  Accept: "image/webp,image/*;q=0.8",
+                }
               : undefined,
             cache: "default",
             signal: controller?.signal,

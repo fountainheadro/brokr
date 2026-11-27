@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from "react";
 import { User, Phone, Euro, ChevronDown, Check, X } from "lucide-react";
 import { ZONA_OPTIONS, COMPARTIMENTARE_OPTIONS, ETAJ_OPTIONS } from "../constants";
 import type { Lead, LeadStatus } from "../services/leadsService";
+import { automationSettingsService } from "../services/automationSettingsService";
+import { buildTitleFromAutomationRule } from "../utils/titleAutomationEngine";
 
 export const CETATENIE_OPTIONS = [
   "Orice",
@@ -2034,19 +2036,49 @@ export function buildLeadPayloadFromCriteria(params: {
       ? state.comercialCategorie || "Spațiu Comercial"
       : state.buildingType;
 
+  const cetatenieStr = state.cetatenie.join(", ");
+  const animalStr = state.animal.join(", ");
+  const profilStr = state.profil.join(", ");
+
   const customPropertyTitle = isProperty ? state.propertyTitle.trim() : "";
   const titleZoneSuffix = realZoneStr ? ` - ${realZoneStr}` : "";
+
+  let automatedPropertyTitle = "";
+  if (isProperty && !customPropertyTitle) {
+    const cachedRule = automationSettingsService.getCachedTitleRule();
+    if (cachedRule?.enabled) {
+      automatedPropertyTitle = buildTitleFromAutomationRule(cachedRule, {
+        transactionType,
+        categoria: canonicalCategory,
+        camere: roomsStr,
+        suprafataUtila: isTeren
+          ? state.suprafataTerenMin.trim() || state.suprafataTerenMax.trim()
+          : state.suprafataUtilaMin.trim() || state.suprafataUtilaMax.trim(),
+        suprafataConstruita: isTeren
+          ? ""
+          : state.suprafataConstruitaMin.trim() || state.suprafataConstruitaMax.trim(),
+        etaj: floorStr,
+        etajeTotal: !isTeren && !isCasaVila ? state.totalFloors.trim() : "",
+        zona: realZoneStr,
+        oras: "București",
+        mobilat: !isTeren ? state.mobilare : "",
+        utilare: !isTeren ? state.utilare : "",
+        parcare: parcareSummary,
+        petFriendly: animalStr,
+        rawTitle: "",
+        rawText: state.requirements.trim(),
+      });
+    }
+  }
+
   const title =
     mode === "cerere"
       ? `Cerere: ${categoryDisplay} ${transactionType === "Vânzare" ? "Cumpărare" : "Închiriere"}${titleZoneSuffix}`
       : mode === "property"
         ? customPropertyTitle ||
+          automatedPropertyTitle ||
           `${categoryDisplay}${roomsStr ? ` ${roomsStr}` : ""} de ${transactionType === "Vânzare" ? "vânzare" : "închiriat"}${titleZoneSuffix}`
         : `${roleLabel}: ${categoryDisplay} ${transactionType === "Vânzare" ? "Cumpărare" : "Închiriere"}${titleZoneSuffix}`;
-
-  const cetatenieStr = state.cetatenie.join(", ");
-  const animalStr = state.animal.join(", ");
-  const profilStr = state.profil.join(", ");
 
   const noteParts: string[] = [];
   if (state.requirements.trim()) noteParts.push(state.requirements.trim());
@@ -2377,6 +2409,7 @@ export function buildLeadPayloadFromCriteria(params: {
               mobilat: !isTeren ? state.mobilare : "",
               utilare: !isTeren ? state.utilare : "",
               parcare: parcareSummary,
+              petFriendly: animalStr,
               rawTitle: customPropertyTitle,
               rawText: state.requirements.trim(),
             },

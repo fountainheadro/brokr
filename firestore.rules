@@ -345,6 +345,33 @@ service cloud.firestore {
           allow write: if false;
         }
       }
+
+      // Phase 7 External Portal Connections (metadata only; backend-written only)
+      match /portal_connections/{providerId} {
+        allow get: if isValidId(tenantId) && isValidId(providerId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+        allow list: if isValidId(tenantId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+        allow write: if false;
+      }
+
+      // Phase 7 Envelope-Encrypted Portal Credentials (100% locked from ALL clients; backend only)
+      match /portal_secrets/{providerId} {
+        allow read, write: if false;
+      }
+
+      // Phase 7 Per-Property Portal Publication Lifecycle Records (backend-written only)
+      match /portal_publications/{publicationId} {
+        allow get: if isValidId(tenantId) && isValidId(publicationId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+        allow list: if isValidId(tenantId) && (
+          isPlatformAdmin() || isActiveTenantMember(tenantId)
+        );
+        allow write: if false;
+      }
     }
 
     // --- Platform Global Auto-Crawl, Shared Leads & Public Shares ---
@@ -598,6 +625,17 @@ service cloud.firestore {
     }
 
     match /notification_dispatches/{dispatchId} {
+      allow get, list: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    // --- Phase 9 Super Admin Pilot Telemetry & Agency Usage Rollups (PII-Free, Backend-Written Only) ---
+    match /platform_telemetry_rollups/{rollupId} {
+      allow get, list: if isPlatformAdmin();
+      allow write: if false;
+    }
+
+    match /platform_agency_usage_rollups/{rollupId} {
       allow get, list: if isPlatformAdmin();
       allow write: if false;
     }

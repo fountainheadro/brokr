@@ -3,13 +3,14 @@ import {
   extractRootDomainFromHost,
 } from "../core/tenancy/svc_tenant-resolution";
 import { DEFAULT_DEV_TENANT } from "../core/tenancy/typ_tenant-context";
-import { isDailyLeadId } from "./leadIdUtils";
+import { isAgencyLeadId, isDailyLeadId } from "./leadIdUtils";
 
 export type ShareEntityKind = "lead" | "property" | "cerere";
 
 export interface ShareTargetInput {
   id?: string | null;
   propertyId?: string | null;
+  sourcePropertyId?: string | null;
   status?: string | null;
   title?: string | null;
   notes?: string | null;
@@ -37,6 +38,20 @@ const LEAD_ONLY_STATUSES = new Set([
   "Calificata",
   "Lead-uri",
   "Intrata",
+  "Sterse",
+]);
+
+const UNPROCESSED_LEAD_STATUSES = new Set([
+  "Noi",
+  "Lead-uri",
+  "Intrata",
+]);
+
+const PROCESSED_AGENCY_LEAD_STATUSES = new Set([
+  "ListaMea",
+  "Pierdute",
+  "Nevalidata",
+  "Calificata",
   "Sterse",
 ]);
 
@@ -177,7 +192,7 @@ function isCerereShareTarget(target: ShareTargetInput): boolean {
 }
 
 /**
- * Classifies a share target as a global "lead" vs agency-scoped "cerere" or "property".
+ * Classifies a share target into its canonical entity kind ("lead" | "property" | "cerere").
  */
 export function detectShareEntityKind(
   target: string | ShareTargetInput | null | undefined,
@@ -226,8 +241,69 @@ export function detectShareEntityKind(
 }
 
 /**
+ * Determines whether a share target belongs to the global unprocessed ("Neprocesate") pool
+ * (served at `https://<rootDomain>/share/2026-11-27-2` and stored under `global__<CODE>`)
+ * vs an agency-processed lead/property/cerere
+ * (served at `https://<agencySubdomain>.<rootDomain>/share/L32` and stored under `<tenantId>__<CODE>`).
+ */
+export function isUnprocessedPublicLead(
+  target: string | ShareTargetInput | null | undefined,
+  explicitKind?: ShareEntityKind
+): boolean {
+  if (explicitKind === "property" || explicitKind === "cerere") {
+    return false;
+  }
+
+  if (typeof target === "string") {
+    const trimmed = target.trim();
+    if (!trimmed) return false;
+    if (isDailyLeadId(trimmed)) return true;
+    if (isAgencyLeadId(trimmed)) return false;
+    if (/^(?:P|C|R)\d+$/i.test(trimmed)) return false;
+    return explicitKind === "lead";
+  }
+
+  if (!target) return false;
+
+  if (isCerereShareTarget(target)) {
+    return false;
+  }
+
+  const code = String(target.propertyId || "").trim().toUpperCase();
+  const status = String(target.status || "").trim();
+
+  if (code.startsWith("P") || PROPERTY_STATUSES.has(status)) {
+    return false;
+  }
+
+  // Agency-assigned L-codes (e.g. L32) and agency-processed statuses ALWAYS live on the agency subdomain
+  if (isAgencyLeadId(code)) {
+    return false;
+  }
+
+  if (PROCESSED_AGENCY_LEAD_STATUSES.has(status)) {
+    return false;
+  }
+
+  // Freshly imported daily codes (e.g. 2026-11-27-2) always live on the root domain while unprocessed
+  if (isDailyLeadId(code)) {
+    return true;
+  }
+
+  if (target.isSharedLead === true && (!status || UNPROCESSED_LEAD_STATUSES.has(status))) {
+    return true;
+  }
+
+  if (UNPROCESSED_LEAD_STATUSES.has(status) && target.isSharedLead !== false) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Extracts the public share code used after `/share/`:
- * prefers the clean sequential entity code (e.g. `L123`, `P123`, `C123` / `R123`)
+ * prefers the clean sequential entity code (e.g. `2026-11-27-2`, `L32`, `P123`, `C123` / `R123`)
  * instead of internal/Firestore document IDs.
  */
 export function resolveShareCode(
@@ -246,9 +322,10 @@ export function resolveShareCode(
 
 /**
  * Builds the canonical external public share URL:
- * - Global Leads: `https://<mainDomain>/share/L123` (e.g. `https://highline.ro/share/L123`)
- * - Agency Cereri & Proprietăți: `https://<agencySubdomain>.<mainDomain>/share/<codeId>`
- *   (e.g. `https://agencyname.highline.ro/share/C123` or `https://agencyname.highline.ro/share/P123`)
+ * - Unprocessed / Neprocesate Leads: `https://<mainDomain>/share/2026-11-27-2`
+ * - Agency-processed Leads (`L32`), Cereri (`C123`) & Proprietăți (`P123`):
+ *   `https://<agencySubdomain>.<mainDomain>/share/<codeId>`
+ *   (e.g. `https://agency.highline.ro/share/L32`)
  */
 export function getPublicShareUrl(
   target: string | ShareTargetInput | null | undefined,
@@ -257,9 +334,8 @@ export function getPublicShareUrl(
   const code = resolveShareCode(target);
   const encodedCode = code ? encodeURIComponent(code) : "";
   const rootDomain = getMainCrmDomain(options?.rootDomain);
-  const kind = detectShareEntityKind(target, options?.entityKind);
 
-  if (kind === "lead") {
+  if (isUnprocessedPublicLead(target, options?.entityKind)) {
     return `https://${rootDomain}/share/${encodedCode}`;
   }
 

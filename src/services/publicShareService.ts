@@ -3,9 +3,11 @@ import { auth, db } from "../lib/firebase";
 import { recordClientFirestoreOps } from "../utils/clientQuotaTelemetry";
 import {
   detectShareEntityKind,
+  isUnprocessedPublicLead,
   resolveShareCode,
   type ShareEntityKind,
 } from "../utils/shareUtils";
+import { isDailyLeadId } from "../utils/leadIdUtils";
 import {
   extractOrderedPublicImageUrls,
   getImageIdentityKey,
@@ -165,18 +167,37 @@ function sanitizeExtractedDataForPublicShare(
       }
     }
 
-    const existingOrigDesc =
-      typeof cloned.originalDescription === "string" ? cloned.originalDescription.trim() : "";
-    if (!existingOrigDesc) {
-      const fallbackOrigDesc =
-        (typeof rawLead.originalDescription === "string" && rawLead.originalDescription.trim()) ||
-        (typeof rawLead.description === "string" && rawLead.description.trim()) ||
-        (typeof rawLead.rawDescription === "string" && rawLead.rawDescription.trim()) ||
-        (!shouldUseModifiedAdContent(rawLead) && typeof rawLead.notes === "string"
-          ? rawLead.notes.trim()
-          : "");
-      if (fallbackOrigDesc) {
-        cloned.originalDescription = fallbackOrigDesc;
+    const resolvedPublicDesc = resolvePublicDisplayDescription(rawLead, "");
+    const fallbackOrigDesc =
+      resolvedPublicDesc ||
+      (typeof cloned.originalDescription === "string" && cloned.originalDescription.trim()) ||
+      (typeof rawLead.originalDescription === "string" && rawLead.originalDescription.trim()) ||
+      (typeof rawLead.description === "string" && rawLead.description.trim()) ||
+      (typeof rawLead.rawDescription === "string" && rawLead.rawDescription.trim()) ||
+      (!shouldUseModifiedAdContent(rawLead) && typeof rawLead.notes === "string"
+        ? rawLead.notes.trim()
+        : "");
+    if (fallbackOrigDesc) {
+      cloned.originalDescription = fallbackOrigDesc;
+      if (cloned.crmData && typeof cloned.crmData === "object") {
+        cloned.crmData.descriere = {
+          ...(cloned.crmData.descriere && typeof cloned.crmData.descriere === "object"
+            ? cloned.crmData.descriere
+            : {}),
+          continut: fallbackOrigDesc,
+        };
+      }
+      if (typeof cloned.markdownMarketing === "string" || cloned.descriptionManuallyEdited === true) {
+        cloned.markdownMarketing = fallbackOrigDesc;
+      }
+      if (
+        cloned.presentationSections?.introducere &&
+        typeof cloned.presentationSections.introducere === "object"
+      ) {
+        cloned.presentationSections.introducere = {
+          ...cloned.presentationSections.introducere,
+          summary: fallbackOrigDesc,
+        };
       }
     }
     // Keep crmData.imagini synchronized with the explicit sanitized gallery so deleted photos
@@ -232,7 +253,8 @@ function toIsoString(raw: any): string {
 export function buildPublicShareDocId(
   shareCode: string,
   entityKind: ShareEntityKind,
-  tenantId?: string | null
+  tenantId?: string | null,
+  options?: { isGlobalUnprocessed?: boolean }
 ): string {
   const cleanCode = String(shareCode || "")
     .trim()
@@ -240,7 +262,12 @@ export function buildPublicShareDocId(
     .replace(/[^A-Z0-9_-]/g, "");
   if (!cleanCode) return "";
 
-  if (entityKind === "lead") {
+  const isGlobal =
+    options?.isGlobalUnprocessed !== undefined
+      ? options.isGlobalUnprocessed
+      : entityKind === "lead" && isDailyLeadId(cleanCode);
+
+  if (isGlobal) {
     return `global__${cleanCode}`.slice(0, 128);
   }
 
@@ -388,7 +415,10 @@ export async function publishPublicShareSnapshot(
   }
 
   const entityKind = detectShareEntityKind(lead);
-  const docId = buildPublicShareDocId(shareCode, entityKind, options?.tenantId);
+  const isGlobalUnprocessed = isUnprocessedPublicLead(lead);
+  const docId = buildPublicShareDocId(shareCode, entityKind, options?.tenantId, {
+    isGlobalUnprocessed,
+  });
   if (!docId || !/^[a-zA-Z0-9_-]{1,128}$/.test(docId)) {
     return false;
   }
@@ -439,8 +469,17 @@ export async function publishPublicShareSnapshot(
     sanitizedImages !== undefined
       ? sanitizedImages.join(",")
       : orderedPublicImages.join(",");
-  const descSignature = resolvedDesc.slice(0, 240) + "|" + resolvedDesc.length;
-  const fingerprint = `${docId}|${title}|${effectiveCoverImage}|${gallerySignature}|${descSignature}|${lead.price || ""}|${lead.zone || ""}|${lead.transactionType || ""}|${lead.categoria || ""}|${lead.mobilare || ""}|${lead.parcare || ""}|${lead.sursaIncalzire || ""}|${lead.modIncalzire || ""}|${lead.status || ""}|${updatedAt}`;
+  const descSignature = `${resolvedDesc.slice(0, 240)}|${resolvedDesc.slice(-120)}|${resolvedDesc.length}`;
+  let sectionsSignature = "";
+  try {
+    const pres = (lead.extractedData as any)?.presentationSections;
+    if (pres && typeof pres === "object") {
+      sectionsSignature = JSON.stringify(pres).slice(0, 1500);
+    }
+  } catch {
+    sectionsSignature = "";
+  }
+  const fingerprint = `${docId}|${title}|${effectiveCoverImage}|${gallerySignature}|${descSignature}|${lead.price || ""}|${lead.zone || ""}|${lead.transactionType || ""}|${lead.categoria || ""}|${lead.mobilare || ""}|${lead.parcare || ""}|${lead.sursaIncalzire || ""}|${lead.modIncalzire || ""}|${lead.status || ""}|${updatedAt}|${sectionsSignature}`;
   const warmImages = (sanitizedImages ?? orderedPublicImages).slice(0, 5);
   if (!options?.force && publishedFingerprintCache.get(docId) === fingerprint) {
     // Even if snapshot content didn't change (e.g., agent clicked Copy Share Link),
@@ -454,7 +493,7 @@ export async function publishPublicShareSnapshot(
   const payload = stripUndefinedDeep({
     shareCode: shareCode.toUpperCase(),
     entityKind,
-    tenantId: entityKind === "lead" ? undefined : clampStr(options?.tenantId, 128),
+    tenantId: isGlobalUnprocessed ? undefined : clampStr(options?.tenantId, 128),
     propertyId: clampStr(lead.propertyId || shareCode, 64),
     sourceDocId: clampStr(lead.id, 128),
     title,
@@ -487,7 +526,7 @@ export async function publishPublicShareSnapshot(
     persistFingerprintCacheToStorage();
     if (!options?.skipServerInvalidate) {
       const invalidatePromise = notifyServerPublicShareCacheInvalidation(
-        [shareCode, lead.id, lead.propertyId, lead.sourcePropertyId],
+        [shareCode, lead.id, lead.propertyId, lead.sourcePropertyId, lead.sharedLeadId],
         { shareCode, warmImages }
       );
       if (options?.force) {
@@ -516,11 +555,16 @@ export async function deletePublicShareSnapshot(
 
   const shareCode = resolveShareCode(lead);
   const entityKind = detectShareEntityKind(lead);
+  const isGlobalUnprocessed = isUnprocessedPublicLead(lead);
   const candidateDocIds = new Set<string>();
   if (shareCode && /^[a-zA-Z0-9_-]{1,64}$/.test(shareCode)) {
-    const primary = buildPublicShareDocId(shareCode, entityKind, options?.tenantId);
+    const primary = buildPublicShareDocId(shareCode, entityKind, options?.tenantId, {
+      isGlobalUnprocessed,
+    });
     if (primary) candidateDocIds.add(primary);
-    const globalDoc = buildPublicShareDocId(shareCode, "lead", null);
+    const globalDoc = buildPublicShareDocId(shareCode, "lead", null, {
+      isGlobalUnprocessed: true,
+    });
     if (globalDoc) candidateDocIds.add(globalDoc);
   }
 
@@ -567,7 +611,10 @@ export async function syncPublicShareSnapshotsBatch(
       const code = resolveShareCode(lead);
       if (!code || !/^[a-zA-Z0-9_-]{1,64}$/.test(code)) continue;
       const entityKind = detectShareEntityKind(lead);
-      const docId = buildPublicShareDocId(code, entityKind, options?.tenantId);
+      const isGlobalUnprocessed = isUnprocessedPublicLead(lead);
+      const docId = buildPublicShareDocId(code, entityKind, options?.tenantId, {
+        isGlobalUnprocessed,
+      });
       if (!docId || publishedFingerprintCache.has(docId)) continue;
       await publishPublicShareSnapshot(lead, {
         tenantId: options?.tenantId,

@@ -29,6 +29,12 @@ export interface PropertyTitleParams {
   hasParcare?: boolean;
   parcare?: string | boolean;
   petFriendly?: string | boolean;
+  statie?: string;
+  distantaStatie?: string;
+  numeParc?: string;
+  distantaParc?: string;
+  numeAtractie?: string;
+  distantaAtractie?: string;
   propertyId?: string;
   rawTitle?: string;
   rawText?: string;
@@ -51,6 +57,12 @@ export function generateStandardAdTitle(params: PropertyTitleParams): string {
       utilare: params.utilare,
       parcare: params.parcare ?? params.hasParcare,
       petFriendly: params.petFriendly,
+      statie: params.statie,
+      distantaStatie: params.distantaStatie,
+      numeParc: params.numeParc,
+      distantaParc: params.distantaParc,
+      numeAtractie: params.numeAtractie,
+      distantaAtractie: params.distantaAtractie,
       propertyId: params.propertyId,
       rawTitle: params.rawTitle,
       rawText: params.rawText,

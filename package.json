@@ -29,9 +29,12 @@
     "test:phase4": "NODE_ENV=test tsx tests/infra/tst_phase4-infra-and-lifecycle.ts",
     "test:phase5": "NODE_ENV=test tsx tests/media/tst_phase5-media-storage.ts",
     "test:phase6": "NODE_ENV=test tsx tests/jobs/tst_phase6-workers-and-outbox.ts",
+    "test:phase7:portals": "NODE_ENV=test tsx tests/portals/tst_phase7-portal-foundation.ts",
+    "test:phase8:storia": "NODE_ENV=test tsx tests/portals/tst_storia-adapter.ts",
+    "test:phase9:telemetry": "NODE_ENV=test tsx tests/telemetry/tst_phase9-telemetry.ts",
     "migrate:local-media": "tsx server/migration/job_migrate-local-media.ts",
     "baseline:phase0": "tsx tests/baseline/run_phase0-baseline.ts",
-    "test": "npm run test:security && npm run test:platform && npm run test:subscription && npm run test:ai && npm run test:phase7 && npm run test:phase8 && npm run test:phase9 && npm run test:phase10 && npm run test:phase11 && npm run test:phase12 && npm run test:adc && npm run test:rules && npm run test:rules:isolation && npm run test:hub && npm run test:phase2 && npm run test:phase3 && npm run test:persistence && npm run test:phase4 && npm run test:phase5 && npm run test:phase6"
+    "test": "npm run test:security && npm run test:platform && npm run test:subscription && npm run test:ai && npm run test:phase7 && npm run test:phase8 && npm run test:phase9 && npm run test:phase10 && npm run test:phase11 && npm run test:phase12 && npm run test:adc && npm run test:rules && npm run test:rules:isolation && npm run test:hub && npm run test:phase2 && npm run test:phase3 && npm run test:persistence && npm run test:phase4 && npm run test:phase5 && npm run test:phase6 && npm run test:phase7:portals && npm run test:phase8:storia && npm run test:phase9:telemetry"
   },
   "dependencies": {
     "@google/genai": "^3.4.0",

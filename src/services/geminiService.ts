@@ -158,6 +158,9 @@ export interface ExtractionResult {
   automationSource?: Record<string, any> | null;
   originalTitle?: string;
   originalDescription?: string;
+  crawledOriginalTitle?: string;
+  crawledOriginalDescription?: string;
+  titleManuallyEdited?: boolean;
   text?: string;
 }
 

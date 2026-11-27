@@ -4,6 +4,16 @@ import { safeAxiosGet } from "./security/sec_url-validator";
 import { TitleAutomationRule } from "../src/core/automation/typ_title-automation";
 import { buildTitleFromAutomationRule } from "../src/utils/titleAutomationEngine";
 import { DailyQuotaTracker } from "./monitoring/svc_daily-quota-tracker";
+import {
+  extractGeminiUsageMetadata,
+  TelemetryCollectorService,
+  type GeminiUsageSnapshot,
+} from "../src/core/telemetry/svc_telemetry-collector";
+
+export interface GeminiTelemetryOptions {
+  tenantId?: string;
+  onUsage?: (usage: GeminiUsageSnapshot) => void;
+}
 
 // Ensure Gemini is initialized with server-side environment variable
 const ai = new GoogleGenAI({ 
@@ -96,7 +106,8 @@ export interface BasicLeadData {
 export async function serverExtractBasicData(
   content: string,
   title: string,
-  titleAutomationRule?: TitleAutomationRule | null
+  titleAutomationRule?: TitleAutomationRule | null,
+  telemetryOptions?: GeminiTelemetryOptions
 ): Promise<BasicLeadData> {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY environment variable is missing on server");
@@ -164,6 +175,21 @@ export async function serverExtractBasicData(
     fallbackPromptChars: prompt.length,
     fallbackOutputChars: text?.length || 0,
   });
+  const basicUsage = telemetryOptions?.tenantId
+    ? TelemetryCollectorService.recordGeminiResponseForTenant({
+        tenantId: telemetryOptions.tenantId,
+        model: "gemini-3.1-flash-lite",
+        response,
+        fallbackPromptChars: prompt.length,
+        fallbackOutputChars: text?.length || 0,
+      })
+    : extractGeminiUsageMetadata({
+        model: "gemini-3.1-flash-lite",
+        response,
+        fallbackPromptChars: prompt.length,
+        fallbackOutputChars: text?.length || 0,
+      });
+  telemetryOptions?.onUsage?.(basicUsage);
   if (!text) throw new Error("No response from Gemini");
   const parsed = JSON.parse(text);
 
@@ -200,7 +226,8 @@ export async function serverExtractData(
   imageUrls: string[] = [],
   propertyId?: string,
   propertyUrl?: string,
-  titleAutomationRule?: TitleAutomationRule | null
+  titleAutomationRule?: TitleAutomationRule | null,
+  telemetryOptions?: GeminiTelemetryOptions
 ) {
   if (!process.env.GEMINI_API_KEY) {
     throw new Error("GEMINI_API_KEY environment variable is missing on server");
@@ -809,6 +836,21 @@ Condiții suplimentare:
     fallbackPromptChars: prompt.length,
     fallbackOutputChars: text?.length || 0,
   });
+  const extractUsage = telemetryOptions?.tenantId
+    ? TelemetryCollectorService.recordGeminiResponseForTenant({
+        tenantId: telemetryOptions.tenantId,
+        model: "gemini-4-hydrogen",
+        response,
+        fallbackPromptChars: prompt.length,
+        fallbackOutputChars: text?.length || 0,
+      })
+    : extractGeminiUsageMetadata({
+        model: "gemini-4-hydrogen",
+        response,
+        fallbackPromptChars: prompt.length,
+        fallbackOutputChars: text?.length || 0,
+      });
+  telemetryOptions?.onUsage?.(extractUsage);
   if (!text) {
     throw new Error("No response from Gemini");
   }
@@ -999,6 +1041,12 @@ Condiții suplimentare:
 
       if (titleAutomationRule && titleAutomationRule.enabled) {
         const prevTitle = String(parsed.crmData?.descriere?.titlu || "").trim();
+        const rawMobilat = parsed.crmData?.dotari?.mobilat ?? parsed.crmData?.utilitati?.dotari?.mobilat;
+        const mobilatStr = Array.isArray(rawMobilat) ? rawMobilat.join(", ") : String(rawMobilat || "");
+        const rawUtilare = parsed.crmData?.dotari?.utilare ?? parsed.crmData?.dotari?.bucatarie;
+        const utilareStr = Array.isArray(rawUtilare) ? rawUtilare.join(", ") : String(rawUtilare || "");
+        const rawParcareCount = Number(parsed.crmData?.caracteristici?.detalii?.parcari || 0);
+        const rawParcareDesc = parsed.crmData?.dotari?.parcare || parsed.crmData?.caracteristici?.detalii?.parcare || "";
         const formattedTitle = buildTitleFromAutomationRule(titleAutomationRule, {
           transactionType: parsed.crmData?.detaliiGenerale?.tranzactie,
           categoria: parsed.crmData?.detaliiGenerale?.categoria,
@@ -1011,8 +1059,10 @@ Condiții suplimentare:
             ? parsed.crmData.detaliiGenerale.localizare.zona[0]
             : "",
           oras: parsed.crmData?.detaliiGenerale?.localizare?.oras,
-          mobilat: parsed.crmData?.utilitati?.dotari?.mobilat,
-          parcare: Number(parsed.crmData?.caracteristici?.detalii?.parcari || 0) > 0,
+          mobilat: mobilatStr,
+          utilare: utilareStr,
+          parcare: rawParcareDesc || (rawParcareCount > 0 ? true : undefined),
+          petFriendly: parsed.crmData?.criteriiFormular?.animal || undefined,
           propertyId,
           rawTitle: title,
           rawText: `${title}\n${content}`,

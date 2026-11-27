@@ -461,6 +461,40 @@ export function TenantProvider({ children }: { children: React.ReactNode }) {
   return <TenantReactContext.Provider value={value}>{children}</TenantReactContext.Provider>;
 }
 
+/**
+ * Lightweight, zero-network TenantContext provider strictly for external public share routes
+ * (`/share/:id` and `/p/:id`). Avoids mounting Firebase Auth, `/api/tenant/resolve`, or
+ * Firestore membership listeners so SSR-hydrated properties and prefetched images paint immediately.
+ */
+export function PublicShareTenantProvider({ children }: { children: React.ReactNode }) {
+  const value = useMemo<TenantContextState>(() => {
+    const detectedRoot =
+      typeof window !== "undefined" && window.location?.hostname
+        ? extractRootDomainFromHost(window.location.hostname) || DEFAULT_PLATFORM_ROOT_DOMAIN
+        : DEFAULT_PLATFORM_ROOT_DOMAIN;
+
+    return {
+      tenant: null,
+      membership: null,
+      tenantContext: null,
+      isLoading: false,
+      isAccessDenied: false,
+      accessDeniedReason: null,
+      isPlatformAdminHost: false,
+      platformRootDomain: detectedRoot,
+      previewSession: null,
+      refreshTenant: async () => {},
+      startPreview: async () => {
+        throw new Error("Preview unavailable on public share pages.");
+      },
+      switchSimulatedRole: async () => {},
+      exitPreview: async () => {},
+    };
+  }, []);
+
+  return <TenantReactContext.Provider value={value}>{children}</TenantReactContext.Provider>;
+}
+
 export function useTenantContext(): TenantContextState {
   const ctx = useContext(TenantReactContext);
   if (!ctx) {

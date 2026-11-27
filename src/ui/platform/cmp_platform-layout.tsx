@@ -23,6 +23,7 @@ import {
   Database,
   Workflow,
   Radar,
+  Activity,
 } from "lucide-react";
 import { TplPlatformDashboard } from "../templates/platform/tpl_platform-dashboard";
 import { NavGroup } from "../organisms/common/org_navigation-sidebar";
@@ -31,12 +32,14 @@ import { useTenantContext } from "../../core/tenancy/ctx_tenant";
 
 export interface PlatformLayoutProps {
   title?: string;
+  subHeader?: React.ReactNode;
   metricsSlot?: React.ReactNode;
   children: React.ReactNode;
 }
 
 export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
   title = "Super Admin Platformă",
+  subHeader,
   metricsSlot,
   children,
 }) => {
@@ -139,6 +142,13 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
           onClick: () => navigate("/platform/dashboard"),
           icon: <LayoutDashboard size={16} />,
           active: location.pathname === "/platform" || location.pathname === "/platform/dashboard",
+        },
+        {
+          id: "performance",
+          label: "Performanță & Trafic",
+          onClick: () => navigate("/platform/performance"),
+          icon: <Activity size={16} />,
+          active: location.pathname === "/platform/performance",
         },
         {
           id: "analytics",
@@ -380,6 +390,7 @@ export const CmpPlatformLayout: React.FC<PlatformLayoutProps> = ({
     <TplPlatformDashboard
       navGroups={navGroups}
       headerTitle={title}
+      subHeader={subHeader}
       metricsSlot={metricsSlot}
       contentSlot={children}
       userMenu={userMenu}

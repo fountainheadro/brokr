@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { Lead, getLeadRole, leadsService } from "../services/leadsService";
+import { Lead, getLeadRole, isUnprocessedLead, leadsService } from "../services/leadsService";
 import { Contact } from "../services/contactsService";
 import { notificationsService } from "../services/notificationsService";
 import { 
@@ -58,6 +58,7 @@ import {
   normalizeStoredImageUrl,
 } from "../utils/publicContentUtils";
 import { publishPublicShareSnapshot } from "../services/publicShareService";
+import { OrgPortalPublishingPanel } from "../ui/organisms/common/org_portal-publishing-panel";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { getCleanDisplayImageUrl, getThumbnailImageUrl } from "../utils/imageUtils";
 import { regeneratePropertyImages } from "../utils/regeneratePropertyImages";
@@ -70,6 +71,27 @@ import {
   getCriteriaSectionTitles,
 } from "./CriteriaDetailSections";
 import type { BuildingCategoryType } from "./PropertyCriteriaAccordionForm";
+import { automationSettingsService } from "../services/automationSettingsService";
+import {
+  buildTitleFromAutomationRule,
+  extractTitleInputFromLead,
+  hasMissingTitleTagPlaceholder,
+} from "../utils/titleAutomationEngine";
+import {
+  DescriptionAutomationRule,
+  DescriptionGridRow,
+  DescriptionPatternConfig,
+  DescriptionSectionId,
+  normalizeDescriptionAutomationRule,
+} from "../core/automation/typ_title-automation";
+import {
+  getDescriptionSectionLayout,
+  getGridColsClass,
+  getItemKey,
+  hasCustomDescriptionRows,
+  isDescriptionSectionEnabled,
+  isDividerOnlyRow,
+} from "../utils/descriptionLayoutUtils";
 
 export interface PropertyDetailViewProps {
   lead: Lead;
@@ -185,12 +207,6 @@ const AttributeRow: React.FC<AttributeRowProps> = ({
         }`}
       >
         <span className="truncate">{label}</span>
-        {activeFocus && (
-          <span
-            className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
-            title="Mod focus activ"
-          />
-        )}
       </label>
 
       {/* Reserved Information / Input Slot Below (exact matching geometry -> 0px layout shift) */}
@@ -285,7 +301,6 @@ interface SubCategoryHeaderProps {
 const SubCategoryHeader: React.FC<SubCategoryHeaderProps> = ({ title, count, actions }) => (
   <div className="min-h-10 py-2 px-5 bg-gray-50/60 border-b border-gray-100 flex items-center justify-between gap-2 select-none">
     <div className="flex items-center gap-2">
-      <span className="w-2 h-2 rounded-full bg-[#BE9662]" />
       <span className="font-title text-[12px] font-semibold text-[#051D35]">
         {title}
       </span>
@@ -393,30 +408,119 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     role: internalIsRent ? "Chirias" : "Cumparator",
     buildingType: internalBuildingType,
   });
-  const internalNavSections: NavSection[] = useMemo(
-    () => [
-      { id: "sec-persoana", label: internalSectionTitles.persoanaTitle, icon: User },
-      { id: "sec-client-dorit", label: internalSectionTitles.clientDoritTitle, icon: UserCheck },
-      { id: "sec-pret-conditii", label: internalSectionTitles.pretConditiiTitle, icon: BadgePercent },
-      { id: "sec-generale", label: internalSectionTitles.generaleTitle, icon: FileText },
-      { id: "sec-imobil", label: internalSectionTitles.imobilTitle, icon: Home },
-      { id: "sec-avansate", label: internalSectionTitles.avansateTitle, icon: Layers },
-      { id: "sec-alte", label: internalSectionTitles.alteTitle, icon: Sparkles },
-      { id: "sec-imagini", label: "Fotografii", icon: Camera },
-    ],
-    [
-      internalSectionTitles.persoanaTitle,
-      internalSectionTitles.clientDoritTitle,
-      internalSectionTitles.pretConditiiTitle,
-      internalSectionTitles.generaleTitle,
-      internalSectionTitles.imobilTitle,
-      internalSectionTitles.avansateTitle,
-      internalSectionTitles.alteTitle,
-    ]
+
+  const [agencyDescriptionRule, setAgencyDescriptionRule] = useState<DescriptionAutomationRule>(() =>
+    normalizeDescriptionAutomationRule(
+      automationSettingsService.getCachedTitleRule(tenant?.id).descriptionLayout
+    )
   );
 
+  useEffect(() => {
+    if (isPublicShared) return;
+    let active = true;
+    setAgencyDescriptionRule(
+      normalizeDescriptionAutomationRule(
+        automationSettingsService.getCachedTitleRule(tenant?.id).descriptionLayout
+      )
+    );
+    automationSettingsService
+      .fetchTitleRule(tenant?.id)
+      .then((rec) => {
+        if (active && rec?.titleRule?.descriptionLayout) {
+          setAgencyDescriptionRule(
+            normalizeDescriptionAutomationRule(rec.titleRule.descriptionLayout)
+          );
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [isPublicShared, tenant?.id]);
+
+  const effectiveDescriptionRule = useMemo<DescriptionAutomationRule>(() => {
+    if (isPublicShared) {
+      const attached = (lead as any)?.automationDescriptionLayout;
+      if (attached) {
+        return normalizeDescriptionAutomationRule(attached);
+      }
+    }
+    return agencyDescriptionRule;
+  }, [isPublicShared, lead, agencyDescriptionRule]);
+
+  const activeDescriptionPattern: DescriptionPatternConfig = internalIsRent
+    ? effectiveDescriptionRule.rent
+    : effectiveDescriptionRule.sale;
+
+  const visiblePublicNavSections: NavSection[] = useMemo(() => {
+    const navToDescSec: Partial<Record<string, DescriptionSectionId>> = {
+      tranzactie: "pret_conditii",
+      introducere: "introducere",
+      apartament: "apartament",
+      bloc: "bloc",
+      imprejurimi: "imprejurimi",
+      transport: "transport",
+      parcare: "parcare",
+    };
+    return NAV_SECTIONS.filter((sect) => {
+      const descSecId = navToDescSec[sect.id];
+      return descSecId ? isDescriptionSectionEnabled(activeDescriptionPattern, descSecId) : true;
+    });
+  }, [activeDescriptionPattern]);
+
+  const internalNavSections: NavSection[] = useMemo(() => {
+    const items: NavSection[] = [
+      { id: "sec-persoana", label: internalSectionTitles.persoanaTitle, icon: User },
+      { id: "sec-client-dorit", label: internalSectionTitles.clientDoritTitle, icon: UserCheck },
+    ];
+    if (isDescriptionSectionEnabled(activeDescriptionPattern, "pret_conditii")) {
+      items.push({
+        id: "sec-pret-conditii",
+        label: internalSectionTitles.pretConditiiTitle,
+        icon: BadgePercent,
+      });
+    }
+    if (isDescriptionSectionEnabled(activeDescriptionPattern, "introducere")) {
+      items.push({
+        id: "sec-generale",
+        label: internalSectionTitles.generaleTitle,
+        icon: FileText,
+      });
+    }
+    if (isDescriptionSectionEnabled(activeDescriptionPattern, "apartament")) {
+      items.push({ id: "sec-imobil", label: internalSectionTitles.imobilTitle, icon: Home });
+    }
+    items.push(
+      { id: "sec-avansate", label: internalSectionTitles.avansateTitle, icon: Layers },
+      { id: "sec-alte", label: internalSectionTitles.alteTitle, icon: Sparkles }
+    );
+    if (isDescriptionSectionEnabled(activeDescriptionPattern, "bloc")) {
+      items.push({ id: "bloc", label: "Bloc", icon: Building2 });
+    }
+    if (isDescriptionSectionEnabled(activeDescriptionPattern, "imprejurimi")) {
+      items.push({ id: "imprejurimi", label: "Împrejurimi", icon: Compass });
+    }
+    if (isDescriptionSectionEnabled(activeDescriptionPattern, "transport")) {
+      items.push({ id: "transport", label: "Transport", icon: Bus });
+    }
+    if (isDescriptionSectionEnabled(activeDescriptionPattern, "parcare")) {
+      items.push({ id: "parcare", label: "Parcare", icon: Car });
+    }
+    items.push({ id: "sec-imagini", label: "Fotografii", icon: Camera });
+    return items;
+  }, [
+    activeDescriptionPattern,
+    internalSectionTitles.persoanaTitle,
+    internalSectionTitles.clientDoritTitle,
+    internalSectionTitles.pretConditiiTitle,
+    internalSectionTitles.generaleTitle,
+    internalSectionTitles.imobilTitle,
+    internalSectionTitles.avansateTitle,
+    internalSectionTitles.alteTitle,
+  ]);
+
   const [activeSection, setActiveSection] = useState<string>(
-    isPublicShared ? (NAV_SECTIONS[0]?.id || "tranzactie") : "sec-persoana"
+    isPublicShared ? (visiblePublicNavSections[0]?.id || "photos") : "sec-persoana"
   );
   const [isCopied, setIsCopied] = useState<boolean>(false);
   const publicShareUrl =
@@ -430,7 +534,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   // Ensure default active tab is always the first in jump links on mount or property change
   useEffect(() => {
     setInternalBuildingType(derivePropertyCriteriaStateFromLead(lead).buildingType);
-    setActiveSection(isPublicShared ? (NAV_SECTIONS[0]?.id || "tranzactie") : "sec-persoana");
+    setActiveSection(
+      isPublicShared
+        ? (visiblePublicNavSections[0]?.id || "photos")
+        : (internalNavSections[0]?.id || "sec-persoana")
+    );
     if (isPublicShared) {
       window.scrollTo(0, 0);
     } else {
@@ -513,20 +621,20 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
         // Window scroll check for public shared view
         const isAtBottom = window.innerHeight + scrollY >= document.documentElement.scrollHeight - 60;
-        if (isAtBottom) {
-          setActiveSection(NAV_SECTIONS[NAV_SECTIONS.length - 1].id);
+        if (isAtBottom && visiblePublicNavSections.length > 0) {
+          setActiveSection(visiblePublicNavSections[visiblePublicNavSections.length - 1].id);
           return;
         }
 
         if (scrollY <= 80) {
-          setActiveSection("photos");
+          setActiveSection(visiblePublicNavSections[0]?.id || "photos");
           return;
         }
 
         // Trigger line: 104px below viewport top (accounting for 88px fixed headers + 16px padding)
         const triggerLine = 104;
-        let currentSectionId = "photos";
-        for (const sect of NAV_SECTIONS) {
+        let currentSectionId = visiblePublicNavSections[0]?.id || "photos";
+        for (const sect of visiblePublicNavSections) {
           const el = document.getElementById(sect.id);
           if (el) {
             const rect = el.getBoundingClientRect();
@@ -545,13 +653,13 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
 
       // Check if user is scrolled to the absolute bottom of the container
       const isAtBottom = scrollContainer.scrollTop + scrollContainer.clientHeight >= scrollContainer.scrollHeight - 40;
-      if (isAtBottom) {
+      if (isAtBottom && internalNavSections.length > 0) {
         setActiveSection(internalNavSections[internalNavSections.length - 1].id);
         return;
       }
 
       // If at or near the top of the container, force the first jump link tab
-      if (scrollContainer.scrollTop <= 40) {
+      if (scrollContainer.scrollTop <= 40 && internalNavSections.length > 0) {
         setActiveSection(internalNavSections[0].id);
         return;
       }
@@ -561,7 +669,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       const triggerLine = containerTop + 70;
 
       // Find the last section whose top has reached or passed the trigger line
-      let currentSectionId = internalNavSections[0].id;
+      let currentSectionId = internalNavSections[0]?.id || "sec-persoana";
       for (const sect of internalNavSections) {
         const el = document.getElementById(sect.id);
         if (el) {
@@ -595,7 +703,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         }
       };
     }
-  }, [isPublicShared, internalNavSections]);
+  }, [isPublicShared, internalNavSections, visiblePublicNavSections]);
 
   const toggleCard = (cardId: string) => {
     setCollapsedCards(prev => ({
@@ -1066,14 +1174,73 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     : (crmData?.caracteristici?.alteDetalii?.stadiuConstructie || (lead as any)?.stare || (lead as any)?.condition);
   const stareInterior = leadStareRaw || "Buna";
 
+  const cfGeneral = (lead.criteriiFormular || {}) as any;
+  const dotariCrmGeneral = (crmData as any)?.dotari || (crmData?.utilitati as any)?.dotari || {};
+  const rawCategorieGeneral = String(
+    cfGeneral?.buildingType ||
+      lead.buildingType ||
+      crmData?.detaliiGenerale?.categoria ||
+      lead.categoria ||
+      "Apartament"
+  ).trim();
+  const categorieGeneral =
+    rawCategorieGeneral === "Casa/Vila"
+      ? "Casă / Vilă"
+      : rawCategorieGeneral === "Spatiu Comercial"
+        ? "Spațiu Comercial"
+        : rawCategorieGeneral || "Apartament";
+  const camereGeneral =
+    (Array.isArray(cfGeneral?.selectedRooms) && cfGeneral.selectedRooms.length > 0
+      ? cfGeneral.selectedRooms.join(", ")
+      : "") || String(camere);
+  const baiGeneral =
+    (Array.isArray(cfGeneral?.selectedBaths) && cfGeneral.selectedBaths.length > 0
+      ? cfGeneral.selectedBaths.join(", ")
+      : "") ||
+    (lead as any)?.baths ||
+    String(bai);
+  const etajApartamentGeneral =
+    (Array.isArray(cfGeneral?.selectedFloors) && cfGeneral.selectedFloors.length > 0
+      ? cfGeneral.selectedFloors.join(", ")
+      : "") || (etajVal ? String(etajVal) : "-");
+  const etajeTotalBlocGeneral =
+    (cfGeneral?.totalFloors ? String(cfGeneral.totalFloors) : "") ||
+    (totalEtaje ? String(totalEtaje) : "-");
+  const mobilareGeneral =
+    cfGeneral?.mobilare ||
+    (lead as any)?.mobilare ||
+    (Array.isArray(dotariCrmGeneral?.mobilat)
+      ? dotariCrmGeneral.mobilat.join(", ")
+      : dotariCrmGeneral?.mobilat) ||
+    "-";
+  const utilareGeneral =
+    cfGeneral?.utilare || (lead as any)?.utilare || dotariCrmGeneral?.utilare || "-";
+  const tipParcareGeneral =
+    cfGeneral?.tipParcare || (lead as any)?.tipParcare || dotariCrmGeneral?.tipParcare || "-";
+  const numarLocuriParcareGeneral =
+    cfGeneral?.numarLocuriParcare ||
+    (lead as any)?.numarLocuriParcare ||
+    dotariCrmGeneral?.numarLocuriParcare ||
+    "-";
+  const zonaGeneral =
+    (Array.isArray(cfGeneral?.zoneList) && cfGeneral.zoneList.length > 0
+      ? cfGeneral.zoneList.join(", ")
+      : Array.isArray(lead.zoneList) && lead.zoneList.length > 0
+        ? lead.zoneList.join(", ")
+        : lead.zone && lead.zone !== "București"
+          ? lead.zone
+          : addressDetails.zona !== "Nespecificat"
+            ? addressDetails.zona
+            : lead.zone || "-") || "-";
+
   // Bedroom and Bathroom dynamic counts for row filtering
   const rawDormitoare = crmData?.caracteristici?.detalii?.dormitoare || (lead as any)?.bedrooms || (lead as any)?.dormitoare;
   const explicitDormitoare = rawDormitoare ? parseInt(String(rawDormitoare).match(/\d+/)?.[0] || "0", 10) : 0;
-  const parsedCamere = parseInt(String(camere || "").match(/\d+/)?.[0] || "0", 10);
+  const parsedCamere = parseInt(String(camereGeneral || "").match(/\d+/)?.[0] || "0", 10);
   const bedroomCount = explicitDormitoare > 0 
     ? explicitDormitoare 
-    : (parsedCamere > 1 ? parsedCamere - 1 : (parsedCamere === 1 ? 1 : 1));
-  const parsedBai = parseInt(String(bai || "").match(/\d+/)?.[0] || "0", 10);
+    : (parsedCamere >= 2 ? Math.min(4, parsedCamere - 1) : 0);
+  const parsedBai = parseInt(String(baiGeneral || "").match(/\d+/)?.[0] || "0", 10);
   const baiCount = Math.max(1, parsedBai || 1);
 
   // Default agency commission per user rules:
@@ -1090,8 +1257,15 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
   // and area where property is found, composed in an easy to read expression strictly <= 512 characters.
   const summaryDescription = useMemo(() => {
     const saved = (lead as any)?.extractedData?.presentationSections?.introducere?.summary;
-    if (saved && typeof saved === "string" && saved.trim().length > 15 && saved.trim().length <= 512) {
+    if (saved && typeof saved === "string" && saved.trim().length > 0) {
       return saved.trim();
+    }
+    const editedDesc =
+      (lead as any)?.extractedData?.descriptionManuallyEdited === true
+        ? resolvePublicDisplayDescription(lead, "")
+        : "";
+    if (editedDesc) {
+      return editedDesc;
     }
 
     const camereStr = camere && camere !== "-" ? `${camere} camere` : "";
@@ -1206,61 +1380,71 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     const saved = (lead as any)?.extractedData?.presentationSections || {};
     return {
       introducere: {
-        titlu: crmData?.descriere?.titlu || lead?.title || saved.introducere?.titlu || displayTitle,
+        titlu: (lead as any)?.extractedData?.titleManuallyEdited
+          ? lead?.title || crmData?.descriere?.titlu || saved.introducere?.titlu || displayTitle
+          : crmData?.descriere?.titlu || lead?.title || saved.introducere?.titlu || displayTitle,
         summary: saved.introducere?.summary || summaryDescription
       },
       configuratie: {
-        "Suprafață utilă": saved.configuratie?.["Suprafață utilă"] || suprafataUtila,
+        "Categorie": saved.configuratie?.["Categorie"] || categorieGeneral,
         "Compartimentare": saved.configuratie?.["Compartimentare"] || compartimentare,
+        "Număr camere": saved.configuratie?.["Număr camere"] || camereGeneral,
+        "Număr băi": saved.configuratie?.["Număr băi"] || baiGeneral,
+        "Etaj apartament": saved.configuratie?.["Etaj apartament"] || etajApartamentGeneral,
+        "Etaje total bloc": saved.configuratie?.["Etaje total bloc"] || etajeTotalBlocGeneral,
+        "Mobilare": saved.configuratie?.["Mobilare"] || mobilareGeneral,
+        "Utilare": saved.configuratie?.["Utilare"] || utilareGeneral,
+        "Tip parcare": saved.configuratie?.["Tip parcare"] || tipParcareGeneral,
+        "Număr locuri parcare": saved.configuratie?.["Număr locuri parcare"] || numarLocuriParcareGeneral,
+        "Zonă": saved.configuratie?.["Zonă"] || zonaGeneral,
+        "Suprafață utilă": saved.configuratie?.["Suprafață utilă"] || suprafataUtila,
         "Etaj": saved.configuratie?.["Etaj"] || etaj,
         "An construcție": saved.configuratie?.["An construcție"] || anConstructie,
-        "Număr camere": saved.configuratie?.["Număr camere"] || String(camere),
-        "Număr băi": saved.configuratie?.["Număr băi"] || String(bai),
         "Balcon": saved.configuratie?.["Balcon"] || String(balcoane),
         "Stare": saved.configuratie?.["Stare"] || stareInterior,
         ...(saved.configuratie || {})
       },
       finisaje: {
-        "Living": saved.finisaje?.["Living"] || "vopsea lavabilă, parchet",
-        "Camera 1": saved.finisaje?.["Camera 1"] || "vopsea lavabilă, parchet",
-        "Camera 2": saved.finisaje?.["Camera 2"] || "vopsea lavabilă, parchet",
-        "Camera 3": saved.finisaje?.["Camera 3"] || "vopsea lavabilă, parchet",
-        "Camera 4": saved.finisaje?.["Camera 4"] || "vopsea lavabilă, parchet",
-        "Bucătărie": saved.finisaje?.["Bucătărie"] || "vopsea lavabilă, faianță și gresie",
-        "Baie 1": saved.finisaje?.["Baie 1"] || "faianță și gresie",
-        "Baie 2": saved.finisaje?.["Baie 2"] || "faianță și gresie",
-        "Baie 3": saved.finisaje?.["Baie 3"] || "faianță și gresie",
-        "Baie 4": saved.finisaje?.["Baie 4"] || "faianță și gresie",
-        "Hol": saved.finisaje?.["Hol"] || "vopsea lavabilă, parchet",
+        "Living": saved.finisaje?.["Living"] ?? "vopsea lavabilă, parchet",
+        "Camera 1": saved.finisaje?.["Camera 1"] ?? "vopsea lavabilă, parchet",
+        "Camera 2": saved.finisaje?.["Camera 2"] ?? "vopsea lavabilă, parchet",
+        "Camera 3": saved.finisaje?.["Camera 3"] ?? "vopsea lavabilă, parchet",
+        "Camera 4": saved.finisaje?.["Camera 4"] ?? "vopsea lavabilă, parchet",
+        "Bucătărie": saved.finisaje?.["Bucătărie"] ?? "vopsea lavabilă, faianță și gresie",
+        "Baie 1": saved.finisaje?.["Baie 1"] ?? "faianță și gresie",
+        "Baie 2": saved.finisaje?.["Baie 2"] ?? "faianță și gresie",
+        "Baie 3": saved.finisaje?.["Baie 3"] ?? "faianță și gresie",
+        "Baie 4": saved.finisaje?.["Baie 4"] ?? "faianță și gresie",
+        "Hol": saved.finisaje?.["Hol"] ?? "vopsea lavabilă, parchet",
         ...(saved.finisaje || {})
       },
       mobilare: {
-        "Living": saved.mobilare?.["Living"] || "canapea, măsuță cafea, comodă",
-        "Camera 1": saved.mobilare?.["Camera 1"] || "pat, noptiere, dulap",
-        "Camera 2": saved.mobilare?.["Camera 2"] || "pat, noptiere, dulap",
-        "Camera 3": saved.mobilare?.["Camera 3"] || "pat, noptiere, dulap",
-        "Camera 4": saved.mobilare?.["Camera 4"] || "pat, noptiere, dulap",
-        "Bucătărie": saved.mobilare?.["Bucătărie"] || "mobilă de bucatarie premium",
-        "Baie 1": saved.mobilare?.["Baie 1"] || "obiecte sanitare premium",
-        "Baie 2": saved.mobilare?.["Baie 2"] || "obiecte sanitare premium",
-        "Baie 3": saved.mobilare?.["Baie 3"] || "obiecte sanitare premium",
-        "Baie 4": saved.mobilare?.["Baie 4"] || "obiecte sanitare premium",
-        "Hol": saved.mobilare?.["Hol"] || "cuier, pantofar",
+        "Living": saved.mobilare?.["Living"] ?? "canapea, măsuță cafea, comodă",
+        "Camera 1": saved.mobilare?.["Camera 1"] ?? "pat, noptiere, dulap",
+        "Camera 2": saved.mobilare?.["Camera 2"] ?? "pat, noptiere, dulap",
+        "Camera 3": saved.mobilare?.["Camera 3"] ?? "pat, noptiere, dulap",
+        "Camera 4": saved.mobilare?.["Camera 4"] ?? "pat, noptiere, dulap",
+        "Bucătărie": saved.mobilare?.["Bucătărie"] ?? "mobilă de bucatarie premium",
+        "Baie 1": saved.mobilare?.["Baie 1"] ?? "obiecte sanitare premium",
+        "Baie 2": saved.mobilare?.["Baie 2"] ?? "obiecte sanitare premium",
+        "Baie 3": saved.mobilare?.["Baie 3"] ?? "obiecte sanitare premium",
+        "Baie 4": saved.mobilare?.["Baie 4"] ?? "obiecte sanitare premium",
+        "Hol": saved.mobilare?.["Hol"] ?? "cuier, pantofar",
         ...(saved.mobilare || {})
       },
       dotari: {
-        "Living": saved.dotari?.["Living"] || "aer condiționat, smart TV",
-        "Camera 1": saved.dotari?.["Camera 1"] || "-",
-        "Camera 2": saved.dotari?.["Camera 2"] || "-",
-        "Camera 3": saved.dotari?.["Camera 3"] || "-",
-        "Camera 4": saved.dotari?.["Camera 4"] || "-",
-        "Bucătărie": saved.dotari?.["Bucătărie"] || "frigider, plită, cuptor, hotă",
-        "Baie 1": saved.dotari?.["Baie 1"] || "-",
-        "Baie 2": saved.dotari?.["Baie 2"] || "-",
-        "Baie 3": saved.dotari?.["Baie 3"] || "-",
-        "Baie 4": saved.dotari?.["Baie 4"] || "-",
-        "Hol": saved.dotari?.["Hol"] || "interfon",
-        "Altele": saved.dotari?.["Altele"] || "-",
+        "Living": saved.dotari?.["Living"] ?? "aer condiționat, smart TV",
+        "Camera 1": saved.dotari?.["Camera 1"] ?? "-",
+        "Camera 2": saved.dotari?.["Camera 2"] ?? "-",
+        "Camera 3": saved.dotari?.["Camera 3"] ?? "-",
+        "Camera 4": saved.dotari?.["Camera 4"] ?? "-",
+        "Bucătărie": saved.dotari?.["Bucătărie"] ?? "frigider, plită, cuptor, hotă",
+        "Baie 1": saved.dotari?.["Baie 1"] ?? "-",
+        "Baie 2": saved.dotari?.["Baie 2"] ?? "-",
+        "Baie 3": saved.dotari?.["Baie 3"] ?? "-",
+        "Baie 4": saved.dotari?.["Baie 4"] ?? "-",
+        "Hol": saved.dotari?.["Hol"] ?? "interfon",
+        "Altele": saved.dotari?.["Altele"] ?? "-",
         ...(saved.dotari || {})
       },
       bloc: {
@@ -1367,15 +1551,20 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     }
   }, [galleryImages.length, selectedPhotoIndex]);
 
-  // Silently prefetch adjacent lightbox photos so clicking Next / Prev is instantaneous
+  // Silently prefetch adjacent lightbox photos (+1, +2, -1) so clicking Next / Prev is instantaneous
   useEffect(() => {
     if (!isGalleryOpen || !isPublicShared || galleryImages.length <= 1) return;
-    const nextIdx = selectedPhotoIndex >= galleryImages.length - 1 ? 0 : selectedPhotoIndex + 1;
-    const prevIdx = selectedPhotoIndex <= 0 ? galleryImages.length - 1 : selectedPhotoIndex - 1;
-    const nextUrl = galleryImages[nextIdx] ? getThumbnailImageUrl(galleryImages[nextIdx], 1280) : "";
-    const prevUrl = galleryImages[prevIdx] ? getThumbnailImageUrl(galleryImages[prevIdx], 1280) : "";
-    if (nextUrl) prefetchProtectedPublicImage(nextUrl, "normal");
-    if (prevUrl && prevIdx !== nextIdx) prefetchProtectedPublicImage(prevUrl, "normal");
+    const len = galleryImages.length;
+    const nextIdx = (selectedPhotoIndex + 1) % len;
+    const next2Idx = (selectedPhotoIndex + 2) % len;
+    const prevIdx = (selectedPhotoIndex - 1 + len) % len;
+    const indices = Array.from(new Set([nextIdx, prevIdx, next2Idx])).filter(
+      (idx) => idx !== selectedPhotoIndex
+    );
+    for (const idx of indices) {
+      const url = galleryImages[idx] ? getThumbnailImageUrl(galleryImages[idx], 1280) : "";
+      if (url) prefetchProtectedPublicImage(url, "normal");
+    }
   }, [isGalleryOpen, isPublicShared, selectedPhotoIndex, galleryImages]);
 
   useEffect(() => {
@@ -1705,11 +1894,61 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           updates["title"] = trimmedTitle;
           updates["extractedData.originalTitle"] = trimmedTitle;
           updates["extractedData.crmData.descriere.titlu"] = trimmedTitle;
+          updates["extractedData.titleManuallyEdited"] = true;
+          if ((lead.extractedData as any)?.olxMeta && typeof (lead.extractedData as any).olxMeta === "object") {
+            updates["extractedData.olxMeta.originalTitle"] = trimmedTitle;
+          }
+          if (lead.criteriiFormular && typeof lead.criteriiFormular === "object") {
+            updates["criteriiFormular.propertyTitle"] = trimmedTitle;
+          }
         }
         if (updatedSec["summary"] !== undefined) {
           updates["extractedData.crmData.descriere.continut"] = updatedSec["summary"];
           updates["extractedData.originalDescription"] = updatedSec["summary"];
           updates["extractedData.markdownMarketing"] = updatedSec["summary"];
+          updates["extractedData.descriptionManuallyEdited"] = true;
+          updates["requirements"] = updatedSec["summary"];
+          if (lead.criteriiFormular && typeof lead.criteriiFormular === "object") {
+            updates["criteriiFormular.requirements"] = updatedSec["summary"];
+          }
+        }
+      }
+
+      // Auto-rebuild property title when user fills/updates Transport, Împrejurimi, Parcare, Bloc, Configurație, etc.
+      let autoRebuiltTitle = "";
+      if (sectionId !== "introducere") {
+        const currentTitle = String(lead.title || lead.extractedData?.crmData?.descriere?.titlu || "").trim();
+        const isRawUnprocessed = isUnprocessedLead(lead);
+        const canRebuild =
+          (!isRawUnprocessed || !currentTitle || hasMissingTitleTagPlaceholder(currentTitle)) &&
+          (!lead.extractedData?.titleManuallyEdited || hasMissingTitleTagPlaceholder(currentTitle));
+        const cachedTitleRule = automationSettingsService.getCachedTitleRule(tenant?.id);
+        if (canRebuild && cachedTitleRule?.enabled) {
+          const simulatedLead = {
+            ...lead,
+            extractedData: {
+              ...(lead.extractedData || {}),
+              presentationSections: nextSectionData,
+            },
+          };
+          const candidateTitle = buildTitleFromAutomationRule(
+            cachedTitleRule,
+            extractTitleInputFromLead(simulatedLead)
+          );
+          if (candidateTitle && candidateTitle.trim() && candidateTitle.trim() !== currentTitle) {
+            autoRebuiltTitle = candidateTitle.trim();
+            nextSectionData.introducere = {
+              ...(nextSectionData.introducere || {}),
+              titlu: autoRebuiltTitle,
+            };
+            updates["extractedData.presentationSections"] = nextSectionData;
+            updates["title"] = autoRebuiltTitle;
+            updates["extractedData.originalTitle"] = autoRebuiltTitle;
+            updates["extractedData.crmData.descriere.titlu"] = autoRebuiltTitle;
+            if (lead.criteriiFormular && typeof lead.criteriiFormular === "object") {
+              updates["criteriiFormular.propertyTitle"] = autoRebuiltTitle;
+            }
+          }
         }
       }
 
@@ -1720,9 +1959,18 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         const nextPrice = updatedSec["Preț"] ? String(updatedSec["Preț"]).trim() : undefined;
         const patchedExtracted = (persisted?.extractedData || {
           ...(lead.extractedData || {}),
+          ...(autoRebuiltTitle ? { originalTitle: autoRebuiltTitle } : {}),
           presentationSections: nextSectionData,
           crmData: {
             ...(lead.extractedData?.crmData || {}),
+            ...(autoRebuiltTitle
+              ? {
+                  descriere: {
+                    ...(lead.extractedData?.crmData?.descriere || {}),
+                    titlu: autoRebuiltTitle,
+                  },
+                }
+              : {}),
             ...(nextPrice
               ? {
                   pret: {
@@ -1738,6 +1986,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         }) as any;
         localPatch = {
           ...(nextPrice ? { price: nextPrice } : {}),
+          ...(autoRebuiltTitle ? { title: autoRebuiltTitle } : {}),
           extractedData: patchedExtracted,
           ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
         };
@@ -1745,13 +1994,24 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         const trimmedTitle = (updatedSec["titlu"] || "").trim();
         localPatch = {
           ...(trimmedTitle ? { title: trimmedTitle } : {}),
+          ...(updatedSec["summary"] !== undefined ? { requirements: updatedSec["summary"] } : {}),
+          ...(lead.criteriiFormular && typeof lead.criteriiFormular === "object"
+            ? {
+                criteriiFormular: {
+                  ...lead.criteriiFormular,
+                  ...(trimmedTitle ? { propertyTitle: trimmedTitle } : {}),
+                  ...(updatedSec["summary"] !== undefined ? { requirements: updatedSec["summary"] } : {}),
+                },
+              }
+            : {}),
           extractedData: (persisted?.extractedData || {
             ...(lead.extractedData || {}),
-            ...(trimmedTitle ? { originalTitle: trimmedTitle } : {}),
+            ...(trimmedTitle ? { originalTitle: trimmedTitle, titleManuallyEdited: true } : {}),
             ...(updatedSec["summary"] !== undefined
               ? {
                   originalDescription: updatedSec["summary"],
                   markdownMarketing: updatedSec["summary"],
+                  descriptionManuallyEdited: true,
                 }
               : {}),
             presentationSections: nextSectionData,
@@ -1768,9 +2028,30 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
         };
       } else {
         localPatch = {
+          ...(autoRebuiltTitle ? { title: autoRebuiltTitle } : {}),
+          ...(autoRebuiltTitle && lead.criteriiFormular && typeof lead.criteriiFormular === "object"
+            ? {
+                criteriiFormular: {
+                  ...lead.criteriiFormular,
+                  propertyTitle: autoRebuiltTitle,
+                },
+              }
+            : {}),
           extractedData: (persisted?.extractedData || {
             ...(lead.extractedData || {}),
+            ...(autoRebuiltTitle ? { originalTitle: autoRebuiltTitle } : {}),
             presentationSections: nextSectionData,
+            ...(autoRebuiltTitle
+              ? {
+                  crmData: {
+                    ...(lead.extractedData?.crmData || {}),
+                    descriere: {
+                      ...(lead.extractedData?.crmData?.descriere || {}),
+                      titlu: autoRebuiltTitle,
+                    },
+                  },
+                }
+              : {}),
           }) as any,
           ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
         };
@@ -1781,8 +2062,8 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       }
 
       await publishPublicShareSnapshot(
-        { ...lead, ...localPatch, ...(persisted || {}) },
-        { tenantId: tenant?.id, force: true }
+        { ...lead, ...localPatch, ...(persisted || {}), isSummary: false },
+        { tenantId: (persisted as any)?.tenantId || tenant?.id, force: true }
       );
 
       toast.success("Modificările au fost salvate cu succes!");
@@ -1832,6 +2113,321 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
     );
   };
 
+  const renderCustomDescriptionGrid = (
+    rows: DescriptionGridRow[],
+    renderSubsection: (tagId: string) => React.ReactNode,
+    options?: {
+      wrapperClassName?: string;
+      dividedSubsections?: boolean;
+    }
+  ) => {
+    if (options?.dividedSubsections) {
+      return (
+        <div className="font-sans divide-y divide-gray-200">
+          {rows.map((row, rowIdx) => {
+            if (isDividerOnlyRow(row)) {
+              return <div key={row.id || `div-${rowIdx}`} className="border-t border-gray-200" />;
+            }
+            const cols = row.columns || [];
+            const gridClass = getGridColsClass(cols.length);
+            return (
+              <div
+                key={row.id || `row-${rowIdx}`}
+                className={`grid ${gridClass} divide-y md:divide-y-0 md:divide-x divide-gray-200`}
+              >
+                {cols.map((item, colIdx) => {
+                  const key = getItemKey(item, rowIdx, colIdx);
+                  if (item.kind === "filler") {
+                    return <div key={key} className="min-h-[36px] p-5" aria-hidden="true" />;
+                  }
+                  if (item.kind === "divider") {
+                    return (
+                      <div key={key} className="p-5 flex items-center">
+                        <div className="w-full border-t border-gray-200" />
+                      </div>
+                    );
+                  }
+                  if (item.kind === "custom_text") {
+                    const txt = (item.customText || "").trim();
+                    return (
+                      <div key={key} className="p-5 text-[12px] text-gray-700 leading-relaxed whitespace-pre-line font-sans">
+                        {txt || <span className="text-gray-400">—</span>}
+                      </div>
+                    );
+                  }
+                  return (
+                    <div key={key} className="flex flex-col min-w-0">
+                      {item.tagId ? renderSubsection(item.tagId) : null}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    return (
+      <div className={options?.wrapperClassName ?? "p-5 space-y-4 font-sans"}>
+        {rows.map((row, rowIdx) => {
+          if (isDividerOnlyRow(row)) {
+            return <div key={row.id || `div-${rowIdx}`} className="border-t border-gray-200 my-1" />;
+          }
+          const cols = row.columns || [];
+          const gridClass = getGridColsClass(cols.length);
+          return (
+            <div key={row.id || `row-${rowIdx}`} className={`grid ${gridClass} gap-4 md:gap-5`}>
+              {cols.map((item, colIdx) => {
+                const key = getItemKey(item, rowIdx, colIdx);
+                if (item.kind === "filler") {
+                  return <div key={key} className="min-h-[28px]" aria-hidden="true" />;
+                }
+                if (item.kind === "divider") {
+                  return (
+                    <div key={key} className="flex items-center py-2">
+                      <div className="w-full border-t border-gray-200" />
+                    </div>
+                  );
+                }
+                if (item.kind === "custom_text") {
+                  const txt = (item.customText || "").trim();
+                  return (
+                    <div key={key} className="px-2 py-1 text-[12px] text-gray-700 leading-relaxed whitespace-pre-line font-sans">
+                      {txt}
+                    </div>
+                  );
+                }
+                return (
+                  <div key={key} className="min-w-0">
+                    {item.tagId ? renderSubsection(item.tagId) : null}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const renderAdditionalPresentationCards = () => {
+    const blocLayout = getDescriptionSectionLayout(activeDescriptionPattern, "bloc");
+    const imprejurimiLayout = getDescriptionSectionLayout(activeDescriptionPattern, "imprejurimi");
+    const transportLayout = getDescriptionSectionLayout(activeDescriptionPattern, "transport");
+    const parcareLayout = getDescriptionSectionLayout(activeDescriptionPattern, "parcare");
+
+    const renderBlocField = (tagId: string) => {
+      switch (tagId) {
+        case "acces":
+          return renderRow("bloc", "Acces", "Tag magnetic, interfon");
+        case "spatii":
+          return renderRow("bloc", "Spații", "-");
+        case "dotari_bloc":
+          return renderRow("bloc", "Dotări", "Lift, supraveghere video");
+        case "servicii":
+          return renderRow("bloc", "Servicii", "Administrație, curățenie spații comune", true);
+        default:
+          return null;
+      }
+    };
+
+    const renderImprejurimiField = (tagId: string) => {
+      switch (tagId) {
+        case "educatie":
+          return renderRow("imprejurimi", "Educație", "Grădinițe de stat și private, școli gimnaziale, licee în apropiere");
+        case "comert":
+          return renderRow("imprejurimi", "Comerț", "Numeroase magazine de proximitate.");
+        case "benzinarii":
+          return renderRow("imprejurimi", "Benzinării", "Multiple statii de alimentare.");
+        case "sanatate":
+          return renderRow("imprejurimi", "Sănătate", "Diverse farmacii.");
+        case "relaxare":
+          return renderRow("imprejurimi", "Relaxare", "Spatii verzi in apropiere.");
+        case "divertisment":
+          return renderRow("imprejurimi", "Divertisment", "Restaurante, baruri si cafenele in zona.");
+        case "obiective":
+          return renderRow("imprejurimi", "Obiective", "Diverse puncte de atracie din sector.", true);
+        default:
+          return null;
+      }
+    };
+
+    const renderTransportField = (tagId: string) => {
+      switch (tagId) {
+        case "metrou":
+          return renderRow("transport", "Metrou", "Stație de metrou în proximitate");
+        case "tramvai":
+          return renderRow("transport", "Tramvai", "Linii tramvai în zonă");
+        case "troleibuz":
+          return renderRow("transport", "Troleibuz", "Linii troleibuz în apropiere");
+        case "autobuz":
+          return renderRow("transport", "Autobuz", "Multiple linii STB în apropiere", true);
+        default:
+          return null;
+      }
+    };
+
+    const renderParcareField = (tagId: string) => {
+      switch (tagId) {
+        case "parcare_info":
+          return renderRow("parcare", "Parcare", "Publica in zona", true, true);
+        default:
+          return null;
+      }
+    };
+
+    const cardBorderShadow = isPublicShared ? "shadow-xs" : "shadow-2xs";
+
+    return (
+      <>
+        {/* #CARD "BLOC" */}
+        {isDescriptionSectionEnabled(activeDescriptionPattern, "bloc") && (
+          <div id="bloc" className={`bg-white rounded-xl border border-gray-200 overflow-hidden ${cardBorderShadow} scroll-mt-[104px] font-sans`}>
+            <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
+                  <Building2 size={16} />
+                </div>
+                <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                  Bloc
+                </h2>
+              </div>
+
+              <SectionEditButton
+                isEditing={editingSection === "bloc"}
+                isDirty={isSectionDirty("bloc")}
+                onStartEdit={() => handleStartEditSection("bloc")}
+                onCancel={() => handleCancelEditSection("bloc")}
+                onSave={() => handleSaveSection("bloc")}
+                disabled={isPublicShared}
+              />
+            </div>
+
+            {hasCustomDescriptionRows(blocLayout) ? (
+              renderCustomDescriptionGrid(blocLayout!.rows, renderBlocField)
+            ) : (
+              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "bloc" ? "gap-[16px]" : "gap-4")} font-sans`}>
+                {renderRow("bloc", "Acces", "Tag magnetic, interfon")}
+                {renderRow("bloc", "Spații", "-")}
+                {renderRow("bloc", "Dotări", "Lift, supraveghere video")}
+                {renderRow("bloc", "Servicii", "Administrație, curățenie spații comune", true)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* #CARD "IMPREJURIMI" */}
+        {isDescriptionSectionEnabled(activeDescriptionPattern, "imprejurimi") && (
+          <div id="imprejurimi" className={`bg-white rounded-xl border border-gray-200 overflow-hidden ${cardBorderShadow} scroll-mt-[104px] font-sans`}>
+            <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
+                  <Compass size={16} />
+                </div>
+                <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                  Împrejurimi
+                </h2>
+              </div>
+
+              <SectionEditButton
+                isEditing={editingSection === "imprejurimi"}
+                isDirty={isSectionDirty("imprejurimi")}
+                onStartEdit={() => handleStartEditSection("imprejurimi")}
+                onCancel={() => handleCancelEditSection("imprejurimi")}
+                onSave={() => handleSaveSection("imprejurimi")}
+                disabled={isPublicShared}
+              />
+            </div>
+
+            {hasCustomDescriptionRows(imprejurimiLayout) ? (
+              renderCustomDescriptionGrid(imprejurimiLayout!.rows, renderImprejurimiField)
+            ) : (
+              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "imprejurimi" ? "gap-[16px]" : "gap-4")} font-sans`}>
+                {renderRow("imprejurimi", "Educație", "Grădinițe de stat și private, școli gimnaziale, licee în apropiere")}
+                {renderRow("imprejurimi", "Comerț", "Numeroase magazine de proximitate.")}
+                {renderRow("imprejurimi", "Benzinării", "Multiple statii de alimentare.")}
+                {renderRow("imprejurimi", "Sănătate", "Diverse farmacii.")}
+                {renderRow("imprejurimi", "Relaxare", "Spatii verzi in apropiere.")}
+                {renderRow("imprejurimi", "Divertisment", "Restaurante, baruri si cafenele in zona.")}
+                {renderRow("imprejurimi", "Obiective", "Diverse puncte de atracie din sector.", true)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* #CARD "TRANSPORT" */}
+        {isDescriptionSectionEnabled(activeDescriptionPattern, "transport") && (
+          <div id="transport" className={`bg-white rounded-xl border border-gray-200 overflow-hidden ${cardBorderShadow} scroll-mt-[104px] font-sans`}>
+            <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
+                  <Bus size={16} />
+                </div>
+                <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                  Transport
+                </h2>
+              </div>
+
+              <SectionEditButton
+                isEditing={editingSection === "transport"}
+                isDirty={isSectionDirty("transport")}
+                onStartEdit={() => handleStartEditSection("transport")}
+                onCancel={() => handleCancelEditSection("transport")}
+                onSave={() => handleSaveSection("transport")}
+                disabled={isPublicShared}
+              />
+            </div>
+
+            {hasCustomDescriptionRows(transportLayout) ? (
+              renderCustomDescriptionGrid(transportLayout!.rows, renderTransportField)
+            ) : (
+              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "transport" ? "gap-[16px]" : "gap-4")} font-sans`}>
+                {renderRow("transport", "Metrou", "Stație de metrou în proximitate")}
+                {renderRow("transport", "Tramvai", "Linii tramvai în zonă")}
+                {renderRow("transport", "Troleibuz", "Linii troleibuz în apropiere")}
+                {renderRow("transport", "Autobuz", "Multiple linii STB în apropiere", true)}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* #CARD "PARCARE" */}
+        {isDescriptionSectionEnabled(activeDescriptionPattern, "parcare") && (
+          <div id="parcare" className={`bg-white rounded-xl border border-gray-200 overflow-hidden ${cardBorderShadow} scroll-mt-[104px] font-sans`}>
+            <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
+                  <Car size={16} />
+                </div>
+                <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                  Parcare
+                </h2>
+              </div>
+
+              <SectionEditButton
+                isEditing={editingSection === "parcare"}
+                isDirty={isSectionDirty("parcare")}
+                onStartEdit={() => handleStartEditSection("parcare")}
+                onCancel={() => handleCancelEditSection("parcare")}
+                onSave={() => handleSaveSection("parcare")}
+                disabled={isPublicShared}
+              />
+            </div>
+
+            {hasCustomDescriptionRows(parcareLayout) ? (
+              renderCustomDescriptionGrid(parcareLayout!.rows, renderParcareField)
+            ) : (
+              <div className="p-5 font-sans">
+                {renderRow("parcare", "Parcare", "Publica in zona", true, true)}
+              </div>
+            )}
+          </div>
+        )}
+      </>
+    );
+  };
+
   return (
     <div ref={containerRef} className={isPublicShared ? "w-full min-h-screen bg-transparent text-gray-900 flex flex-col font-sans" : "w-full h-full flex-1 min-h-0 bg-white text-gray-900 flex flex-col font-sans selection:bg-[#BE9662]/20 overflow-hidden"}>
       
@@ -1872,7 +2468,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
           <div className="w-full border-b border-gray-200 h-10 bg-white">
             <div className="w-full max-w-[1280px] mx-auto px-4 sm:px-6 xl:px-0 h-10 flex items-center justify-between gap-4 overflow-x-auto no-scrollbar">
               <div className="flex items-center gap-2 shrink-0 overflow-x-auto no-scrollbar py-1">
-                {NAV_SECTIONS.map((sect) => {
+                {visiblePublicNavSections.map((sect) => {
                   const Icon = sect.icon;
                   const isActive = activeSection === sect.id;
 
@@ -2040,7 +2636,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
       {/* Main Layout (Scrollable container below the fixed headers) */}
       {!isPublicShared ? (
         <main ref={mainScrollRef} className="w-full flex-1 min-h-0 bg-gray-50 p-0 overflow-y-auto scroll-smooth custom-scrollbar">
-          <div className="max-w-4xl mx-auto p-4 sm:p-6 space-y-4 text-xs">
+          <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-4 text-xs">
             {/* Exact 4 Accordion Sections & Fields */}
             <CriteriaDetailSections
               lead={lead}
@@ -2048,7 +2644,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               mode="property"
               onUpdateLead={onUpdateLead || (() => {})}
               onBuildingTypeDisplayChange={setInternalBuildingType}
+              descriptionLayout={activeDescriptionPattern}
             />
+
+            {/* Additional Presentation Sections (Bloc, Împrejurimi, Transport, Parcare) */}
+            {renderAdditionalPresentationCards()}
 
             {/* LAST SECTION: Fotografii Imobil (kept as-is) */}
             <div id="sec-imagini" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-2xs font-sans scroll-mt-[104px]">
@@ -2545,410 +3145,398 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
             )}
 
             {/* #CARD 1: "PREȚ & CONDIȚII" */}
-            <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
-              <div className={`p-5 bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${isPublicShared ? "" : "select-none"}`}>
-                <div className="space-y-2 min-w-0 flex-1">
-                  <h1 className="font-title text-[19px] font-semibold text-[#051D35] leading-snug tracking-tight">
-                    {displayTitle}
-                  </h1>
-                  <div className="flex items-baseline gap-2">
+            {isDescriptionSectionEnabled(activeDescriptionPattern, "pret_conditii") && (
+              <div id="tranzactie" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+                <div className={`p-5 bg-gray-50/80 border-b border-gray-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4 ${isPublicShared ? "" : "select-none"}`}>
+                  <div className="space-y-2 min-w-0 flex-1">
+                    <h1 className="font-title text-[19px] font-semibold text-[#051D35] leading-snug tracking-tight">
+                      {displayTitle}
+                    </h1>
+                    <div className="flex items-baseline gap-2">
+                      <span
+                        className={
+                          isPublicShared
+                            ? "font-title text-[19px] font-semibold text-[#051D35] leading-snug tracking-tight tabular-nums"
+                            : "text-2xl sm:text-3xl font-semibold text-[#051D35] tracking-tight tabular-nums"
+                        }
+                      >
+                        {priceParts.amount} €
+                      </span>
+                      {priceParts.isRent && (
+                        <span className={isPublicShared ? "text-[14px] font-normal text-gray-500" : "text-[16px] font-normal text-gray-500"}>
+                          / lună
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-4 shrink-0 border-l border-gray-200 pl-5 py-1">
                     <span
                       className={
                         isPublicShared
-                          ? "font-title text-[19px] font-semibold text-[#051D35] leading-snug tracking-tight tabular-nums"
-                          : "text-2xl sm:text-3xl font-semibold text-[#051D35] tracking-tight tabular-nums"
+                          ? "font-title text-[14px] font-normal text-gray-900 leading-snug tracking-tight tabular-nums"
+                          : "text-sm sm:text-base font-semibold text-gray-900 tracking-tight tabular-nums"
                       }
                     >
-                      {priceParts.amount} €
+                      ID: {exactId}
                     </span>
-                    {priceParts.isRent && (
-                      <span className={isPublicShared ? "text-[14px] font-normal text-gray-500" : "text-[16px] font-normal text-gray-500"}>
-                        / lună
-                      </span>
-                    )}
+                    <SectionEditButton
+                      isEditing={editingSection === "tranzactie"}
+                      isDirty={isSectionDirty("tranzactie")}
+                      onStartEdit={() => handleStartEditSection("tranzactie")}
+                      onCancel={() => handleCancelEditSection("tranzactie")}
+                      onSave={() => handleSaveSection("tranzactie")}
+                      disabled={isPublicShared}
+                    />
                   </div>
                 </div>
 
-                <div className="flex items-center gap-4 shrink-0 border-l border-gray-200 pl-5 py-1">
-                  <span
-                    className={
-                      isPublicShared
-                        ? "font-title text-[14px] font-normal text-gray-900 leading-snug tracking-tight tabular-nums"
-                        : "text-sm sm:text-base font-semibold text-gray-900 tracking-tight tabular-nums"
-                    }
-                  >
-                    ID: {exactId}
-                  </span>
+                {/* Custom row/column layout from Admin Automatizare -> Descriere, or default 2-column layout */}
+                {(() => {
+                  const pcLayout = getDescriptionSectionLayout(activeDescriptionPattern, "pret_conditii");
+                  if (hasCustomDescriptionRows(pcLayout)) {
+                    const renderPretConditiiField = (tagId: string) => {
+                      switch (tagId) {
+                        case "pret":
+                          return renderRow("tranzactie", "Preț", formattedPrice);
+                        case "tva":
+                          return renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare");
+                        case "comision":
+                          return renderRow("tranzactie", "Comision", defaultCommission, true);
+                        case "contract":
+                          return renderRow("acte", isPublicShared ? "Contract" : "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS);
+                        case "avans":
+                          return renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS);
+                        case "garantie":
+                          return renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS);
+                        case "situatie_juridica":
+                          return renderRow("acte", "Situație juridică", "Fara probleme");
+                        case "disponibilitate":
+                          return renderRow("acte", "Disponibilitate", "Imediată");
+                        case "finantare":
+                          return renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true);
+                        default:
+                          return null;
+                      }
+                    };
+                    return renderCustomDescriptionGrid(pcLayout!.rows, renderPretConditiiField);
+                  }
+
+                  if (isPublicShared) {
+                    const leftCells = [
+                      renderRow("tranzactie", "Preț", formattedPrice),
+                      renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare"),
+                      renderRow("tranzactie", "Comision", defaultCommission, true),
+                    ];
+                    const rightCells = isRent
+                      ? [
+                          renderRow("acte", "Contract", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS),
+                          renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS),
+                          renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS),
+                        ]
+                      : [
+                          renderRow("acte", "Situație juridică", "Fara probleme"),
+                          renderRow("acte", "Disponibilitate", "Imediată"),
+                          renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true),
+                        ];
+                    const rowPairs = leftCells
+                      .map((left, idx) => ({ left, right: rightCells[idx] ?? null }))
+                      .filter((pair) => pair.left !== null || pair.right !== null);
+                    const leftOrders = ["order-1 md:order-none", "order-2 md:order-none", "order-3 md:order-none"];
+                    const rightOrders = ["order-4 md:order-none", "order-5 md:order-none", "order-6 md:order-none"];
+                    const lastIdx = rowPairs.length - 1;
+
+                    return (
+                      <div className="grid grid-cols-1 md:grid-cols-2 font-sans">
+                        {rowPairs.map((pair, idx) => (
+                          <React.Fragment key={idx}>
+                            <div
+                              className={`${leftOrders[idx] || ""} px-5 ${
+                                idx === 0 ? "pt-5" : "pt-[20px]"
+                              } ${idx === lastIdx ? "pb-5 md:pb-5" : ""} md:border-r md:border-gray-100`}
+                            >
+                              {pair.left}
+                            </div>
+                            <div
+                              className={`${rightOrders[idx] || ""} px-5 ${
+                                idx === 0 ? "pt-5 border-t border-gray-100 md:border-t-0" : "pt-[20px]"
+                              } ${idx === lastIdx ? "pb-5" : ""}`}
+                            >
+                              {pair.right}
+                            </div>
+                          </React.Fragment>
+                        ))}
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 font-sans">
+                      <div className={`p-5 ${editingSection === "tranzactie" ? "space-y-[16px]" : "space-y-4"}`}>
+                        {isRent ? (
+                          <>
+                            {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
+                            {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
+                            {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
+                          </>
+                        ) : (
+                          <>
+                            {renderRow("acte", "Situație juridică", "Fara probleme")}
+                            {renderRow("acte", "Disponibilitate", "Imediată")}
+                            {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
+                          </>
+                        )}
+                      </div>
+
+                      <div className={`p-5 ${editingSection === "tranzactie" ? "space-y-[16px]" : "space-y-4"}`}>
+                        {renderRow("tranzactie", "Preț", formattedPrice)}
+                        {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
+                        {renderRow("tranzactie", "Comision", defaultCommission, true)}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* #CARD 2: "INTRODUCERE" */}
+            {isDescriptionSectionEnabled(activeDescriptionPattern, "introducere") && (
+              <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
+                <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
+                      <FileText size={16} />
+                    </div>
+                    <div>
+                      <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
+                        Introducere
+                      </h2>
+                    </div>
+                  </div>
+
                   <SectionEditButton
-                    isEditing={editingSection === "tranzactie"}
-                    isDirty={isSectionDirty("tranzactie")}
-                    onStartEdit={() => handleStartEditSection("tranzactie")}
-                    onCancel={() => handleCancelEditSection("tranzactie")}
-                    onSave={() => handleSaveSection("tranzactie")}
+                    isEditing={editingSection === "introducere"}
+                    isDirty={isSectionDirty("introducere")}
+                    onStartEdit={() => handleStartEditSection("introducere")}
+                    onCancel={() => handleCancelEditSection("introducere")}
+                    onSave={() => handleSaveSection("introducere")}
                     disabled={isPublicShared}
                   />
                 </div>
-              </div>
 
-              {/* 2-column layout: clean label-above / info-below fields with zero boxes in view mode */}
-              {isPublicShared ? (
-                (() => {
-                  const leftCells = [
-                    renderRow("tranzactie", "Preț", formattedPrice),
-                    renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare"),
-                    renderRow("tranzactie", "Comision", defaultCommission, true),
-                  ];
-                  const rightCells = isRent
-                    ? [
-                        renderRow("acte", "Contract", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS),
-                        renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS),
-                        renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS),
-                      ]
-                    : [
-                        renderRow("acte", "Situație juridică", "Fara probleme"),
-                        renderRow("acte", "Disponibilitate", "Imediată"),
-                        renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true),
-                      ];
-                  const rowPairs = leftCells
-                    .map((left, idx) => ({ left, right: rightCells[idx] ?? null }))
-                    .filter((pair) => pair.left !== null || pair.right !== null);
-                  const leftOrders = ["order-1 md:order-none", "order-2 md:order-none", "order-3 md:order-none"];
-                  const rightOrders = ["order-4 md:order-none", "order-5 md:order-none", "order-6 md:order-none"];
-                  const lastIdx = rowPairs.length - 1;
+                {(() => {
+                  const introLayout = getDescriptionSectionLayout(activeDescriptionPattern, "introducere");
 
-                  return (
-                    <div className="grid grid-cols-1 md:grid-cols-2 font-sans">
-                      {rowPairs.map((pair, idx) => (
-                        <React.Fragment key={idx}>
-                          <div
-                            className={`${leftOrders[idx] || ""} px-5 ${
-                              idx === 0 ? "pt-5" : "pt-[20px]"
-                            } ${idx === lastIdx ? "pb-5 md:pb-5" : ""} md:border-r md:border-gray-100`}
-                          >
-                            {pair.left}
-                          </div>
-                          <div
-                            className={`${rightOrders[idx] || ""} px-5 ${
-                              idx === 0 ? "pt-5 border-t border-gray-100 md:border-t-0" : "pt-[20px]"
-                            } ${idx === lastIdx ? "pb-5" : ""}`}
-                          >
-                            {pair.right}
-                          </div>
-                        </React.Fragment>
-                      ))}
+                  const renderTitluBlock = () => (
+                    <div>
+                      <label
+                        onClick={() => {
+                          if (editingSection === "introducere") introTitleInputRef.current?.focus();
+                        }}
+                        className={`flex items-center gap-2 px-2 text-[12px] leading-4 mb-1 font-semibold text-[#051D35] transition-colors select-none ${
+                          editingSection === "introducere" ? "cursor-pointer" : ""
+                        }`}
+                      >
+                        <span>Titlu</span>
+                      </label>
+
+                      {editingSection === "introducere" ? (
+                        <input
+                          ref={introTitleInputRef}
+                          type="text"
+                          value={draftSectionData["introducere"]?.["titlu"] ?? (sectionData["introducere"]?.["titlu"] || displayTitle)}
+                          onChange={(e) => handleFieldChange("introducere", "titlu", e.target.value)}
+                          onFocus={() => setTitleFocused(true)}
+                          onBlur={() => setTitleFocused(false)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") (e.target as HTMLElement).blur();
+                          }}
+                          className={`w-full !h-9 !px-2 rounded-md border text-[12px] font-sans font-normal leading-5 outline-none shadow-none select-text transition-all ${
+                            titleFocused
+                              ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
+                              : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
+                          }`}
+                          placeholder="Introdu titlul proprietății..."
+                        />
+                      ) : (
+                        <div className="w-full px-2 py-2 rounded-md border border-transparent bg-transparent text-[12px] text-gray-800 leading-5 font-normal select-text font-sans">
+                          {isPublicShared ? displayTitle : (sectionData["introducere"]?.["titlu"] || displayTitle)}
+                        </div>
+                      )}
                     </div>
                   );
-                })()
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-100 font-sans">
-                  <div className={`p-5 ${editingSection === "tranzactie" ? "space-y-[16px]" : "space-y-4"}`}>
-                    {isRent ? (
-                      <>
-                        {renderRow("acte", "Condiții contractuale", "12 luni", false, false, CONDITII_CONTRACTUALE_OPTIONS)}
-                        {renderRow("acte", "Avans", "1 luna", false, false, AVANS_GARANTIE_OPTIONS)}
-                        {renderRow("acte", "Garanție", "1 luna", true, false, AVANS_GARANTIE_OPTIONS)}
-                      </>
-                    ) : (
-                      <>
-                        {renderRow("acte", "Situație juridică", "Fara probleme")}
-                        {renderRow("acte", "Disponibilitate", "Imediată")}
-                        {renderRow("acte", "Finanțare", "Credit bancar / fonduri proprii", true)}
-                      </>
-                    )}
-                  </div>
 
-                  <div className={`p-5 ${editingSection === "tranzactie" ? "space-y-[16px]" : "space-y-4"}`}>
-                    {renderRow("tranzactie", "Preț", formattedPrice)}
-                    {renderRow("tranzactie", "TVA", "Scutit de TVA / conform legislației în vigoare")}
-                    {renderRow("tranzactie", "Comision", defaultCommission, true)}
-                  </div>
-                </div>
-              )}
-            </div>
+                  const renderDescriereBlock = () => (
+                    <div>
+                      <label
+                        onClick={() => {
+                          if (editingSection === "introducere") introTextareaRef.current?.focus();
+                        }}
+                        className={`flex items-center gap-2 px-2 text-[12px] leading-4 ${
+                          isPublicShared ? "mb-[8px]" : "mb-1"
+                        } font-semibold text-[#051D35] transition-colors select-none ${
+                          editingSection === "introducere" ? "cursor-pointer" : ""
+                        }`}
+                      >
+                        <span>{isPublicShared ? "Descriere proprietate" : "Descriere"}</span>
+                      </label>
 
-            {/* #CARD 2: "INTRODUCERE" */}
-            <div id="introducere" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
-              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
-                    <FileText size={16} />
-                  </div>
-                  <div>
+                      {editingSection === "introducere" ? (
+                        <textarea
+                          ref={introTextareaRef}
+                          rows={5}
+                          value={draftSectionData["introducere"]?.["summary"] ?? (sectionData["introducere"]?.["summary"] || summaryDescription)}
+                          onChange={(e) => handleFieldChange("introducere", "summary", e.target.value)}
+                          onFocus={() => setIntroFocused(true)}
+                          onBlur={() => setIntroFocused(false)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Escape") (e.target as HTMLElement).blur();
+                          }}
+                          className={`w-full !px-2 !py-2 !min-h-[120px] rounded-md border text-[12px] font-sans font-normal leading-[1.6] outline-none shadow-none resize-y select-text transition-all ${
+                            introFocused
+                              ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
+                              : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
+                          }`}
+                          placeholder="Descrierea proprietății..."
+                        />
+                      ) : (
+                        <div
+                          className={`w-full px-2 ${
+                            isPublicShared ? "py-0 h-auto" : "py-2 min-h-[120px]"
+                          } rounded-md border border-transparent bg-transparent text-[12px] text-gray-700 leading-[1.6] font-normal whitespace-pre-line select-text font-sans`}
+                        >
+                          {isPublicShared
+                            ? publicSharedDescription
+                            : (sectionData["introducere"]?.["summary"] || summaryDescription)}
+                        </div>
+                      )}
+                    </div>
+                  );
+
+                  if (hasCustomDescriptionRows(introLayout)) {
+                    return renderCustomDescriptionGrid(introLayout!.rows, (tagId) => {
+                      if (tagId === "titlu") return renderTitluBlock();
+                      if (tagId === "descriere") return renderDescriereBlock();
+                      return null;
+                    });
+                  }
+
+                  return (
+                    <div className={`p-5 font-sans ${!isPublicShared ? "space-y-4" : ""}`}>
+                      {!isPublicShared && renderTitluBlock()}
+                      {renderDescriereBlock()}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
+            {/* #CARD "APARTAMENT" */}
+            {isDescriptionSectionEnabled(activeDescriptionPattern, "apartament") && (
+              <div id="apartament" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px]">
+                <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
+                      <Home size={16} />
+                    </div>
                     <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
-                      Introducere
+                      Apartament
                     </h2>
                   </div>
                 </div>
 
-                <SectionEditButton
-                  isEditing={editingSection === "introducere"}
-                  isDirty={isSectionDirty("introducere")}
-                  onStartEdit={() => handleStartEditSection("introducere")}
-                  onCancel={() => handleCancelEditSection("introducere")}
-                  onSave={() => handleSaveSection("introducere")}
-                  disabled={isPublicShared}
-                />
-              </div>
+                {(() => {
+                  const apartamentLayout = getDescriptionSectionLayout(activeDescriptionPattern, "apartament");
+                  const apartmentRooms = [
+                    { label: "Living", finisaje: "vopsea lavabilă, parchet", mobilare: "canapea, măsuță cafea, comodă", dotari: "aer condiționat, smart TV" },
+                    ...(bedroomCount >= 1 ? [{ label: "Camera 1", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                    ...(bedroomCount >= 2 ? [{ label: "Camera 2", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                    ...(bedroomCount >= 3 ? [{ label: "Camera 3", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                    ...(bedroomCount >= 4 ? [{ label: "Camera 4", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
+                    { label: "Bucătărie", finisaje: "vopsea lavabilă, faianță și gresie", mobilare: "mobilă de bucatarie premium", dotari: "frigider, plită, cuptor, hotă" },
+                    ...(baiCount >= 1 ? [{ label: "Baie 1", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                    ...(baiCount >= 2 ? [{ label: "Baie 2", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                    ...(baiCount >= 3 ? [{ label: "Baie 3", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                    ...(baiCount >= 4 ? [{ label: "Baie 4", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
+                    { label: "Hol", finisaje: "vopsea lavabilă, parchet", mobilare: "cuier, pantofar", dotari: "interfon" },
+                  ];
 
-              <div className={`p-5 font-sans ${!isPublicShared ? "space-y-4" : ""}`}>
-                {!isPublicShared && (
-                  <div>
-                    <label
-                      onClick={() => {
-                        if (editingSection === "introducere") introTitleInputRef.current?.focus();
-                      }}
-                      className={`flex items-center gap-2 px-2 text-[12px] leading-4 mb-1 font-semibold text-[#051D35] transition-colors select-none ${
-                        editingSection === "introducere" ? "cursor-pointer" : ""
-                      }`}
-                    >
-                      <span>Titlu</span>
-                      {editingSection === "introducere" && titleFocused && (
-                        <span
-                          className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
-                          title="Mod focus activ"
-                        />
-                      )}
-                    </label>
-
-                    {editingSection === "introducere" ? (
-                      <input
-                        ref={introTitleInputRef}
-                        type="text"
-                        value={draftSectionData["introducere"]?.["titlu"] ?? (sectionData["introducere"]?.["titlu"] || displayTitle)}
-                        onChange={(e) => handleFieldChange("introducere", "titlu", e.target.value)}
-                        onFocus={() => setTitleFocused(true)}
-                        onBlur={() => setTitleFocused(false)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Escape") (e.target as HTMLElement).blur();
-                        }}
-                        className={`w-full !h-9 !px-2 rounded-md border text-[12px] font-sans font-normal leading-5 outline-none shadow-none select-text transition-all ${
-                          titleFocused
-                            ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
-                            : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
-                        }`}
-                        placeholder="Introdu titlul proprietății..."
-                      />
-                    ) : (
-                      <div className="w-full px-2 py-2 rounded-md border border-transparent bg-transparent text-[12px] text-gray-800 leading-5 font-normal select-text font-sans">
-                        {sectionData["introducere"]?.["titlu"] || displayTitle}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div>
-                  <label
-                    onClick={() => {
-                      if (editingSection === "introducere") introTextareaRef.current?.focus();
-                    }}
-                    className={`flex items-center gap-2 px-2 text-[12px] leading-4 ${
-                      isPublicShared ? "mb-[8px]" : "mb-1"
-                    } font-semibold text-[#051D35] transition-colors select-none ${
-                      editingSection === "introducere" ? "cursor-pointer" : ""
-                    }`}
-                  >
-                    <span>{isPublicShared ? "Descriere proprietate" : "Descriere"}</span>
-                    {editingSection === "introducere" && introFocused && (
-                      <span
-                        className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
-                        title="Mod focus activ"
-                      />
-                    )}
-                  </label>
-
-                  {editingSection === "introducere" ? (
-                    <textarea
-                      ref={introTextareaRef}
-                      rows={5}
-                      value={draftSectionData["introducere"]?.["summary"] ?? (sectionData["introducere"]?.["summary"] || summaryDescription)}
-                      onChange={(e) => handleFieldChange("introducere", "summary", e.target.value)}
-                      onFocus={() => setIntroFocused(true)}
-                      onBlur={() => setIntroFocused(false)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Escape") (e.target as HTMLElement).blur();
-                      }}
-                      className={`w-full !px-2 !py-2 !min-h-[120px] rounded-md border text-[12px] font-sans font-normal leading-[1.6] outline-none shadow-none resize-y select-text transition-all ${
-                        introFocused
-                          ? "!bg-amber-50/35 !border-[#BE9662] ring-2 ring-[#BE9662]/15 text-[#051D35]"
-                          : "bg-gray-50/90 hover:bg-gray-100/70 border-gray-200 text-gray-800"
-                      }`}
-                      placeholder="Descrierea proprietății..."
-                    />
-                  ) : (
-                    <div
-                      className={`w-full px-2 ${
-                        isPublicShared ? "py-0 h-auto" : "py-2 min-h-[120px]"
-                      } rounded-md border border-transparent bg-transparent text-[12px] text-gray-700 leading-[1.6] font-normal whitespace-pre-line select-text font-sans`}
-                    >
-                      {isPublicShared
-                        ? publicSharedDescription
-                        : (sectionData["introducere"]?.["summary"] || summaryDescription)}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* #CARD "APARTAMENT" */}
-            <div id="apartament" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px]">
-              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
-                    <Home size={16} />
-                  </div>
-                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
-                    Apartament
-                  </h2>
-                </div>
-              </div>
-
-              {(() => {
-                const apartmentRooms = [
-                  { label: "Living", finisaje: "vopsea lavabilă, parchet", mobilare: "canapea, măsuță cafea, comodă", dotari: "aer condiționat, smart TV" },
-                  ...(bedroomCount >= 1 ? [{ label: "Camera 1", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
-                  ...(bedroomCount >= 2 ? [{ label: "Camera 2", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
-                  ...(bedroomCount >= 3 ? [{ label: "Camera 3", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
-                  ...(bedroomCount >= 4 ? [{ label: "Camera 4", finisaje: "vopsea lavabilă, parchet", mobilare: "pat, noptiere, dulap", dotari: "-" }] : []),
-                  { label: "Bucătărie", finisaje: "vopsea lavabilă, faianță și gresie", mobilare: "mobilă de bucatarie premium", dotari: "frigider, plită, cuptor, hotă" },
-                  ...(baiCount >= 1 ? [{ label: "Baie 1", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
-                  ...(baiCount >= 2 ? [{ label: "Baie 2", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
-                  ...(baiCount >= 3 ? [{ label: "Baie 3", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
-                  ...(baiCount >= 4 ? [{ label: "Baie 4", finisaje: "faianță și gresie", mobilare: "obiecte sanitare premium", dotari: "-" }] : []),
-                  { label: "Hol", finisaje: "vopsea lavabilă, parchet", mobilare: "cuier, pantofar", dotari: "interfon" },
-                ];
-
-                const mobileLeftOrderClasses = [
-                  "order-2 md:order-none",
-                  "order-3 md:order-none",
-                  "order-4 md:order-none",
-                  "order-5 md:order-none",
-                  "order-6 md:order-none",
-                  "order-7 md:order-none",
-                  "order-8 md:order-none",
-                  "order-9 md:order-none",
-                  "order-10 md:order-none",
-                  "order-11 md:order-none",
-                  "order-12 md:order-none",
-                ];
-                const mobileRightOrderClasses = [
-                  "order-[14] md:order-none",
-                  "order-[15] md:order-none",
-                  "order-[16] md:order-none",
-                  "order-[17] md:order-none",
-                  "order-[18] md:order-none",
-                  "order-[19] md:order-none",
-                  "order-[20] md:order-none",
-                  "order-[21] md:order-none",
-                  "order-[22] md:order-none",
-                  "order-[23] md:order-none",
-                  "order-[24] md:order-none",
-                ];
-
-                return (
-                  <div className="font-sans divide-y divide-gray-200">
-                    {/* 1. Configurație & Finisaje Side by Side */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-                      {/* Left: Configurație */}
-                      <div className="flex flex-col">
-                        <SubCategoryHeader 
-                          title="Configurație" 
-                          isPublicShared={isPublicShared}
-                          actions={
-                            <SectionEditButton
-                              isEditing={editingSection === "configuratie"}
-                              isDirty={isSectionDirty("configuratie")}
-                              onStartEdit={() => handleStartEditSection("configuratie")}
-                              onCancel={() => handleCancelEditSection("configuratie")}
-                              onSave={() => handleSaveSection("configuratie")}
-                              disabled={isPublicShared}
-                            />
-                          }
-                        />
-                        <div
-                          className={
-                            isPublicShared
-                              ? "p-5 grid grid-cols-1 [&:has(>:nth-child(6))]:md:grid-cols-2 gap-[20px] content-start flex-1"
-                              : `p-5 ${editingSection === "configuratie" ? "space-y-[16px]" : "space-y-4"} flex-1`
-                          }
-                        >
-                          {renderRow("configuratie", "Suprafață utilă", suprafataUtila)}
-                          {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
-                          {renderRow("configuratie", "Etaj", etaj)}
-                          {renderRow("configuratie", "An construcție", anConstructie)}
-                          {renderRow("configuratie", "Număr camere", String(camere))}
-                          {renderRow("configuratie", "Număr băi", String(bai))}
-                          {renderRow("configuratie", "Balcon", String(balcoane))}
-                          {renderRow("configuratie", "Stare", stareInterior, true, false, STARE_OPTIONS)}
+                  const renderApartamentSub = (tagId: string) => {
+                    if (tagId === "general") {
+                      return (
+                        <div className="flex flex-col flex-1">
+                          <SubCategoryHeader
+                            title="General"
+                            isPublicShared={isPublicShared}
+                            actions={
+                              <SectionEditButton
+                                isEditing={editingSection === "configuratie"}
+                                isDirty={isSectionDirty("configuratie")}
+                                onStartEdit={() => handleStartEditSection("configuratie")}
+                                onCancel={() => handleCancelEditSection("configuratie")}
+                                onSave={() => handleSaveSection("configuratie")}
+                                disabled={isPublicShared}
+                              />
+                            }
+                          />
+                          <div
+                            className={
+                              isPublicShared
+                                ? "p-5 grid grid-cols-1 [&:has(>:nth-child(6))]:md:grid-cols-2 gap-[20px] content-start flex-1"
+                                : `p-5 ${editingSection === "configuratie" ? "space-y-[16px]" : "space-y-4"} flex-1`
+                            }
+                          >
+                            {renderRow("configuratie", "Categorie", categorieGeneral)}
+                            {renderRow("configuratie", "Compartimentare", compartimentare, false, false, COMPARTIMENTARE_OPTIONS)}
+                            {renderRow("configuratie", "Număr camere", camereGeneral)}
+                            {renderRow("configuratie", "Număr băi", baiGeneral)}
+                            {renderRow("configuratie", "Etaj apartament", etajApartamentGeneral)}
+                            {renderRow("configuratie", "Etaje total bloc", etajeTotalBlocGeneral)}
+                            {renderRow("configuratie", "Mobilare", mobilareGeneral)}
+                            {renderRow("configuratie", "Utilare", utilareGeneral)}
+                            {renderRow("configuratie", "Tip parcare", tipParcareGeneral)}
+                            {renderRow("configuratie", "Număr locuri parcare", numarLocuriParcareGeneral)}
+                            {renderRow("configuratie", "Zonă", zonaGeneral, true)}
+                          </div>
                         </div>
-                      </div>
-
-                      {/* Right: Finisaje */}
-                      <div className="flex flex-col">
-                        <SubCategoryHeader 
-                          title="Finisaje" 
-                          isPublicShared={isPublicShared}
-                          actions={
-                            <SectionEditButton
-                              isEditing={editingSection === "finisaje"}
-                              isDirty={isSectionDirty("finisaje")}
-                              onStartEdit={() => handleStartEditSection("finisaje")}
-                              onCancel={() => handleCancelEditSection("finisaje")}
-                              onSave={() => handleSaveSection("finisaje")}
-                              disabled={isPublicShared}
-                            />
-                          }
-                        />
-                        <div
-                          className={
-                            isPublicShared
-                              ? "p-5 grid grid-cols-1 [&:has(>:nth-child(6))]:md:grid-cols-2 gap-[20px] content-start flex-1"
-                              : `p-5 ${editingSection === "finisaje" ? "space-y-[16px]" : "space-y-4"} flex-1`
-                          }
-                        >
-                          {apartmentRooms.map((room, idx) =>
-                            renderRow("finisaje", room.label, room.finisaje, idx === apartmentRooms.length - 1, false, undefined, isPublicShared)
-                          )}
+                      );
+                    }
+                    if (tagId === "finisaje") {
+                      return (
+                        <div className="flex flex-col flex-1">
+                          <SubCategoryHeader
+                            title="Finisaje"
+                            isPublicShared={isPublicShared}
+                            actions={
+                              <SectionEditButton
+                                isEditing={editingSection === "finisaje"}
+                                isDirty={isSectionDirty("finisaje")}
+                                onStartEdit={() => handleStartEditSection("finisaje")}
+                                onCancel={() => handleCancelEditSection("finisaje")}
+                                onSave={() => handleSaveSection("finisaje")}
+                                disabled={isPublicShared}
+                              />
+                            }
+                          />
+                          <div
+                            className={
+                              isPublicShared
+                                ? "p-5 grid grid-cols-1 [&:has(>:nth-child(6))]:md:grid-cols-2 gap-[20px] content-start flex-1"
+                                : `p-5 ${editingSection === "finisaje" ? "space-y-[16px]" : "space-y-4"} flex-1`
+                            }
+                          >
+                            {apartmentRooms.map((room, idx) =>
+                              renderRow("finisaje", room.label, room.finisaje, idx === apartmentRooms.length - 1, false, undefined, isPublicShared)
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    </div>
-
-                    {/* 2. Mobilare & Dotări Side by Side */}
-                    {isPublicShared ? (
-                      <div className="grid grid-cols-1 md:grid-cols-2">
-                        <div className="order-1 md:order-none md:border-r md:border-gray-200">
-                          <SubCategoryHeader title="Mobilare" isPublicShared={isPublicShared} />
-                        </div>
-                        <div className="order-[13] md:order-none mt-5 md:mt-0 border-t border-gray-200 md:border-t-0">
-                          <SubCategoryHeader title="Dotări" isPublicShared={isPublicShared} />
-                        </div>
-                        {apartmentRooms.map((room, idx) => {
-                          const isLastRoom = idx === apartmentRooms.length - 1;
-                          return (
-                            <React.Fragment key={room.label}>
-                              <div
-                                className={`${mobileLeftOrderClasses[idx] || ""} px-5 ${
-                                  idx === 0 ? "pt-5" : "pt-[20px]"
-                                } ${isLastRoom ? "md:pb-5" : ""} md:border-r md:border-gray-200`}
-                              >
-                                {renderRow("mobilare", room.label, room.mobilare, isLastRoom, false, undefined, true)}
-                              </div>
-                              <div
-                                className={`${mobileRightOrderClasses[idx] || ""} px-5 ${
-                                  idx === 0 ? "pt-5" : "pt-[20px]"
-                                } ${isLastRoom ? "pb-5" : ""}`}
-                              >
-                                {renderRow("dotari", room.label, room.dotari, isLastRoom, false, undefined, true)}
-                              </div>
-                            </React.Fragment>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
-                        {/* Left: Mobilare */}
-                        <div className="flex flex-col">
-                          <SubCategoryHeader 
-                            title="Mobilare" 
+                      );
+                    }
+                    if (tagId === "mobilare") {
+                      return (
+                        <div className="flex flex-col flex-1">
+                          <SubCategoryHeader
+                            title="Mobilare"
                             isPublicShared={isPublicShared}
                             actions={
                               <SectionEditButton
@@ -2961,17 +3549,19 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                               />
                             }
                           />
-                          <div className={`p-5 ${editingSection === "mobilare" ? "space-y-[16px]" : "space-y-4"} flex-1`}>
+                          <div className={`p-5 ${isPublicShared ? "space-y-[20px]" : (editingSection === "mobilare" ? "space-y-[16px]" : "space-y-4")} flex-1`}>
                             {apartmentRooms.map((room, idx) =>
                               renderRow("mobilare", room.label, room.mobilare, idx === apartmentRooms.length - 1, false, undefined, isPublicShared)
                             )}
                           </div>
                         </div>
-
-                        {/* Right: Dotări */}
-                        <div className="flex flex-col">
-                          <SubCategoryHeader 
-                            title="Dotări" 
+                      );
+                    }
+                    if (tagId === "dotari") {
+                      return (
+                        <div className="flex flex-col flex-1">
+                          <SubCategoryHeader
+                            title="Dotări"
                             isPublicShared={isPublicShared}
                             actions={
                               <SectionEditButton
@@ -2984,138 +3574,102 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
                               />
                             }
                           />
-                          <div className={`p-5 ${editingSection === "dotari" ? "space-y-[16px]" : "space-y-4"} flex-1`}>
+                          <div className={`p-5 ${isPublicShared ? "space-y-[20px]" : (editingSection === "dotari" ? "space-y-[16px]" : "space-y-4")} flex-1`}>
                             {apartmentRooms.map((room, idx) =>
                               renderRow("dotari", room.label, room.dotari, idx === apartmentRooms.length - 1, false, undefined, isPublicShared)
                             )}
                           </div>
                         </div>
+                      );
+                    }
+                    return null;
+                  };
+
+                  if (hasCustomDescriptionRows(apartamentLayout)) {
+                    return renderCustomDescriptionGrid(apartamentLayout!.rows, renderApartamentSub, {
+                      dividedSubsections: true,
+                    });
+                  }
+
+                  const mobileLeftOrderClasses = [
+                    "order-2 md:order-none",
+                    "order-3 md:order-none",
+                    "order-4 md:order-none",
+                    "order-5 md:order-none",
+                    "order-6 md:order-none",
+                    "order-7 md:order-none",
+                    "order-8 md:order-none",
+                    "order-9 md:order-none",
+                    "order-10 md:order-none",
+                    "order-11 md:order-none",
+                    "order-12 md:order-none",
+                  ];
+                  const mobileRightOrderClasses = [
+                    "order-[14] md:order-none",
+                    "order-[15] md:order-none",
+                    "order-[16] md:order-none",
+                    "order-[17] md:order-none",
+                    "order-[18] md:order-none",
+                    "order-[19] md:order-none",
+                    "order-[20] md:order-none",
+                    "order-[21] md:order-none",
+                    "order-[22] md:order-none",
+                    "order-[23] md:order-none",
+                    "order-[24] md:order-none",
+                  ];
+
+                  return (
+                    <div className="font-sans divide-y divide-gray-200">
+                      {/* 1. General & Finisaje Side by Side */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                        {renderApartamentSub("general")}
+                        {renderApartamentSub("finisaje")}
                       </div>
-                    )}
-                  </div>
-                );
-              })()}
-            </div>
 
-            {/* #CARD "BLOC" */}
-            <div id="bloc" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
-              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
-                    <Building2 size={16} />
-                  </div>
-                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
-                    Bloc
-                  </h2>
-                </div>
-
-                <SectionEditButton
-                  isEditing={editingSection === "bloc"}
-                  isDirty={isSectionDirty("bloc")}
-                  onStartEdit={() => handleStartEditSection("bloc")}
-                  onCancel={() => handleCancelEditSection("bloc")}
-                  onSave={() => handleSaveSection("bloc")}
-                  disabled={isPublicShared}
-                />
+                      {/* 2. Mobilare & Dotări Side by Side */}
+                      {isPublicShared ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2">
+                          <div className="order-1 md:order-none md:border-r md:border-gray-200">
+                            <SubCategoryHeader title="Mobilare" isPublicShared={isPublicShared} />
+                          </div>
+                          <div className="order-[13] md:order-none mt-5 md:mt-0 border-t border-gray-200 md:border-t-0">
+                            <SubCategoryHeader title="Dotări" isPublicShared={isPublicShared} />
+                          </div>
+                          {apartmentRooms.map((room, idx) => {
+                            const isLastRoom = idx === apartmentRooms.length - 1;
+                            return (
+                              <React.Fragment key={room.label}>
+                                <div
+                                  className={`${mobileLeftOrderClasses[idx] || ""} px-5 ${
+                                    idx === 0 ? "pt-5" : "pt-[20px]"
+                                  } ${isLastRoom ? "md:pb-5" : ""} md:border-r md:border-gray-200`}
+                                >
+                                  {renderRow("mobilare", room.label, room.mobilare, isLastRoom, false, undefined, true)}
+                                </div>
+                                <div
+                                  className={`${mobileRightOrderClasses[idx] || ""} px-5 ${
+                                    idx === 0 ? "pt-5" : "pt-[20px]"
+                                  } ${isLastRoom ? "pb-5" : ""}`}
+                                >
+                                  {renderRow("dotari", room.label, room.dotari, isLastRoom, false, undefined, true)}
+                                </div>
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                          {renderApartamentSub("mobilare")}
+                          {renderApartamentSub("dotari")}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
+            )}
 
-              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "bloc" ? "gap-[16px]" : "gap-4")} font-sans`}>
-                {renderRow("bloc", "Acces", "Tag magnetic, interfon")}
-                {renderRow("bloc", "Spații", "-")}
-                {renderRow("bloc", "Dotări", "Lift, supraveghere video")}
-                {renderRow("bloc", "Servicii", "Administrație, curățenie spații comune", true)}
-              </div>
-            </div>
-
-            {/* #CARD "IMPREJURIMI" */}
-            <div id="imprejurimi" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
-              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
-                    <Compass size={16} />
-                  </div>
-                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
-                    Împrejurimi
-                  </h2>
-                </div>
-
-                <SectionEditButton
-                  isEditing={editingSection === "imprejurimi"}
-                  isDirty={isSectionDirty("imprejurimi")}
-                  onStartEdit={() => handleStartEditSection("imprejurimi")}
-                  onCancel={() => handleCancelEditSection("imprejurimi")}
-                  onSave={() => handleSaveSection("imprejurimi")}
-                  disabled={isPublicShared}
-                />
-              </div>
-
-              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "imprejurimi" ? "gap-[16px]" : "gap-4")} font-sans`}>
-                {renderRow("imprejurimi", "Educație", "Grădinițe de stat și private, școli gimnaziale, licee în apropiere")}
-                {renderRow("imprejurimi", "Comerț", "Numeroase magazine de proximitate.")}
-                {renderRow("imprejurimi", "Benzinării", "Multiple statii de alimentare.")}
-                {renderRow("imprejurimi", "Sănătate", "Diverse farmacii.")}
-                {renderRow("imprejurimi", "Relaxare", "Spatii verzi in apropiere.")}
-                {renderRow("imprejurimi", "Divertisment", "Restaurante, baruri si cafenele in zona.")}
-                {renderRow("imprejurimi", "Obiective", "Diverse puncte de atracie din sector.", true)}
-              </div>
-            </div>
-
-            {/* #CARD "TRANSPORT" */}
-            <div id="transport" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
-              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
-                    <Bus size={16} />
-                  </div>
-                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
-                    Transport
-                  </h2>
-                </div>
-
-                <SectionEditButton
-                  isEditing={editingSection === "transport"}
-                  isDirty={isSectionDirty("transport")}
-                  onStartEdit={() => handleStartEditSection("transport")}
-                  onCancel={() => handleCancelEditSection("transport")}
-                  onSave={() => handleSaveSection("transport")}
-                  disabled={isPublicShared}
-                />
-              </div>
-
-              <div className={`p-5 grid grid-cols-1 md:grid-cols-2 ${isPublicShared ? "gap-[20px]" : (editingSection === "transport" ? "gap-[16px]" : "gap-4")} font-sans`}>
-                {renderRow("transport", "Metrou", "Stație de metrou în proximitate")}
-                {renderRow("transport", "Tramvai", "Linii tramvai în zonă")}
-                {renderRow("transport", "Troleibuz", "Linii troleibuz în apropiere")}
-                {renderRow("transport", "Autobuz", "Multiple linii STB în apropiere", true)}
-              </div>
-            </div>
-
-            {/* #CARD "PARCARE" */}
-            <div id="parcare" className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-xs scroll-mt-[104px] font-sans">
-              <div className="px-5 py-4 bg-gray-50/80 border-b border-gray-200 flex items-center justify-between select-none">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-lg bg-[#051D35]/5 text-[#051D35] flex items-center justify-center font-semibold">
-                    <Car size={16} />
-                  </div>
-                  <h2 className="font-title text-[12px] font-semibold text-[#051D35]">
-                    Parcare
-                  </h2>
-                </div>
-
-                <SectionEditButton
-                  isEditing={editingSection === "parcare"}
-                  isDirty={isSectionDirty("parcare")}
-                  onStartEdit={() => handleStartEditSection("parcare")}
-                  onCancel={() => handleCancelEditSection("parcare")}
-                  onSave={() => handleSaveSection("parcare")}
-                  disabled={isPublicShared}
-                />
-              </div>
-
-              <div className="p-5 font-sans">
-                {renderRow("parcare", "Parcare", "Publica in zona", true, true)}
-              </div>
-            </div>
+            {renderAdditionalPresentationCards()}
 
             {/* Bottom action bar for regenerating all property images with watermark inpainting (internal CRM only) */}
             {!isPublicShared && (
@@ -3594,6 +4148,11 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               </div>
             </div>
 
+            {/* Phase 7 External Portal Publishing Panel (feature-flagged OFF in Production) */}
+            {(lead.id || lead.propertyId) && (
+              <OrgPortalPublishingPanel propertyId={lead.id || lead.propertyId || ""} />
+            )}
+
           </div>
         )}
 
@@ -3697,7 +4256,7 @@ export const PropertyDetailView: React.FC<PropertyDetailViewProps> = ({
               >
                 {isPublicShared ? (
                   <ProtectedPublicImage
-                    src={getThumbnailImageUrl(img, idx === 0 ? 1280 : 640)}
+                    src={getThumbnailImageUrl(img, 160)}
                     alt={`thumb-${idx}`}
                     fit="cover"
                     lazy={true}

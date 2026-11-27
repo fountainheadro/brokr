@@ -5,6 +5,7 @@ import { OrgTopBar } from "../../organisms/common/org_top-bar";
 export interface TplPlatformDashboardProps {
   navGroups: NavGroup[];
   headerTitle?: string;
+  subHeader?: React.ReactNode;
   metricsSlot?: React.ReactNode;
   contentSlot: React.ReactNode;
   userMenu?: React.ReactNode;
@@ -16,6 +17,7 @@ export interface TplPlatformDashboardProps {
 export const TplPlatformDashboard: React.FC<TplPlatformDashboardProps> = ({
   navGroups,
   headerTitle = "Platform Super Admin",
+  subHeader,
   metricsSlot,
   contentSlot,
   userMenu,
@@ -43,6 +45,7 @@ export const TplPlatformDashboard: React.FC<TplPlatformDashboardProps> = ({
           onSearchChange={onSearchChange}
           userMenu={userMenu}
         />
+        {subHeader}
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 custom-scrollbar">
           {metricsSlot && (

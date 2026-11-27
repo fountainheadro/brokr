@@ -140,12 +140,6 @@ export const InlineDetailField: React.FC<InlineDetailFieldProps> = ({
       >
         <span className="truncate">{label}</span>
         {labelSuffix}
-        {activeFocus && (
-          <span
-            className="w-2 h-2 rounded-full bg-[#BE9662] shrink-0 animate-pulse"
-            title="Mod focus activ"
-          />
-        )}
       </label>
 
       {/* Reserved Information / Input Area Below (exact matching geometry -> 0px layout shift) */}

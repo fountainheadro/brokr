@@ -882,9 +882,46 @@ export const Home: React.FC = () => {
           next.categoria = val;
         }
         
-        // Sync top-level title if crmData.descriere.titlu is updated
+        // Sync top-level title & extracted title fields if crmData.descriere.titlu is updated
         if (path === 'crmData.descriere.titlu') {
           next.title = val;
+          nextExtracted.originalTitle = val;
+          nextExtracted.titleManuallyEdited = true;
+          if (nextExtracted.olxMeta && typeof nextExtracted.olxMeta === 'object') {
+            nextExtracted.olxMeta = { ...nextExtracted.olxMeta, originalTitle: val };
+          }
+          if (nextExtracted.presentationSections && typeof nextExtracted.presentationSections === 'object') {
+            nextExtracted.presentationSections = {
+              ...nextExtracted.presentationSections,
+              introducere: {
+                ...(nextExtracted.presentationSections.introducere || {}),
+                titlu: val,
+              },
+            };
+          }
+          if (next.criteriiFormular && typeof next.criteriiFormular === 'object') {
+            next.criteriiFormular = { ...next.criteriiFormular, propertyTitle: val };
+          }
+        }
+
+        // Sync extracted description fields if crmData.descriere.continut is updated
+        if (path === 'crmData.descriere.continut') {
+          nextExtracted.originalDescription = val;
+          nextExtracted.markdownMarketing = val;
+          nextExtracted.descriptionManuallyEdited = true;
+          next.requirements = val;
+          if (nextExtracted.presentationSections && typeof nextExtracted.presentationSections === 'object') {
+            nextExtracted.presentationSections = {
+              ...nextExtracted.presentationSections,
+              introducere: {
+                ...(nextExtracted.presentationSections.introducere || {}),
+                summary: val,
+              },
+            };
+          }
+          if (next.criteriiFormular && typeof next.criteriiFormular === 'object') {
+            next.criteriiFormular = { ...next.criteriiFormular, requirements: val };
+          }
         }
 
         return next;
@@ -896,15 +933,31 @@ export const Home: React.FC = () => {
     }
 
     try {
+      const atomicPatch: Record<string, any> = {
+        [`extractedData.${path}`]: val,
+      };
       if (path === 'crmData.detaliiGenerale.categoria') {
-        await leadsService.updateLeadData(leadId, { categoria: val });
+        atomicPatch.categoria = val;
       }
       if (path === 'crmData.descriere.titlu') {
-        await leadsService.updateLeadData(leadId, { title: val });
+        atomicPatch.title = val;
+        atomicPatch['extractedData.originalTitle'] = val;
+        atomicPatch['extractedData.titleManuallyEdited'] = true;
+        atomicPatch['extractedData.presentationSections.introducere.titlu'] = val;
       }
-      const persisted = await leadsService.updateNestedField(leadId, `extractedData.${path}`, val);
+      if (path === 'crmData.descriere.continut') {
+        atomicPatch['extractedData.originalDescription'] = val;
+        atomicPatch['extractedData.markdownMarketing'] = val;
+        atomicPatch['extractedData.descriptionManuallyEdited'] = true;
+        atomicPatch['extractedData.presentationSections.introducere.summary'] = val;
+        atomicPatch.requirements = val;
+      }
+      const persisted = await leadsService.updateLeadData(leadId, atomicPatch as Partial<Lead>);
       if (persisted) {
-        void publishPublicShareSnapshot(persisted, { tenantId: tenant?.id, force: true });
+        await publishPublicShareSnapshot(
+          { ...persisted, isSummary: false },
+          { tenantId: (persisted as any)?.tenantId || tenant?.id, force: true }
+        );
       }
       console.log(`[Home] Firestore write success for ${path}`);
     } catch (e) {
@@ -1772,12 +1825,40 @@ export const Home: React.FC = () => {
   const handleSaveDetails = async () => {
     if (!selectedLead?.id) return;
     try {
+      const trimmedEditedTitle = (editedTitle || "").trim();
+      const titleChanged = Boolean(
+        trimmedEditedTitle && trimmedEditedTitle !== String(selectedLead.title || "").trim()
+      );
       let updatedExtractedData: any = undefined;
-      if (selectedLead.extractedData) {
-        updatedExtractedData = JSON.parse(JSON.stringify(selectedLead.extractedData));
+      if (selectedLead.extractedData || titleChanged) {
+        updatedExtractedData = selectedLead.extractedData
+          ? JSON.parse(JSON.stringify(selectedLead.extractedData))
+          : {};
+        if (trimmedEditedTitle) {
+          updatedExtractedData.originalTitle = trimmedEditedTitle;
+          if (titleChanged) {
+            updatedExtractedData.titleManuallyEdited = true;
+          }
+          if (updatedExtractedData.olxMeta && typeof updatedExtractedData.olxMeta === "object") {
+            updatedExtractedData.olxMeta = {
+              ...updatedExtractedData.olxMeta,
+              originalTitle: trimmedEditedTitle,
+            };
+          }
+          if (updatedExtractedData.presentationSections && typeof updatedExtractedData.presentationSections === "object") {
+            updatedExtractedData.presentationSections = {
+              ...updatedExtractedData.presentationSections,
+              introducere: {
+                ...(updatedExtractedData.presentationSections.introducere || {}),
+                titlu: trimmedEditedTitle,
+              },
+            };
+          }
+        }
         if (updatedExtractedData.crmData?.descriere) {
           updatedExtractedData.crmData.descriere = {
             ...updatedExtractedData.crmData.descriere,
+            ...(trimmedEditedTitle ? { titlu: trimmedEditedTitle } : {}),
             continut: updateDescriptionId(updatedExtractedData.crmData.descriere.continut || "", editedPropertyId)
           };
         }
@@ -1815,6 +1896,13 @@ export const Home: React.FC = () => {
         categoria: editedCategoria,
       };
 
+      if (trimmedEditedTitle && selectedLead.criteriiFormular && typeof selectedLead.criteriiFormular === "object") {
+        updatePayload.criteriiFormular = {
+          ...selectedLead.criteriiFormular,
+          propertyTitle: trimmedEditedTitle,
+        };
+      }
+
       if (updatedExtractedData) {
         updatePayload.extractedData = updatedExtractedData;
       }
@@ -1823,11 +1911,16 @@ export const Home: React.FC = () => {
       const mergedLead = {
         ...selectedLead,
         ...updatePayload,
+        ...(persisted || {}),
         ...(persisted?.propertyId ? { propertyId: persisted.propertyId } : {}),
         ...(persisted?.updatedAt ? { updatedAt: persisted.updatedAt } : {}),
+        isSummary: false,
       };
 
-      void publishPublicShareSnapshot(mergedLead, { tenantId: tenant?.id, force: true });
+      await publishPublicShareSnapshot(mergedLead, {
+        tenantId: (persisted as any)?.tenantId || tenant?.id,
+        force: true,
+      });
 
       setSelectedLead(prev => {
         if (!prev) return null;
@@ -1841,7 +1934,12 @@ export const Home: React.FC = () => {
           price: editedPrice,
           transactionType: editedTransactionType,
           categoria: editedCategoria,
-          ...(updatedExtractedData ? { extractedData: updatedExtractedData } : {})
+          ...(updatePayload.criteriiFormular ? { criteriiFormular: updatePayload.criteriiFormular } : {}),
+          ...(persisted?.extractedData
+            ? { extractedData: persisted.extractedData }
+            : updatedExtractedData
+              ? { extractedData: updatedExtractedData }
+              : {})
         };
       });
 
@@ -2111,6 +2209,10 @@ export const Home: React.FC = () => {
       setLeads(prev => prev.map(l => l.id === leadId ? { ...l, ...mergedPayload } : l));
       setSelectedLead(prev => prev?.id === leadId ? { ...prev, ...mergedPayload } : prev);
       setEditedTitle(mergedPayload.title || formattedTitle);
+      void publishPublicShareSnapshot(
+        { ...leadObj, ...mergedPayload },
+        { tenantId: tenant?.id, force: true }
+      );
       toast.success(`Leadul a fost procesat și mutat în Procesate (#${resolvedPropertyId})!`);
     } catch (e) {
       console.error("Failed to process lead:", e);

@@ -67,26 +67,26 @@ export const PgPlatformUsage: React.FC = () => {
       r.subdomain.toLowerCase().includes(search.toLowerCase())
   );
 
-  function renderProgressBar(current: number, max: number, label: string) {
+  function renderProgressBar(current: number, max: number, _label: string) {
     if (max === -1) {
       return (
-        <div className="text-[11px] text-gray-500">
+        <div className="text-[11px] text-gray-500 font-mono tabular-nums">
           <span className="font-normal text-gray-900">{current}</span> (nelimitat)
         </div>
       );
     }
-    const percent = Math.min(100, Math.round((current / max) * 100));
+    const percent = max > 0 ? Math.min(100, Math.round((current / max) * 100)) : 0;
     const isHigh = percent >= 85;
     return (
       <div className="space-y-1 w-full max-w-[130px]">
-        <div className="flex justify-between text-[10px]">
+        <div className="flex justify-between text-[10px] font-mono tabular-nums">
           <span className="font-normal text-gray-800">{current} / {max}</span>
           <span className={isHigh ? "text-amber-600 font-normal" : "text-gray-400 font-normal"}>{percent}%</span>
         </div>
         <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
           <div
             className={`h-full rounded-full transition-all ${
-              percent >= 100 ? "bg-rose-500" : isHigh ? "bg-amber-500" : "bg-indigo-600"
+              percent >= 100 ? "bg-rose-500" : isHigh ? "bg-amber-500" : "bg-[#051D35]"
             }`}
             style={{ width: `${percent}%` }}
           />
@@ -103,7 +103,8 @@ export const PgPlatformUsage: React.FC = () => {
           <div>
             <h2 className="font-title text-base font-semibold text-gray-900">Consum Resurse și Cote per Agenție</h2>
             <p className="text-xs text-gray-500 mt-1">
-              Monitorizare în timp real a conturilor de brokeri, proprietăților active, tokenilor AI și stocării utilizate.
+              Monitorizare reală a conturilor de brokeri, proprietăților active, tokenilor AI și stocării utilizate ·{" "}
+              <span className="text-gray-400">Core API · Measured</span>
             </p>
           </div>
 

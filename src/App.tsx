@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, Outlet, useLocation } from "rea
 import { NotificationManager } from "./components/NotificationManager";
 import { NotificationProvider } from "./components/NotificationProvider";
 import { AuthProvider } from "./core/auth/ctx_auth";
-import { TenantProvider, useTenantContext } from "./core/tenancy/ctx_tenant";
+import { PublicShareTenantProvider, TenantProvider, useTenantContext } from "./core/tenancy/ctx_tenant";
 import { MolPreviewBanner } from "./ui/molecules/platform/mol_preview-banner";
 import { MolErrorRecoveryBanner } from "./ui/molecules/common/mol_error-recovery-banner";
 import { useDataHubSyncState } from "./core/crm/hooks_crm-hub";
@@ -79,6 +79,7 @@ const PgPlatformAgencyTesting = lazyWithRetry(() => import("./pages/platform/pg_
 const PgPlatformUsers = lazyWithRetry(() => import("./pages/platform/pg_platform-users").then((m) => ({ default: m.PgPlatformUsers })));
 const PgPlatformDomains = lazyWithRetry(() => import("./pages/platform/pg_platform-domains").then((m) => ({ default: m.PgPlatformDomains })));
 const PgPlatformAnalytics = lazyWithRetry(() => import("./pages/platform/pg_platform-analytics").then((m) => ({ default: m.PgPlatformAnalytics })));
+const PgPlatformPerformance = lazyWithRetry(() => import("./pages/platform/pg_platform-performance").then((m) => ({ default: m.PgPlatformPerformance })));
 const PgPlatformAiUsage = lazyWithRetry(() => import("./pages/platform/pg_platform-ai-usage").then((m) => ({ default: m.PgPlatformAiUsage })));
 const PgPlatformAuditLogs = lazyWithRetry(() => import("./pages/platform/pg_platform-audit-logs").then((m) => ({ default: m.PgPlatformAuditLogs })));
 const PgPlatformSettings = lazyWithRetry(() => import("./pages/platform/pg_platform-settings").then((m) => ({ default: m.PgPlatformSettings })));
@@ -187,63 +188,100 @@ const DataHubStatusBanner: React.FC = () => {
   return null;
 };
 
+const PublicShareLoadingFallback = () => (
+  <div className="w-screen h-screen flex flex-col items-center justify-center bg-[#F8FAFC] select-none">
+    <div className="w-8 h-8 border-3 border-[#051D35]/15 border-t-[#BE9662] rounded-full animate-spin mb-3" />
+    <span className="text-xs font-semibold text-gray-500 tracking-wide font-sans">
+      Se încarcă proprietatea...
+    </span>
+  </div>
+);
+
+const AppShellRouter: React.FC = () => {
+  const location = useLocation();
+  const isPublicShareRoute =
+    location.pathname.startsWith("/share/") || location.pathname.startsWith("/p/");
+
+  // Fast path: external shared property links bypass AuthProvider, TenantProvider (/api/tenant/resolve),
+  // NotificationProvider, and CRM sync banners so SSR-hydrated data and prefetched mosaic images paint immediately.
+  if (isPublicShareRoute) {
+    return (
+      <PublicShareTenantProvider>
+        <RouteErrorBoundary>
+          <Suspense fallback={<PublicShareLoadingFallback />}>
+            <Routes>
+              <Route path="/share/:id" element={<SharedProperty />} />
+              <Route path="/p/:id" element={<SharedProperty />} />
+            </Routes>
+          </Suspense>
+        </RouteErrorBoundary>
+      </PublicShareTenantProvider>
+    );
+  }
+
+  return (
+    <AuthProvider>
+      <TenantProvider>
+        <NotificationProvider>
+          <MolPreviewBanner />
+          <DataHubStatusBanner />
+          <RouteErrorBoundary>
+            <Suspense fallback={<RouteLoadingFallback />}>
+              <Routes>
+                <Route element={<HomeRouteShell />}>
+                  <Route path="/" element={null} />
+                  <Route path="/leads/:id" element={null} />
+                  <Route path="/cereri/:id" element={null} />
+                </Route>
+                <Route path="/calendar" element={<Navigate to="/?calendar=true" replace />} />
+                <Route path="/share/:id" element={<SharedProperty />} />
+                <Route path="/p/:id" element={<SharedProperty />} />
+                <Route path="/showcase" element={<PgDesignSystemShowcase />} />
+                <Route path="/design-system" element={<PgDesignSystemShowcase />} />
+
+                {/* Super Admin Platform Routes */}
+                <Route path="/platform" element={<Navigate to="/platform/dashboard" replace />} />
+                <Route path="/platform/dashboard" element={<PgPlatformDashboard />} />
+                <Route path="/platform/agencies" element={<PgPlatformAgencies />} />
+                <Route path="/platform/agencies/:tenant_id" element={<PgPlatformAgencyDetail />} />
+                <Route path="/platform/agency-testing" element={<PgPlatformAgencyTesting />} />
+                <Route path="/platform/users" element={<PgPlatformUsers />} />
+                <Route path="/platform/domains" element={<PgPlatformDomains />} />
+                <Route path="/platform/analytics" element={<PgPlatformAnalytics />} />
+                <Route path="/platform/performance" element={<PgPlatformPerformance />} />
+                <Route path="/platform/ai-usage" element={<PgPlatformAiUsage />} />
+                <Route path="/platform/audit-logs" element={<PgPlatformAuditLogs />} />
+                <Route path="/platform/settings" element={<PgPlatformSettings />} />
+                <Route path="/platform/plans" element={<PgPlatformPlans />} />
+                <Route path="/platform/subscriptions" element={<PgPlatformSubscriptions />} />
+                <Route path="/platform/modules" element={<PgPlatformModules />} />
+                <Route path="/platform/usage" element={<PgPlatformUsage />} />
+                <Route path="/platform/billing" element={<PgPlatformBilling />} />
+                <Route path="/platform/migration" element={<PgPlatformMigration />} />
+                <Route path="/platform/automatizare" element={<PgPlatformAutomatizare />} />
+                <Route path="/platform/auto-crawl" element={<PgPlatformAutoCrawl />} />
+
+                {/* Agency Administration Boundaries */}
+                <Route path="/agency/admin" element={<PgAgencyAdminBoundary />} />
+                <Route path="/agency/admin/piata-imobiliara" element={<PgAgencyAdminPiataImobiliara />} />
+                <Route path="/agency/admin/settings" element={<PgAgencyAdminSettings />} />
+                <Route path="/agency/admin/members" element={<PgAgencyAdminMembers />} />
+                <Route path="/agency/admin/subscription" element={<PgAgencyAdminSubscription />} />
+                <Route path="/agency/admin/ai-config" element={<PgAgencyAdminAiConfig />} />
+                <Route path="/agency/admin/automatizare" element={<PgAgencyAdminAutomatizare />} />
+              </Routes>
+            </Suspense>
+          </RouteErrorBoundary>
+        </NotificationProvider>
+      </TenantProvider>
+    </AuthProvider>
+  );
+};
+
 export default function App() {
   return (
     <BrowserRouter>
-      <AuthProvider>
-        <TenantProvider>
-          <NotificationProvider>
-            <MolPreviewBanner />
-            <DataHubStatusBanner />
-            <RouteErrorBoundary>
-              <Suspense fallback={<RouteLoadingFallback />}>
-                <Routes>
-                  <Route element={<HomeRouteShell />}>
-                    <Route path="/" element={null} />
-                    <Route path="/leads/:id" element={null} />
-                    <Route path="/cereri/:id" element={null} />
-                  </Route>
-                  <Route path="/calendar" element={<Navigate to="/?calendar=true" replace />} />
-                  <Route path="/share/:id" element={<SharedProperty />} />
-                  <Route path="/p/:id" element={<SharedProperty />} />
-                  <Route path="/showcase" element={<PgDesignSystemShowcase />} />
-                  <Route path="/design-system" element={<PgDesignSystemShowcase />} />
-
-                  {/* Super Admin Platform Routes */}
-                  <Route path="/platform" element={<Navigate to="/platform/dashboard" replace />} />
-                  <Route path="/platform/dashboard" element={<PgPlatformDashboard />} />
-                  <Route path="/platform/agencies" element={<PgPlatformAgencies />} />
-                  <Route path="/platform/agencies/:tenant_id" element={<PgPlatformAgencyDetail />} />
-                  <Route path="/platform/agency-testing" element={<PgPlatformAgencyTesting />} />
-                  <Route path="/platform/users" element={<PgPlatformUsers />} />
-                  <Route path="/platform/domains" element={<PgPlatformDomains />} />
-                  <Route path="/platform/analytics" element={<PgPlatformAnalytics />} />
-                  <Route path="/platform/ai-usage" element={<PgPlatformAiUsage />} />
-                  <Route path="/platform/audit-logs" element={<PgPlatformAuditLogs />} />
-                  <Route path="/platform/settings" element={<PgPlatformSettings />} />
-                  <Route path="/platform/plans" element={<PgPlatformPlans />} />
-                  <Route path="/platform/subscriptions" element={<PgPlatformSubscriptions />} />
-                  <Route path="/platform/modules" element={<PgPlatformModules />} />
-                  <Route path="/platform/usage" element={<PgPlatformUsage />} />
-                  <Route path="/platform/billing" element={<PgPlatformBilling />} />
-                  <Route path="/platform/migration" element={<PgPlatformMigration />} />
-                  <Route path="/platform/automatizare" element={<PgPlatformAutomatizare />} />
-                  <Route path="/platform/auto-crawl" element={<PgPlatformAutoCrawl />} />
-
-                  {/* Agency Administration Boundaries */}
-                  <Route path="/agency/admin" element={<PgAgencyAdminBoundary />} />
-                  <Route path="/agency/admin/piata-imobiliara" element={<PgAgencyAdminPiataImobiliara />} />
-                  <Route path="/agency/admin/settings" element={<PgAgencyAdminSettings />} />
-                  <Route path="/agency/admin/members" element={<PgAgencyAdminMembers />} />
-                  <Route path="/agency/admin/subscription" element={<PgAgencyAdminSubscription />} />
-                  <Route path="/agency/admin/ai-config" element={<PgAgencyAdminAiConfig />} />
-                  <Route path="/agency/admin/automatizare" element={<PgAgencyAdminAutomatizare />} />
-                </Routes>
-              </Suspense>
-            </RouteErrorBoundary>
-          </NotificationProvider>
-        </TenantProvider>
-      </AuthProvider>
+      <AppShellRouter />
     </BrowserRouter>
   );
 }

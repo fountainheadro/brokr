@@ -404,8 +404,10 @@ crmRouter.post("/:collection", async (req: Request, res: Response) => {
           created?.id,
           (created as any)?.propertyId,
           (created as any)?.sourcePropertyId,
+          (created as any)?.sharedLeadId,
           payload?.propertyId,
           payload?.sourcePropertyId,
+          payload?.sharedLeadId,
         ].filter(Boolean),
         ctx.tenantId
       );
@@ -440,8 +442,10 @@ crmRouter.patch("/:collection/:id", async (req: Request, res: Response) => {
           updated?.id,
           (updated as any)?.propertyId,
           (updated as any)?.sourcePropertyId,
+          (updated as any)?.sharedLeadId,
           req.body?.propertyId,
           req.body?.sourcePropertyId,
+          req.body?.sharedLeadId,
         ].filter(Boolean),
         ctx.tenantId
       );
@@ -475,6 +479,7 @@ crmRouter.delete("/:collection/:id", async (req: Request, res: Response) => {
           existingLead?.id,
           existingLead?.propertyId,
           existingLead?.sourcePropertyId,
+          existingLead?.sharedLeadId,
         ].filter(Boolean),
         ctx.tenantId
       );

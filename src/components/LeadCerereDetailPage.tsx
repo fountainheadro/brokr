@@ -417,9 +417,11 @@ export const LeadCerereDetailPage: React.FC<LeadCerereDetailPageProps> = ({
       await publishPublicShareSnapshot(
         {
           ...lead,
+          ...(persisted || {}),
           ...mergedPatch,
+          isSummary: false,
         },
-        { tenantId: tenant?.id, force: true }
+        { tenantId: (persisted as any)?.tenantId || tenant?.id, force: true }
       );
 
       setPhotosDraft(finalPhotos.map((u) => getCleanDisplayImageUrl(u) || u));

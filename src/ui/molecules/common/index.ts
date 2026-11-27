@@ -12,3 +12,6 @@ export * from "./mol_file-upload";
 export * from "./mol_cursor-pagination-bar";
 export * from "./mol_empty-state-block";
 export * from "./mol_error-recovery-banner";
+export * from "./mol_portal-status-badge";
+export * from "./mol_portal-validation-checklist";
+

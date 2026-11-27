@@ -51,10 +51,33 @@ import {
   TagMultiSelect,
 } from "./PropertyCriteriaAccordionForm";
 import { ZONA_OPTIONS, COMPARTIMENTARE_OPTIONS, ETAJ_OPTIONS } from "../constants";
-import { Lead, leadsService } from "../services/leadsService";
+import { Lead, isUnprocessedLead, leadsService } from "../services/leadsService";
 import { publishPublicShareSnapshot } from "../services/publicShareService";
+import {
+  resolvePublicDisplayDescription,
+  resolvePublicDisplayTitle,
+} from "../utils/publicContentUtils";
 import { useTenantContext } from "../core/tenancy/ctx_tenant";
 import { InlineDetailField } from "./InlineDetailField";
+import { automationSettingsService } from "../services/automationSettingsService";
+import {
+  buildTitleFromAutomationRule,
+  extractTitleInputFromLead,
+  hasMissingTitleTagPlaceholder,
+} from "../utils/titleAutomationEngine";
+import type {
+  DescriptionGridItem,
+  DescriptionGridRow,
+  DescriptionPatternConfig,
+} from "../core/automation/typ_title-automation";
+import {
+  getDescriptionSectionLayout,
+  getGridColsClass,
+  getItemKey,
+  hasCustomDescriptionRows,
+  isDescriptionSectionEnabled,
+  isDividerOnlyRow,
+} from "../utils/descriptionLayoutUtils";
 
 export type CriteriaSectionKey =
   | "persoana"
@@ -344,7 +367,9 @@ export function getCriteriaSectionTitles(params: {
 
   const imobilTitle =
     buildingType === "Apartament"
-      ? "Informații Apartament"
+      ? mode === "property"
+        ? "Apartament"
+        : "Informații Apartament"
       : buildingType === "Casa/Vila"
         ? "Informații Casă / Vilă"
         : buildingType === "Teren"
@@ -355,12 +380,252 @@ export function getCriteriaSectionTitles(params: {
     persoanaTitle,
     clientDoritTitle,
     pretConditiiTitle: "Preț & Condiții",
-    generaleTitle: "Informații Generale",
+    generaleTitle: mode === "property" ? "Introducere" : "Informații Generale",
     imobilTitle,
     avansateTitle: "Informații Avansate",
     alteTitle: "Alte Informații",
   };
 }
+
+type ApartmentSubSectionKey = "finisaje" | "mobilare" | "dotari";
+
+interface ApartmentRoomSpec {
+  key: string;
+  label: string;
+  aliases: string[];
+  defaults: Record<ApartmentSubSectionKey, string>;
+}
+
+interface ApartmentRoomDetailsState {
+  values: Record<ApartmentSubSectionKey, Record<string, string>>;
+  sectionBaseOn: Record<ApartmentSubSectionKey, boolean>;
+  manualFields: Record<ApartmentSubSectionKey, Record<string, boolean>>;
+}
+
+const APARTMENT_SUBSECTIONS: ApartmentSubSectionKey[] = ["finisaje", "mobilare", "dotari"];
+
+const ALL_APARTMENT_ROOM_KEYS: Array<{ key: string; aliases: string[] }> = [
+  { key: "Living", aliases: ["Living"] },
+  { key: "Camera 1", aliases: ["Camera 1", "Dormitor 1", "Dormitor"] },
+  { key: "Camera 2", aliases: ["Camera 2", "Dormitor 2"] },
+  { key: "Camera 3", aliases: ["Camera 3", "Dormitor 3"] },
+  { key: "Camera 4", aliases: ["Camera 4", "Dormitor 4"] },
+  { key: "Bucătărie", aliases: ["Bucătărie", "Bucatarie"] },
+  { key: "Baie 1", aliases: ["Baie 1", "Baie"] },
+  { key: "Baie 2", aliases: ["Baie 2"] },
+  { key: "Baie 3", aliases: ["Baie 3"] },
+  { key: "Baie 4", aliases: ["Baie 4"] },
+  { key: "Hol", aliases: ["Hol"] },
+];
+
+const parseRoomCountFromConfig = (
+  selectedRooms: string[],
+  fallback?: unknown,
+  useFallback: boolean = true
+): number => {
+  const candidates: string[] =
+    selectedRooms.length > 0
+      ? [selectedRooms[selectedRooms.length - 1]]
+      : useFallback && fallback !== undefined && fallback !== null && String(fallback).trim()
+        ? [String(fallback).trim()]
+        : [];
+  for (const raw of candidates) {
+    const lower = raw.toLowerCase();
+    if (lower.includes("garsonier") || lower.includes("studio")) {
+      return 1;
+    }
+    const m = lower.match(/(\d+)/);
+    if (m) {
+      return Math.max(1, parseInt(m[1], 10));
+    }
+  }
+  return 1;
+};
+
+const parseBathCountFromConfig = (
+  selectedBaths: string[],
+  fallback?: unknown,
+  useFallback: boolean = true
+): number => {
+  const candidates: string[] =
+    selectedBaths.length > 0
+      ? [selectedBaths[selectedBaths.length - 1]]
+      : useFallback && fallback !== undefined && fallback !== null && String(fallback).trim()
+        ? [String(fallback).trim()]
+        : [];
+  for (const raw of candidates) {
+    const m = raw.match(/(\d+)/);
+    if (m) {
+      return Math.max(1, Math.min(4, parseInt(m[1], 10)));
+    }
+  }
+  return 1;
+};
+
+const getApartmentRoomSpecs = (
+  selectedRooms: string[],
+  selectedBaths: string[],
+  fallbackRooms?: unknown,
+  fallbackBaths?: unknown,
+  useFallback: boolean = true
+): ApartmentRoomSpec[] => {
+  const totalRooms = parseRoomCountFromConfig(selectedRooms, fallbackRooms, useFallback);
+  const bedroomCount = totalRooms >= 2 ? Math.min(4, totalRooms - 1) : 0;
+  const bathCount = parseBathCountFromConfig(selectedBaths, fallbackBaths, useFallback);
+
+  const specs: ApartmentRoomSpec[] = [
+    {
+      key: "Living",
+      label: "Living",
+      aliases: ["Living"],
+      defaults: {
+        finisaje: "vopsea lavabilă, parchet",
+        mobilare: "canapea, măsuță cafea, comodă",
+        dotari: "aer condiționat, smart TV",
+      },
+    },
+  ];
+
+  for (let i = 1; i <= bedroomCount; i++) {
+    specs.push({
+      key: `Camera ${i}`,
+      label: bedroomCount === 1 ? "Dormitor" : `Dormitor ${i}`,
+      aliases: i === 1 ? ["Camera 1", "Dormitor 1", "Dormitor"] : [`Camera ${i}`, `Dormitor ${i}`],
+      defaults: {
+        finisaje: "vopsea lavabilă, parchet",
+        mobilare: "pat, noptiere, dulap",
+        dotari: "-",
+      },
+    });
+  }
+
+  specs.push({
+    key: "Bucătărie",
+    label: "Bucătărie",
+    aliases: ["Bucătărie", "Bucatarie"],
+    defaults: {
+      finisaje: "vopsea lavabilă, faianță și gresie",
+      mobilare: "mobilă de bucatarie premium",
+      dotari: "frigider, plită, cuptor, hotă",
+    },
+  });
+
+  for (let i = 1; i <= bathCount; i++) {
+    specs.push({
+      key: `Baie ${i}`,
+      label: bathCount === 1 ? "Baie" : `Baie ${i}`,
+      aliases: i === 1 ? ["Baie 1", "Baie"] : [`Baie ${i}`],
+      defaults: {
+        finisaje: "faianță și gresie",
+        mobilare: "obiecte sanitare premium",
+        dotari: "-",
+      },
+    });
+  }
+
+  specs.push({
+    key: "Hol",
+    label: "Hol",
+    aliases: ["Hol"],
+    defaults: {
+      finisaje: "vopsea lavabilă, parchet",
+      mobilare: "cuier, pantofar",
+      dotari: "interfon",
+    },
+  });
+
+  return specs;
+};
+
+const deriveApartmentRoomDetailsFromLead = (lead: Lead): ApartmentRoomDetailsState => {
+  const extracted = (lead.extractedData || {}) as any;
+  const cf = (lead.criteriiFormular || {}) as any;
+  const savedPresentation = (extracted.presentationSections || {}) as Record<
+    string,
+    Record<string, string> | undefined
+  >;
+  const savedSectionBaseOn = (extracted.apartamentSectionBaseOn ||
+    cf.apartamentSectionBaseOn ||
+    {}) as Record<string, boolean | undefined>;
+  const savedManual = (extracted.apartamentManualFields ||
+    cf.apartamentManualFields ||
+    {}) as Record<string, Record<string, boolean> | undefined>;
+  const savedLegacyFlags = (extracted.apartamentBaseInfoFlags ||
+    cf.apartamentBaseInfoFlags ||
+    {}) as Record<string, Record<string, boolean> | undefined>;
+  const savedCustom = (extracted.apartamentCustomValues ||
+    cf.apartamentCustomValues ||
+    {}) as Record<string, Record<string, string> | undefined>;
+
+  const values: Record<ApartmentSubSectionKey, Record<string, string>> = {
+    finisaje: {},
+    mobilare: {},
+    dotari: {},
+  };
+  const sectionBaseOn: Record<ApartmentSubSectionKey, boolean> = {
+    finisaje: false,
+    mobilare: false,
+    dotari: false,
+  };
+  const manualFields: Record<ApartmentSubSectionKey, Record<string, boolean>> = {
+    finisaje: {},
+    mobilare: {},
+    dotari: {},
+  };
+
+  for (const sub of APARTMENT_SUBSECTIONS) {
+    const presSub = savedPresentation[sub] || {};
+    const legacyFlagSub = savedLegacyFlags[sub] || {};
+    const manualSub = savedManual[sub] || {};
+    const customSub = savedCustom[sub] || {};
+
+    sectionBaseOn[sub] =
+      typeof savedSectionBaseOn[sub] === "boolean"
+        ? Boolean(savedSectionBaseOn[sub])
+        : Object.values(legacyFlagSub).some(Boolean);
+
+    for (const entry of ALL_APARTMENT_ROOM_KEYS) {
+      let textVal: string | undefined;
+      for (const alias of entry.aliases) {
+        if (typeof customSub[alias] === "string") {
+          textVal = customSub[alias];
+          break;
+        }
+      }
+      if (textVal === undefined) {
+        for (const alias of entry.aliases) {
+          if (typeof presSub[alias] === "string") {
+            textVal = presSub[alias];
+            break;
+          }
+        }
+      }
+      const resolvedVal = textVal ?? "";
+      values[sub][entry.key] = resolvedVal;
+
+      let manualVal: boolean | undefined;
+      for (const alias of entry.aliases) {
+        if (typeof manualSub[alias] === "boolean") {
+          manualVal = manualSub[alias];
+          break;
+        }
+      }
+      if (manualVal === undefined) {
+        let legacyBaseFlag = false;
+        for (const alias of entry.aliases) {
+          if (typeof legacyFlagSub[alias] === "boolean") {
+            legacyBaseFlag = legacyFlagSub[alias];
+            break;
+          }
+        }
+        manualVal = Boolean(resolvedVal.trim()) && !legacyBaseFlag;
+      }
+      manualFields[sub][entry.key] = manualVal;
+    }
+  }
+
+  return { values, sectionBaseOn, manualFields };
+};
 
 export function derivePropertyCriteriaStateFromLead(lead: Lead): PropertyCriteriaFormState {
   const base = createInitialPropertyCriteriaState();
@@ -713,14 +978,27 @@ export function derivePropertyCriteriaStateFromLead(lead: Lead): PropertyCriteri
 
   const copii = matchOptionInsensitive(cf?.copii || lead.copii, COPII_OPTIONS);
 
-  const propertyTitle =
-    (lead.title && lead.title.trim()) ||
-    (crm?.descriere?.titlu && String(crm.descriere.titlu).trim()) ||
-    (cf?.propertyTitle && cf.propertyTitle.trim()) ||
-    "";
+  const isRawUnprocessed = isUnprocessedLead(lead);
+  const propertyTitle = isRawUnprocessed
+    ? resolvePublicDisplayTitle(lead, "") ||
+      (lead.title && lead.title.trim()) ||
+      (crm?.descriere?.titlu && String(crm.descriere.titlu).trim()) ||
+      (cf?.propertyTitle && cf.propertyTitle.trim()) ||
+      ""
+    : (lead.title && lead.title.trim()) ||
+      (crm?.descriere?.titlu && String(crm.descriere.titlu).trim()) ||
+      (cf?.propertyTitle && cf.propertyTitle.trim()) ||
+      "";
 
-  const requirements =
-    cf?.requirements !== undefined
+  const requirements = isRawUnprocessed
+    ? resolvePublicDisplayDescription(lead, "") ||
+      (cf?.requirements !== undefined ? cf.requirements : "") ||
+      (lead.requirements !== undefined ? lead.requirements : "") ||
+      crm?.descriere?.continut ||
+      lead.extractedData?.originalDescription ||
+      lead.notes ||
+      ""
+    : cf?.requirements !== undefined
       ? cf.requirements
       : lead.requirements !== undefined
         ? lead.requirements
@@ -812,9 +1090,11 @@ function buildLeadUpdatePatch(params: {
   role: "Chirias" | "Cumparator";
   mode: "lead" | "cerere" | "property";
   section?: CriteriaSectionKey;
+  apartmentDetails?: ApartmentRoomDetailsState;
 }): Partial<Lead> {
-  const { lead, state, role, mode, section } = params;
+  const { lead, state, role, mode, section, apartmentDetails } = params;
   const isProperty = mode === "property";
+  const isApartament = state.buildingType === "Apartament";
   const isTeren = state.buildingType === "Teren";
   const isCasaVila = state.buildingType === "Casa/Vila";
   const isComercial = state.buildingType === "Spatiu Comercial";
@@ -973,41 +1253,118 @@ function buildLeadUpdatePatch(params: {
 
   const currentCrm = (lead.extractedData?.crmData || {}) as any;
   const currentExtracted = (lead.extractedData || {}) as any;
+  const isRawUnprocessed = isUnprocessedLead(lead);
+  const canEditTitle = isProperty || mode === "lead";
   const trimmedInputTitle = state.propertyTitle.trim();
   const prevLeadTitle = String(
-    lead.title || currentCrm?.descriere?.titlu || currentExtracted?.originalTitle || ""
+    (isRawUnprocessed ? resolvePublicDisplayTitle(lead, "") : "") ||
+      lead.title ||
+      currentCrm?.descriere?.titlu ||
+      currentExtracted?.originalTitle ||
+      ""
   ).trim();
-  const nextTitle = isProperty
-    ? trimmedInputTitle || prevLeadTitle
-    : lead.title || "";
-  const titleWasChanged = Boolean(isProperty && trimmedInputTitle && trimmedInputTitle !== prevLeadTitle);
-  const nextTitleManuallyEdited = Boolean(
-    currentExtracted?.titleManuallyEdited ||
-      titleWasChanged ||
-      (isProperty && section === "generale" && trimmedInputTitle.length > 0)
+  const userExplicitlyChangedTitle = Boolean(
+    canEditTitle && section === "generale" && trimmedInputTitle && trimmedInputTitle !== prevLeadTitle
   );
+  let nextTitle = canEditTitle ? trimmedInputTitle || prevLeadTitle : lead.title || "";
+  let nextTitleManuallyEdited = Boolean(
+    currentExtracted?.titleManuallyEdited || userExplicitlyChangedTitle
+  );
+
+  // Automatically rebuild title when user fills/updates data on a processed property whose title
+  // is auto-generated or still contains unresolved <nume tag> placeholders.
+  // Never overwrite an unprocessed lead's scraped title unless it is empty or contains a placeholder.
+  const shouldAutoRebuildTitle =
+    isProperty &&
+    !userExplicitlyChangedTitle &&
+    (!isRawUnprocessed || !prevLeadTitle || hasMissingTitleTagPlaceholder(prevLeadTitle)) &&
+    (!currentExtracted?.titleManuallyEdited || hasMissingTitleTagPlaceholder(prevLeadTitle));
+
+  if (shouldAutoRebuildTitle) {
+    const cachedRule = automationSettingsService.getCachedTitleRule();
+    if (cachedRule?.enabled) {
+      const rebuilt = buildTitleFromAutomationRule(
+        cachedRule,
+        extractTitleInputFromLead(lead, {
+          transactionType: role === "Chirias" ? "Închiriere" : "Vânzare",
+          categoria: canonicalCategory,
+          camere: roomsStr,
+          suprafataUtila: isTeren ? normTerenMin : normUtilaMin,
+          suprafataConstruita: isTeren ? "" : normConstrMin,
+          etaj: floorStr,
+          etajeTotal: !isTeren && !isCasaVila ? state.totalFloors.trim() : "",
+          zona: state.zoneList.join(", "),
+          mobilat: !isTeren ? state.mobilare : "",
+          utilare: !isTeren ? state.utilare : "",
+          parcare: parcareSummary,
+          petFriendly: state.animal.join(", "),
+          rawTitle:
+            currentExtracted?.crawledOriginalTitle ||
+            currentExtracted?.olxMeta?.originalTitle ||
+            "",
+          rawText:
+            currentExtracted?.crawledOriginalDescription ||
+            currentExtracted?.originalDescription ||
+            state.requirements.trim(),
+        })
+      );
+      if (rebuilt && rebuilt.trim().length > 0) {
+        nextTitle = rebuilt.trim();
+        if (!hasMissingTitleTagPlaceholder(nextTitle)) {
+          nextTitleManuallyEdited = Boolean(currentExtracted?.titleManuallyEdited);
+        }
+      }
+    }
+  }
+
+  const titleWasChanged = Boolean(canEditTitle && nextTitle && nextTitle !== prevLeadTitle);
+
+  const prevLeadDescription = String(
+    (isRawUnprocessed ? resolvePublicDisplayDescription(lead, "") : "") ||
+      lead.criteriiFormular?.requirements ||
+      lead.requirements ||
+      currentCrm?.descriere?.continut ||
+      currentExtracted?.originalDescription ||
+      ""
+  ).trim();
 
   let syncedDescription = state.requirements.trim();
   if (titleWasChanged && syncedDescription && /^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+/m.test(syncedDescription)) {
     syncedDescription = syncedDescription.replace(/^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+$/m, `$1${nextTitle}`);
   }
+  const userExplicitlyChangedDescription = Boolean(
+    section === "generale" && syncedDescription !== prevLeadDescription
+  );
+  const nextDescriptionManuallyEdited = Boolean(
+    currentExtracted?.descriptionManuallyEdited || userExplicitlyChangedDescription
+  );
   criteriiFormular.propertyTitle = nextTitle;
   criteriiFormular.requirements = syncedDescription;
 
   const existingMarkdown =
     typeof currentExtracted?.markdownMarketing === "string" ? currentExtracted.markdownMarketing : "";
   const syncedMarkdown =
-    titleWasChanged && existingMarkdown && /^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+/m.test(existingMarkdown)
-      ? existingMarkdown.replace(/^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+$/m, `$1${nextTitle}`)
-      : section === "generale"
-        ? syncedDescription
+    section === "generale" || userExplicitlyChangedDescription
+      ? syncedDescription
+      : titleWasChanged && existingMarkdown && /^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+/m.test(existingMarkdown)
+        ? existingMarkdown.replace(/^((?:📌[^\n]*\n)?(?:🏡|🏢)\s*).+$/m, `$1${nextTitle}`)
         : existingMarkdown || syncedDescription;
 
   const nextExtractedData = {
     ...currentExtracted,
-    ...(isProperty && nextTitle ? { originalTitle: nextTitle } : {}),
-    ...(nextTitleManuallyEdited ? { titleManuallyEdited: true } : {}),
-    ...(isProperty && nextTitle && currentExtracted?.olxMeta && typeof currentExtracted.olxMeta === "object"
+    crawledOriginalTitle:
+      currentExtracted?.crawledOriginalTitle ||
+      currentExtracted?.olxMeta?.originalTitle ||
+      currentExtracted?.originalTitle ||
+      "",
+    crawledOriginalDescription:
+      currentExtracted?.crawledOriginalDescription ||
+      currentExtracted?.originalDescription ||
+      "",
+    ...(canEditTitle && nextTitle ? { originalTitle: nextTitle } : {}),
+    titleManuallyEdited: nextTitleManuallyEdited,
+    descriptionManuallyEdited: nextDescriptionManuallyEdited,
+    ...(canEditTitle && nextTitle && currentExtracted?.olxMeta && typeof currentExtracted.olxMeta === "object"
       ? {
           olxMeta: {
             ...currentExtracted.olxMeta,
@@ -1015,8 +1372,10 @@ function buildLeadUpdatePatch(params: {
           },
         }
       : {}),
-    ...(syncedMarkdown ? { markdownMarketing: syncedMarkdown } : {}),
-    ...(section === "generale" && syncedDescription ? { originalDescription: syncedDescription } : {}),
+    ...(section === "generale" || syncedMarkdown ? { markdownMarketing: syncedMarkdown } : {}),
+    ...(section === "generale" || userExplicitlyChangedDescription
+      ? { originalDescription: syncedDescription }
+      : {}),
     crmData: {
       ...currentCrm,
       criteriiFormular: { ...criteriiFormular },
@@ -1030,7 +1389,7 @@ function buildLeadUpdatePatch(params: {
       },
       descriere: {
         ...(currentCrm.descriere || {}),
-        ...(isProperty && nextTitle ? { titlu: nextTitle } : {}),
+        ...(canEditTitle && nextTitle ? { titlu: nextTitle } : {}),
         continut: syncedDescription,
       },
       caracteristici: {
@@ -1111,56 +1470,130 @@ function buildLeadUpdatePatch(params: {
         },
       },
     },
-    ...(isProperty
+    ...(isProperty && isApartament && apartmentDetails
       ? {
-          presentationSections: {
-            ...((lead.extractedData as any)?.presentationSections || {}),
-            ...(nextTitle
+          apartamentSectionBaseOn: apartmentDetails.sectionBaseOn,
+          apartamentManualFields: apartmentDetails.manualFields,
+          apartamentCustomValues: apartmentDetails.values,
+        }
+      : {}),
+    ...(isProperty
+      ? (() => {
+          const prevPres = ((lead.extractedData as any)?.presentationSections || {}) as Record<
+            string,
+            Record<string, string> | undefined
+          >;
+          const nextConfiguratie: Record<string, string> = {
+            ...(prevPres.configuratie || {}),
+            "Categorie": BUILDING_TYPE_LABEL[state.buildingType] || state.buildingType,
+            "Compartimentare": state.compartimentare || "",
+            "Număr camere": roomsStr || "",
+            "Număr băi": bathsStr || "",
+            "Etaj apartament": floorStr || "",
+            "Etaje total bloc": state.totalFloors.trim() || "",
+            "Mobilare": state.mobilare || "",
+            "Utilare": state.utilare || "",
+            "Tip parcare": state.tipParcare || "",
+            "Număr locuri parcare": state.numarLocuriParcare || "",
+            "Zonă": zoneStr || "",
+            ...(normUtilaMin ? { "Suprafață utilă": `${normUtilaMin} mp` } : {}),
+            ...(floorStr
               ? {
-                  introducere: {
-                    ...((lead.extractedData as any)?.presentationSections?.introducere || {}),
-                    titlu: nextTitle,
-                  },
+                  "Etaj": state.totalFloors.trim()
+                    ? `${floorStr} / ${state.totalFloors.trim()}`
+                    : floorStr,
                 }
               : {}),
-            tranzactie: {
-              ...((lead.extractedData as any)?.presentationSections?.tranzactie || {}),
-              "Preț": displayBudget,
-              ...(tvaValue ? { "TVA": tvaValue } : {}),
-              ...(comisionValue ? { "Comision": comisionValue } : {}),
-            },
-            acte: {
-              ...((lead.extractedData as any)?.presentationSections?.acte || {}),
-              ...(role === "Chirias"
+            ...(anConstructieValue ? { "An construcție": anConstructieValue } : {}),
+            ...(state.balcoaneTeraseLogii.length > 0
+              ? { "Balcon": state.balcoaneTeraseLogii.join(", ") }
+              : {}),
+            ...(state.stareInterior ? { "Stare": state.stareInterior } : {}),
+          };
+
+          let nextFinisaje = prevPres.finisaje;
+          let nextMobilare = prevPres.mobilare;
+          let nextDotari = prevPres.dotari;
+
+          if (isApartament && apartmentDetails) {
+            const roomSpecs = getApartmentRoomSpecs(
+              state.selectedRooms,
+              state.selectedBaths,
+              lead.rooms,
+              lead.baths,
+              state.selectedRooms.length === 0 && state.selectedBaths.length === 0
+            );
+            const buildSubRecord = (sub: ApartmentSubSectionKey): Record<string, string> => {
+              const out: Record<string, string> = { ...(prevPres[sub] || {}) };
+              for (const room of roomSpecs) {
+                out[room.key] = (apartmentDetails.values[sub]?.[room.key] ?? "").trim();
+              }
+              return out;
+            };
+            nextFinisaje = buildSubRecord("finisaje");
+            nextMobilare = buildSubRecord("mobilare");
+            nextDotari = buildSubRecord("dotari");
+          }
+
+          return {
+            presentationSections: {
+              ...prevPres,
+              ...(nextTitle || section === "generale" || userExplicitlyChangedDescription
                 ? {
-                    ...(contractDurataValue
-                      ? {
-                          "Contract": contractDurataValue,
-                          "Condiții contractuale": contractDurataValue,
-                        }
-                      : {}),
-                    ...(avansValue ? { "Avans": avansValue } : {}),
-                    ...(garantieValue ? { "Garanție": garantieValue } : {}),
+                    introducere: {
+                      ...(prevPres.introducere || {}),
+                      ...(nextTitle ? { titlu: nextTitle } : {}),
+                      ...(section === "generale" ||
+                      userExplicitlyChangedDescription ||
+                      !prevPres.introducere?.summary
+                        ? { summary: syncedDescription }
+                        : {}),
+                    },
                   }
-                : {
-                    ...(situatieJuridicaValue
-                      ? { "Situație juridică": situatieJuridicaValue }
-                      : {}),
-                    ...(disponibilitateValue
-                      ? { "Disponibilitate": disponibilitateValue }
-                      : {}),
-                    ...(effectiveTipAchizitieAcceptat.length > 0
-                      ? { "Finanțare": effectiveTipAchizitieAcceptat.join(", ") }
-                      : {}),
-                  }),
+                : {}),
+              configuratie: nextConfiguratie,
+              ...(nextFinisaje ? { finisaje: nextFinisaje } : {}),
+              ...(nextMobilare ? { mobilare: nextMobilare } : {}),
+              ...(nextDotari ? { dotari: nextDotari } : {}),
+              tranzactie: {
+                ...(prevPres.tranzactie || {}),
+                "Preț": displayBudget,
+                ...(tvaValue ? { "TVA": tvaValue } : {}),
+                ...(comisionValue ? { "Comision": comisionValue } : {}),
+              },
+              acte: {
+                ...(prevPres.acte || {}),
+                ...(role === "Chirias"
+                  ? {
+                      ...(contractDurataValue
+                        ? {
+                            "Contract": contractDurataValue,
+                            "Condiții contractuale": contractDurataValue,
+                          }
+                        : {}),
+                      ...(avansValue ? { "Avans": avansValue } : {}),
+                      ...(garantieValue ? { "Garanție": garantieValue } : {}),
+                    }
+                  : {
+                      ...(situatieJuridicaValue
+                        ? { "Situație juridică": situatieJuridicaValue }
+                        : {}),
+                      ...(disponibilitateValue
+                        ? { "Disponibilitate": disponibilitateValue }
+                        : {}),
+                      ...(effectiveTipAchizitieAcceptat.length > 0
+                        ? { "Finanțare": effectiveTipAchizitieAcceptat.join(", ") }
+                        : {}),
+                    }),
+              },
             },
-          },
-        }
+          };
+        })()
       : {}),
   };
 
   return {
-    ...(isProperty && nextTitle ? { title: nextTitle } : {}),
+    ...(canEditTitle && nextTitle ? { title: nextTitle } : {}),
     ownerName: state.clientName.trim() || "Nespecificat",
     ownerPhone: state.clientPhone.trim() || "Nespecificat",
     price: displayBudget,
@@ -1333,12 +1766,51 @@ const SectionHeader: React.FC<SectionHeaderProps> = ({
   </div>
 );
 
+interface BaseInfoSwitchProps {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label?: string;
+  disabled?: boolean;
+}
+
+const BaseInfoSwitch: React.FC<BaseInfoSwitchProps> = ({
+  checked,
+  onChange,
+  label = "Informații bază",
+  disabled = false,
+}) => (
+  <label
+    className={`inline-flex items-center gap-2 shrink-0 select-none ${
+      disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+    }`}
+  >
+    <span className="text-[11px] font-medium text-gray-600 whitespace-nowrap">{label}</span>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => !disabled && onChange(!checked)}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors focus:outline-none focus:ring-2 focus:ring-[#BE9662]/40 ${
+        checked ? "bg-[#051D35] border-[#051D35]" : "bg-gray-200 border-gray-300"
+      } ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+    >
+      <span
+        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-xs transition-transform ${
+          checked ? "translate-x-[17px]" : "translate-x-[2px]"
+        }`}
+      />
+    </button>
+  </label>
+);
+
 export interface CriteriaDetailSectionsProps {
   lead: Lead;
   role: "Chirias" | "Cumparator";
   mode: "lead" | "cerere" | "property";
   onUpdateLead: (updatedData: Partial<Lead>) => void;
   onBuildingTypeDisplayChange?: (buildingType: BuildingCategoryType) => void;
+  descriptionLayout?: DescriptionPatternConfig | null;
 }
 
 export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
@@ -1347,11 +1819,19 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
   mode,
   onUpdateLead,
   onBuildingTypeDisplayChange,
+  descriptionLayout,
 }) => {
   const { tenant } = useTenantContext();
 
   const persistedState = useMemo(() => derivePropertyCriteriaStateFromLead(lead), [lead]);
+  const persistedApartmentDetails = useMemo(
+    () => deriveApartmentRoomDetailsFromLead(lead),
+    [lead]
+  );
   const [draft, setDraft] = useState<PropertyCriteriaFormState>(persistedState);
+  const [apartmentDraft, setApartmentDraft] = useState<ApartmentRoomDetailsState>(
+    persistedApartmentDetails
+  );
   const [editingSection, setEditingSection] = useState<CriteriaSectionKey | null>(null);
   const [savingSection, setSavingSection] = useState<CriteriaSectionKey | null>(null);
   const [copiedPhone, setCopiedPhone] = useState(false);
@@ -1364,15 +1844,66 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
     setSavingSection(null);
     setOpenMultiDropdown(null);
     setDraft(derivePropertyCriteriaStateFromLead(lead));
+    setApartmentDraft(deriveApartmentRoomDetailsFromLead(lead));
   }, [lead.id]);
 
   useEffect(() => {
     if (!editingSection) {
       setDraft(persistedState);
+      setApartmentDraft(persistedApartmentDetails);
     }
-  }, [editingSection, persistedState]);
+  }, [editingSection, persistedState, persistedApartmentDetails]);
 
   const activeState = editingSection ? draft : persistedState;
+  const activeApartmentDetails = editingSection === "imobil" ? apartmentDraft : persistedApartmentDetails;
+
+  const apartmentRooms = useMemo(
+    () =>
+      getApartmentRoomSpecs(
+        activeState.selectedRooms,
+        activeState.selectedBaths,
+        lead.rooms,
+        lead.baths,
+        editingSection !== "imobil"
+      ),
+    [activeState.selectedRooms, activeState.selectedBaths, lead.rooms, lead.baths, editingSection]
+  );
+
+  const syncNewRoomsBaseDefaults = (nextRooms: string[], nextBaths: string[]) => {
+    const nextSpecs = getApartmentRoomSpecs(nextRooms, nextBaths, lead.rooms, lead.baths, false);
+    setApartmentDraft((prev) => {
+      const nextValues = { ...prev.values };
+      const nextManual = { ...prev.manualFields };
+      for (const sub of APARTMENT_SUBSECTIONS) {
+        if (prev.sectionBaseOn[sub]) {
+          const updatedSubVals = { ...prev.values[sub] };
+          const updatedSubManual = { ...prev.manualFields[sub] };
+          for (const r of nextSpecs) {
+            const existing = (updatedSubVals[r.key] ?? "").trim();
+            if (!existing) {
+              updatedSubVals[r.key] = r.defaults[sub];
+              updatedSubManual[r.key] = false;
+            }
+          }
+          nextValues[sub] = updatedSubVals;
+          nextManual[sub] = updatedSubManual;
+        }
+      }
+      return { ...prev, values: nextValues, manualFields: nextManual };
+    });
+  };
+
+  const handlePropertyRoomsChange = (next: string[]) => {
+    const normalized = next.length > 1 ? [next[next.length - 1]] : next;
+    setField("selectedRooms", normalized);
+    syncNewRoomsBaseDefaults(normalized, draft.selectedBaths);
+  };
+
+  const handlePropertyBathsChange = (next: string[]) => {
+    const normalized = next.length > 1 ? [next[next.length - 1]] : next;
+    setField("selectedBaths", normalized);
+    syncNewRoomsBaseDefaults(draft.selectedRooms, normalized);
+  };
 
   useEffect(() => {
     onBuildingTypeDisplayChange?.(activeState.buildingType);
@@ -1429,13 +1960,101 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
   const startEdit = (section: CriteriaSectionKey) => {
     setOpenMultiDropdown(null);
     setDraft(persistedState);
+    setApartmentDraft(persistedApartmentDetails);
     setEditingSection(section);
   };
 
   const cancelEdit = () => {
     setOpenMultiDropdown(null);
     setDraft(persistedState);
+    setApartmentDraft(persistedApartmentDetails);
     setEditingSection(null);
+  };
+
+  const handleApartmentRoomValueChange = (
+    sub: ApartmentSubSectionKey,
+    roomKey: string,
+    val: string
+  ) => {
+    const applyChange = (current: ApartmentRoomDetailsState): ApartmentRoomDetailsState => ({
+      ...current,
+      values: {
+        ...current.values,
+        [sub]: {
+          ...current.values[sub],
+          [roomKey]: val,
+        },
+      },
+      manualFields: {
+        ...current.manualFields,
+        [sub]: {
+          ...current.manualFields[sub],
+          [roomKey]: val.trim().length > 0,
+        },
+      },
+    });
+
+    if (editingSection !== "imobil") {
+      setDraft(persistedState);
+      setEditingSection("imobil");
+      setApartmentDraft(applyChange(persistedApartmentDetails));
+      return;
+    }
+    setApartmentDraft((prev) => applyChange(prev));
+  };
+
+  const handleToggleSubSectionBaseInfo = (
+    sub: ApartmentSubSectionKey,
+    nextChecked: boolean
+  ) => {
+    const applyAll = (current: ApartmentRoomDetailsState): ApartmentRoomDetailsState => {
+      const nextSubVals: Record<string, string> = { ...current.values[sub] };
+      const nextSubManual: Record<string, boolean> = { ...current.manualFields[sub] };
+
+      if (nextChecked) {
+        // Fill ONLY empty fields with default data; leave manually altered fields untouched
+        for (const room of apartmentRooms) {
+          const currentVal = (nextSubVals[room.key] ?? "").trim();
+          if (!currentVal) {
+            nextSubVals[room.key] = room.defaults[sub];
+            nextSubManual[room.key] = false;
+          } else if (nextSubManual[room.key] !== false) {
+            nextSubManual[room.key] = true;
+          }
+        }
+      } else {
+        // Erase default data; keep ONLY fields that were manually altered by the user
+        for (const entry of ALL_APARTMENT_ROOM_KEYS) {
+          if (!nextSubManual[entry.key]) {
+            nextSubVals[entry.key] = "";
+          }
+        }
+      }
+
+      return {
+        ...current,
+        sectionBaseOn: {
+          ...current.sectionBaseOn,
+          [sub]: nextChecked,
+        },
+        values: {
+          ...current.values,
+          [sub]: nextSubVals,
+        },
+        manualFields: {
+          ...current.manualFields,
+          [sub]: nextSubManual,
+        },
+      };
+    };
+
+    if (editingSection !== "imobil") {
+      setDraft(persistedState);
+      setEditingSection("imobil");
+      setApartmentDraft(applyAll(persistedApartmentDetails));
+      return;
+    }
+    setApartmentDraft((prev) => applyAll(prev));
   };
 
   const saveSection = async (section: CriteriaSectionKey) => {
@@ -1449,6 +2068,7 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
         role,
         mode,
         section,
+        apartmentDetails: section === "imobil" ? apartmentDraft : persistedApartmentDetails,
       });
       const persisted = await leadsService.updateLeadData(lead.id, patch);
       const mergedPatch: Partial<Lead> = {
@@ -1464,8 +2084,8 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
       };
       onUpdateLead(mergedPatch);
       await publishPublicShareSnapshot(
-        { ...lead, ...(persisted || {}), ...mergedPatch },
-        { tenantId: tenant?.id, force: true }
+        { ...lead, ...(persisted || {}), ...mergedPatch, isSummary: false },
+        { tenantId: (persisted as any)?.tenantId || tenant?.id, force: true }
       );
       setEditingSection(null);
       toast.success("Modificările au fost salvate!");
@@ -1812,85 +2432,75 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
       )}
 
       {/* SECTION 3 (Property mode only): Preț & Condiții */}
-      {isPropertyMode && (
-        <div
-          id="sec-pret-conditii"
-          className="p-4 sm:p-5 bg-white border border-gray-200 rounded-xl space-y-4 shadow-2xs scroll-mt-[104px]"
-        >
-          <SectionHeader
-            icon={<BadgePercent size={14} className="text-[#BE9662]" />}
-            title={titles.pretConditiiTitle}
-            isEditing={isEditingPretConditii}
-            isSaving={savingSection === "pretConditii"}
-            onStartEdit={() => startEdit("pretConditii")}
-            onCancel={cancelEdit}
-            onSave={() => void saveSection("pretConditii")}
-          />
+      {isPropertyMode &&
+        isDescriptionSectionEnabled(descriptionLayout, "pret_conditii") &&
+        (() => {
+          const pretSecLayout = getDescriptionSectionLayout(descriptionLayout, "pret_conditii");
 
-          <div className="space-y-4">
-            {/* Row 1: Preț (€) | TVA */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {isEditingPretConditii ? (
-                <div>
-                  <label className="block text-[12px] leading-4 mb-1 font-semibold text-[#051D35]">
-                    Preț (€)
-                  </label>
-                  <div className="relative">
-                    <Euro size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={draft.maxBudget || draft.minBudget}
-                      onChange={(e) =>
-                        setDraft((prev) => ({
-                          ...prev,
-                          minBudget: "",
-                          maxBudget: e.target.value,
-                        }))
-                      }
-                      placeholder={isChirias ? "ex. 600" : "ex. 120000"}
-                      className="w-full h-9 pl-8 pr-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-gray-50/90"
-                    />
+          const renderPretSubField = (tagId: string): React.ReactNode => {
+            switch (tagId) {
+              case "pret":
+                return isEditingPretConditii ? (
+                  <div>
+                    <label className="block text-[12px] leading-4 mb-1 font-semibold text-[#051D35]">
+                      Preț (€)
+                    </label>
+                    <div className="relative">
+                      <Euro size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        value={draft.maxBudget || draft.minBudget}
+                        onChange={(e) =>
+                          setDraft((prev) => ({
+                            ...prev,
+                            minBudget: "",
+                            maxBudget: e.target.value,
+                          }))
+                        }
+                        placeholder={isChirias ? "ex. 600" : "ex. 120000"}
+                        className="w-full h-9 pl-8 pr-3 text-xs font-normal border border-gray-200 rounded-md focus:outline-none focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662] bg-gray-50/90"
+                      />
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <InlineDetailField
-                  label="Preț (€)"
-                  value={
-                    activeState.maxBudget || activeState.minBudget
-                      ? `${activeState.maxBudget || activeState.minBudget} €`
-                      : "-"
-                  }
-                  isEditing={false}
-                  valueClassName="font-normal text-gray-900 tabular-nums"
-                />
-              )}
-
-              <InlineDetailField
-                label="TVA"
-                value={activeState.tva || "-"}
-                editValue={draft.tva}
-                isEditing={isEditingPretConditii}
-                onChange={(val) => setField("tva", val)}
-                placeholder="Scutit de TVA / conform legislației în vigoare"
-                valueClassName="font-normal text-gray-800"
-              />
-            </div>
-
-            {isChirias ? (
-              <>
-                {/* Row 2 (Închiriere): Comision | Contract */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                ) : (
+                  <InlineDetailField
+                    label="Preț (€)"
+                    value={
+                      activeState.maxBudget || activeState.minBudget
+                        ? `${activeState.maxBudget || activeState.minBudget} €`
+                        : "-"
+                    }
+                    isEditing={false}
+                    valueClassName="font-normal text-gray-900 tabular-nums"
+                  />
+                );
+              case "tva":
+                return (
+                  <InlineDetailField
+                    label="TVA"
+                    value={activeState.tva || "-"}
+                    editValue={draft.tva}
+                    isEditing={isEditingPretConditii}
+                    onChange={(val) => setField("tva", val)}
+                    placeholder="Scutit de TVA / conform legislației în vigoare"
+                    valueClassName="font-normal text-gray-800"
+                  />
+                );
+              case "comision":
+                return (
                   <InlineDetailField
                     label="Comision"
                     value={activeState.comision || "-"}
                     editValue={draft.comision}
                     isEditing={isEditingPretConditii}
                     onChange={(val) => setField("comision", val)}
-                    placeholder="50%+TVA"
+                    placeholder={isChirias ? "50%+TVA" : "0%"}
                     valueClassName="font-normal text-gray-800"
                   />
-
+                );
+              case "contract":
+                return (
                   <InlineDetailField
                     label="Contract"
                     value={activeState.contractDurata || "-"}
@@ -1901,10 +2511,9 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
                     emptyOptionLabel="Selectează..."
                     valueClassName="font-normal text-gray-800"
                   />
-                </div>
-
-                {/* Row 3 (Închiriere): Avans | Garanție */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                );
+              case "avans":
+                return (
                   <InlineDetailField
                     label="Avans"
                     value={activeState.avans || "-"}
@@ -1915,7 +2524,9 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
                     emptyOptionLabel="Selectează..."
                     valueClassName="font-normal text-gray-800"
                   />
-
+                );
+              case "garantie":
+                return (
                   <InlineDetailField
                     label="Garanție"
                     value={activeState.garantie || "-"}
@@ -1926,22 +2537,9 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
                     emptyOptionLabel="Selectează..."
                     valueClassName="font-normal text-gray-800"
                   />
-                </div>
-              </>
-            ) : (
-              <>
-                {/* Row 2 (Vânzare): Comision | Situație juridică */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <InlineDetailField
-                    label="Comision"
-                    value={activeState.comision || "-"}
-                    editValue={draft.comision}
-                    isEditing={isEditingPretConditii}
-                    onChange={(val) => setField("comision", val)}
-                    placeholder="0%"
-                    valueClassName="font-normal text-gray-800"
-                  />
-
+                );
+              case "situatie_juridica":
+                return (
                   <InlineDetailField
                     label="Situație juridică"
                     value={activeState.situatieJuridica || "-"}
@@ -1951,96 +2549,650 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
                     placeholder="Fara probleme"
                     valueClassName="font-normal text-gray-800"
                   />
+                );
+              case "disponibilitate":
+                return (
+                  <InlineDetailField
+                    label="Disponibilitate"
+                    value={activeState.disponibilitate || "-"}
+                    editValue={draft.disponibilitate}
+                    isEditing={isEditingPretConditii}
+                    onChange={(val) => setField("disponibilitate", val)}
+                    placeholder="Imediată"
+                    valueClassName="font-normal text-gray-800"
+                  />
+                );
+              case "finantare":
+                return (
+                  <ReadOnlyTagsField
+                    label="Finanțare"
+                    items={
+                      activeState.tipAchizitieAcceptat.length > 0
+                        ? activeState.tipAchizitieAcceptat
+                        : ["Credit bancar / fonduri proprii"]
+                    }
+                  />
+                );
+              default:
+                return null;
+            }
+          };
+
+          const renderCustomRows = (
+            rows: DescriptionGridRow[],
+            renderSub: (tagId: string) => React.ReactNode
+          ) => (
+            <div className="space-y-4">
+              {rows.map((row, rIdx) => {
+                if (isDividerOnlyRow(row)) {
+                  return <hr key={row.id || rIdx} className="border-gray-200" />;
+                }
+                return (
+                  <div
+                    key={row.id || rIdx}
+                    className={`grid ${getGridColsClass(row.columns.length)} gap-4 items-start`}
+                  >
+                    {row.columns.map((item: DescriptionGridItem, cIdx: number) => {
+                      const key = getItemKey(item, rIdx, cIdx);
+                      if (item.kind === "filler") {
+                        return <div key={key} className="min-h-[1px]" aria-hidden="true" />;
+                      }
+                      if (item.kind === "divider") {
+                        return (
+                          <div key={key} className="flex items-center py-3">
+                            <hr className="w-full border-gray-200" />
+                          </div>
+                        );
+                      }
+                      if (item.kind === "custom_text") {
+                        return (
+                          <div key={key} className="text-xs text-gray-700 leading-relaxed whitespace-pre-line py-1">
+                            {item.customText || ""}
+                          </div>
+                        );
+                      }
+                      return <div key={key}>{item.tagId ? renderSub(item.tagId) : null}</div>;
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          );
+
+          return (
+            <div
+              id="sec-pret-conditii"
+              className="p-4 sm:p-5 bg-white border border-gray-200 rounded-xl space-y-4 shadow-2xs scroll-mt-[104px]"
+            >
+              <SectionHeader
+                icon={<BadgePercent size={14} className="text-[#BE9662]" />}
+                title={titles.pretConditiiTitle}
+                isEditing={isEditingPretConditii}
+                isSaving={savingSection === "pretConditii"}
+                onStartEdit={() => startEdit("pretConditii")}
+                onCancel={cancelEdit}
+                onSave={() => void saveSection("pretConditii")}
+              />
+
+              {hasCustomDescriptionRows(pretSecLayout) ? (
+                renderCustomRows(pretSecLayout.rows, renderPretSubField)
+              ) : (
+                <div className="space-y-4">
+                  {/* Row 1: Preț (€) | TVA */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {renderPretSubField("pret")}
+                    {renderPretSubField("tva")}
+                  </div>
+
+                  {isChirias ? (
+                    <>
+                      {/* Row 2 (Închiriere): Comision | Contract */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {renderPretSubField("comision")}
+                        {renderPretSubField("contract")}
+                      </div>
+
+                      {/* Row 3 (Închiriere): Avans | Garanție */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {renderPretSubField("avans")}
+                        {renderPretSubField("garantie")}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Row 2 (Vânzare): Comision | Situație juridică */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {renderPretSubField("comision")}
+                        {renderPretSubField("situatie_juridica")}
+                      </div>
+
+                      {/* Row 3 (Vânzare): Disponibilitate */}
+                      {renderPretSubField("disponibilitate")}
+                    </>
+                  )}
                 </div>
+              )}
+            </div>
+          );
+        })()}
 
-                {/* Row 3 (Vânzare): Disponibilitate (Tip achiziție acceptat moved to Informații Cumpărător) */}
+      {/* SECTION 4 (Property mode only): Introducere */}
+      {isPropertyMode &&
+        isDescriptionSectionEnabled(descriptionLayout, "introducere") &&
+        (() => {
+          const introSecLayout = getDescriptionSectionLayout(descriptionLayout, "introducere");
+
+          const renderIntroSubField = (tagId: string): React.ReactNode => {
+            if (tagId === "titlu") {
+              return (
                 <InlineDetailField
-                  label="Disponibilitate"
-                  value={activeState.disponibilitate || "-"}
-                  editValue={draft.disponibilitate}
-                  isEditing={isEditingPretConditii}
-                  onChange={(val) => setField("disponibilitate", val)}
-                  placeholder="Imediată"
-                  valueClassName="font-normal text-gray-800"
+                  label="Titlu"
+                  value={activeState.propertyTitle || "-"}
+                  editValue={draft.propertyTitle}
+                  isEditing={isEditingGenerale}
+                  onChange={(val) => setField("propertyTitle", val)}
+                  placeholder="ex. Apartament 2 camere, decomandat, zonă centrală..."
+                  valueClassName="font-normal text-gray-900"
                 />
-              </>
-            )}
-          </div>
-        </div>
-      )}
+              );
+            }
+            if (tagId === "descriere") {
+              return (
+                <InlineDetailField
+                  label="Descriere"
+                  value={activeState.requirements || "-"}
+                  editValue={draft.requirements}
+                  isEditing={isEditingGenerale}
+                  onChange={(val) => setField("requirements", val)}
+                  placeholder={descriptionPlaceholder}
+                  multiline
+                  rows={4}
+                  autoHeightMaxRows={12}
+                  valueClassName="font-normal text-gray-700"
+                />
+              );
+            }
+            return null;
+          };
 
-      {/* SECTION 3 (Property mode only): Informații Generale */}
-      {isPropertyMode && (
-        <div
-          id="sec-generale"
-          className="p-4 sm:p-5 bg-white border border-gray-200 rounded-xl space-y-4 shadow-2xs scroll-mt-[104px]"
-        >
-          <SectionHeader
-            icon={<FileText size={14} className="text-[#BE9662]" />}
-            title={titles.generaleTitle}
-            isEditing={isEditingGenerale}
-            isSaving={savingSection === "generale"}
-            onStartEdit={() => startEdit("generale")}
-            onCancel={cancelEdit}
-            onSave={() => void saveSection("generale")}
-          />
+          return (
+            <div
+              id="sec-generale"
+              className="p-4 sm:p-5 bg-white border border-gray-200 rounded-xl space-y-4 shadow-2xs scroll-mt-[104px]"
+            >
+              <SectionHeader
+                icon={<FileText size={14} className="text-[#BE9662]" />}
+                title={titles.generaleTitle}
+                isEditing={isEditingGenerale}
+                isSaving={savingSection === "generale"}
+                onStartEdit={() => startEdit("generale")}
+                onCancel={cancelEdit}
+                onSave={() => void saveSection("generale")}
+              />
 
-          <div className="space-y-4">
-            <InlineDetailField
-              label="Titlu"
-              value={activeState.propertyTitle || "-"}
-              editValue={draft.propertyTitle}
-              isEditing={isEditingGenerale}
-              onChange={(val) => setField("propertyTitle", val)}
-              placeholder="ex. Apartament 2 camere, decomandat, zonă centrală..."
-              valueClassName="font-normal text-gray-900"
-            />
+              {hasCustomDescriptionRows(introSecLayout) ? (
+                <div className="space-y-4">
+                  {introSecLayout.rows.map((row, rIdx) => {
+                    if (isDividerOnlyRow(row)) {
+                      return <hr key={row.id || rIdx} className="border-gray-200" />;
+                    }
+                    return (
+                      <div
+                        key={row.id || rIdx}
+                        className={`grid ${getGridColsClass(row.columns.length)} gap-4 items-start`}
+                      >
+                        {row.columns.map((item, cIdx) => {
+                          const key = getItemKey(item, rIdx, cIdx);
+                          if (item.kind === "filler") {
+                            return <div key={key} className="min-h-[1px]" aria-hidden="true" />;
+                          }
+                          if (item.kind === "divider") {
+                            return (
+                              <div key={key} className="flex items-center py-3">
+                                <hr className="w-full border-gray-200" />
+                              </div>
+                            );
+                          }
+                          if (item.kind === "custom_text") {
+                            return (
+                              <div key={key} className="text-xs text-gray-700 leading-relaxed whitespace-pre-line py-1">
+                                {item.customText || ""}
+                              </div>
+                            );
+                          }
+                          return (
+                            <div key={key}>
+                              {item.tagId ? renderIntroSubField(item.tagId) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {renderIntroSubField("titlu")}
+                  {renderIntroSubField("descriere")}
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
-            <InlineDetailField
-              label="Descriere"
-              value={activeState.requirements || "-"}
-              editValue={draft.requirements}
-              isEditing={isEditingGenerale}
-              onChange={(val) => setField("requirements", val)}
-              placeholder={descriptionPlaceholder}
-              multiline
-              rows={4}
-              autoHeightMaxRows={12}
-              valueClassName="font-normal text-gray-700"
-            />
-          </div>
-        </div>
-      )}
-
-      {/* NEXT SECTION: Informații Apartament / Casă / Vilă / Teren / Spațiu Comercial */}
+      {/* NEXT SECTION: Apartament / Informații Casă / Vilă / Teren / Spațiu Comercial */}
+      {(!isPropertyMode || isDescriptionSectionEnabled(descriptionLayout, "apartament")) && (
       <div
         id="sec-imobil"
-        className="p-4 sm:p-5 bg-white border border-gray-200 rounded-xl space-y-4 shadow-2xs scroll-mt-[104px]"
+        className={
+          isPropertyMode && isApartament
+            ? "bg-white border border-gray-200 rounded-xl shadow-2xs overflow-hidden scroll-mt-[104px]"
+            : "p-4 sm:p-5 bg-white border border-gray-200 rounded-xl space-y-4 shadow-2xs scroll-mt-[104px]"
+        }
       >
-        <SectionHeader
-          icon={<Home size={14} className="text-[#BE9662]" />}
-          title={titles.imobilTitle}
-          isEditing={isEditingImobil}
-          isSaving={savingSection === "imobil"}
-          onStartEdit={() => startEdit("imobil")}
-          onCancel={cancelEdit}
-          onSave={() => void saveSection("imobil")}
-        />
+        <div className={isPropertyMode && isApartament ? "px-4 sm:px-5 pt-4 sm:pt-5" : ""}>
+          <SectionHeader
+            icon={<Home size={14} className="text-[#BE9662]" />}
+            title={titles.imobilTitle}
+            isEditing={isEditingImobil}
+            isSaving={savingSection === "imobil"}
+            onStartEdit={() => startEdit("imobil")}
+            onCancel={cancelEdit}
+            onSave={() => void saveSection("imobil")}
+          />
+        </div>
 
-        <div className="space-y-4">
-          {/* Modalitate achiziție (Lead/Cerere Cumpărător only; Tip achiziție acceptat moved to Preț & Condiții for property mode) */}
-          {!isPropertyMode && isCumparator && !isComercial && (
-            <InlineDetailField
-              label="Modalitate achiziție"
-              value={activeState.modalitateAchizitie || "-"}
-              editValue={draft.modalitateAchizitie}
-              isEditing={isEditingImobil}
-              onChange={(val) => setField("modalitateAchizitie", val)}
-              options={MODALITATE_ACHIZITIE_OPTIONS}
-              emptyOptionLabel="Selectează..."
-              valueClassName="font-normal text-gray-800"
-            />
-          )}
+        {isPropertyMode && isApartament ? (
+          (() => {
+            const renderRoomSubSection = (
+              subKey: ApartmentSubSectionKey,
+              subTitle: string
+            ) => {
+              const isSectionBaseOn = Boolean(activeApartmentDetails.sectionBaseOn[subKey]);
+
+              return (
+                <div className="flex flex-col min-w-0">
+                  <div className="min-h-10 py-2 px-4 sm:px-5 bg-gray-50/70 border-b border-gray-100 flex items-center justify-between gap-3 select-none">
+                    <span className="font-title text-[12px] font-semibold text-[#051D35] truncate">
+                      {subTitle}
+                    </span>
+                    <BaseInfoSwitch
+                      checked={isSectionBaseOn}
+                      onChange={(next) => handleToggleSubSectionBaseInfo(subKey, next)}
+                      label="Informații bază"
+                      disabled={savingSection === "imobil"}
+                    />
+                  </div>
+
+                  <div className="p-4 sm:p-5 space-y-4 flex-1">
+                    {apartmentRooms.map((room) => {
+                      const displayVal =
+                        activeApartmentDetails.values[subKey]?.[room.key] ?? "";
+
+                      return (
+                        <div key={`${subKey}-${room.key}`} className="min-w-0">
+                          <label className="block text-[12px] leading-4 mb-1 font-semibold text-[#051D35]">
+                            {room.label}
+                          </label>
+                          <input
+                            type="text"
+                            value={displayVal}
+                            readOnly={!isEditingImobil}
+                            onChange={(e) =>
+                              handleApartmentRoomValueChange(
+                                subKey,
+                                room.key,
+                                e.target.value
+                              )
+                            }
+                            onClick={() => {
+                              if (!isEditingImobil) {
+                                startEdit("imobil");
+                              }
+                            }}
+                            placeholder={`ex. ${room.defaults[subKey]}`}
+                            className={`w-full h-9 px-3 text-xs font-normal border rounded-md transition-colors focus:outline-none ${
+                              isEditingImobil
+                                ? "border-gray-200 bg-gray-50/90 hover:bg-gray-100/70 text-gray-900 focus:border-[#BE9662] focus:ring-1 focus:ring-[#BE9662]"
+                                : "border-gray-200 bg-white text-gray-800 hover:border-gray-300 cursor-text"
+                            }`}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            };
+
+            const generalSubSectionEl = (
+              <div className="flex flex-col min-w-0">
+                <div className="min-h-10 py-2 px-4 sm:px-5 bg-gray-50/70 border-b border-gray-100 flex items-center select-none">
+                  <span className="font-title text-[12px] font-semibold text-[#051D35]">
+                    General
+                  </span>
+                </div>
+
+                    <div className="p-4 sm:p-5 space-y-4 flex-1">
+                      {/* Categorie / Compartimentare */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {isEditingImobil ? (
+                          <div>
+                            <label className="block text-[12px] leading-4 mb-1 font-semibold text-[#051D35]">
+                              Categorie
+                            </label>
+                            <select
+                              value={draft.buildingType}
+                              onChange={(e) =>
+                                handleBuildingTypeChange(
+                                  e.target.value as BuildingCategoryType
+                                )
+                              }
+                              className={selectClass}
+                            >
+                              {BUILDING_CATEGORY_OPTIONS.map((opt) => (
+                                <option key={opt.value} value={opt.value}>
+                                  {opt.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : (
+                          <InlineDetailField
+                            label="Categorie"
+                            value={BUILDING_TYPE_LABEL[activeState.buildingType]}
+                            isEditing={false}
+                            valueClassName="font-normal text-gray-800"
+                          />
+                        )}
+
+                        <InlineDetailField
+                          label="Compartimentare"
+                          value={activeState.compartimentare || "-"}
+                          editValue={draft.compartimentare}
+                          isEditing={isEditingImobil}
+                          onChange={(val) => setField("compartimentare", val)}
+                          options={COMPARTIMENTARE_OPTIONS}
+                          emptyOptionLabel="Selectează..."
+                          valueClassName="font-normal text-gray-800"
+                        />
+                      </div>
+
+                      {/* Număr camere / Număr băi */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {isEditingImobil ? (
+                          <MultiSelectDropdown
+                            label="Număr camere"
+                            options={NUMAR_CAMERE_OPTIONS}
+                            selected={draft.selectedRooms}
+                            onChange={handlePropertyRoomsChange}
+                            isOpen={openMultiDropdown === "rooms"}
+                            onToggleOpen={() =>
+                              setOpenMultiDropdown((prev) =>
+                                prev === "rooms" ? null : "rooms"
+                              )
+                            }
+                            onClose={() =>
+                              setOpenMultiDropdown((prev) =>
+                                prev === "rooms" ? null : prev
+                              )
+                            }
+                            disabled={savingSection === "imobil"}
+                          />
+                        ) : (
+                          <ReadOnlyTagsField
+                            label="Număr camere"
+                            items={activeState.selectedRooms}
+                          />
+                        )}
+
+                        {isEditingImobil ? (
+                          <MultiSelectDropdown
+                            label="Număr băi"
+                            options={NUMAR_BAI_OPTIONS}
+                            selected={draft.selectedBaths}
+                            onChange={handlePropertyBathsChange}
+                            isOpen={openMultiDropdown === "baths"}
+                            onToggleOpen={() =>
+                              setOpenMultiDropdown((prev) =>
+                                prev === "baths" ? null : "baths"
+                              )
+                            }
+                            onClose={() =>
+                              setOpenMultiDropdown((prev) =>
+                                prev === "baths" ? null : prev
+                              )
+                            }
+                            disabled={savingSection === "imobil"}
+                          />
+                        ) : (
+                          <ReadOnlyTagsField
+                            label="Număr băi"
+                            items={activeState.selectedBaths}
+                          />
+                        )}
+                      </div>
+
+                      {/* Etaj apartament / Etaje total bloc */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {isEditingImobil ? (
+                          <MultiSelectDropdown
+                            label="Etaj apartament"
+                            options={ETAJ_OPTIONS}
+                            selected={draft.selectedFloors}
+                            onChange={(next) => setField("selectedFloors", next)}
+                            isOpen={openMultiDropdown === "floors"}
+                            onToggleOpen={() =>
+                              setOpenMultiDropdown((prev) =>
+                                prev === "floors" ? null : "floors"
+                              )
+                            }
+                            onClose={() =>
+                              setOpenMultiDropdown((prev) =>
+                                prev === "floors" ? null : prev
+                              )
+                            }
+                            disabled={savingSection === "imobil"}
+                          />
+                        ) : (
+                          <ReadOnlyTagsField
+                            label="Etaj apartament"
+                            items={activeState.selectedFloors}
+                          />
+                        )}
+
+                        {isEditingImobil ? (
+                          <div>
+                            <label className="block text-[12px] leading-4 mb-1 font-semibold text-[#051D35]">
+                              Etaje total bloc
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={60}
+                              value={draft.totalFloors}
+                              onChange={(e) => setField("totalFloors", e.target.value)}
+                              placeholder="ex. 10"
+                              className={inputClass}
+                            />
+                          </div>
+                        ) : (
+                          <InlineDetailField
+                            label="Etaje total bloc"
+                            value={activeState.totalFloors || "-"}
+                            isEditing={false}
+                            valueClassName="font-normal text-gray-800 tabular-nums"
+                          />
+                        )}
+                      </div>
+
+                      {/* Mobilare / Utilare */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <InlineDetailField
+                          label="Mobilare"
+                          value={activeState.mobilare || "-"}
+                          editValue={draft.mobilare}
+                          isEditing={isEditingImobil}
+                          onChange={(val) => setField("mobilare", val)}
+                          options={MOBILARE_UTILARE_OPTIONS}
+                          emptyOptionLabel="Selectează..."
+                          valueClassName="font-normal text-gray-800"
+                        />
+
+                        <InlineDetailField
+                          label="Utilare"
+                          value={activeState.utilare || "-"}
+                          editValue={draft.utilare}
+                          isEditing={isEditingImobil}
+                          onChange={(val) => setField("utilare", val)}
+                          options={MOBILARE_UTILARE_OPTIONS}
+                          emptyOptionLabel="Selectează..."
+                          valueClassName="font-normal text-gray-800"
+                        />
+                      </div>
+
+                      {/* Tip parcare / Număr locuri parcare */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <InlineDetailField
+                          label="Tip parcare"
+                          value={activeState.tipParcare || "-"}
+                          editValue={draft.tipParcare}
+                          isEditing={isEditingImobil}
+                          onChange={(val) => setField("tipParcare", val)}
+                          options={TIP_PARCARE_OPTIONS}
+                          emptyOptionLabel="Selectează..."
+                          valueClassName="font-normal text-gray-800"
+                        />
+
+                        <InlineDetailField
+                          label="Număr locuri parcare"
+                          value={activeState.numarLocuriParcare || "-"}
+                          editValue={draft.numarLocuriParcare}
+                          isEditing={isEditingImobil}
+                          onChange={(val) => setField("numarLocuriParcare", val)}
+                          options={NUMAR_LOCURI_PARCARE_OPTIONS}
+                          emptyOptionLabel="Selectează..."
+                          valueClassName="font-normal text-gray-800"
+                        />
+                      </div>
+
+                      {/* Zonă */}
+                      {isEditingImobil ? (
+                        <TagMultiSelect
+                          label={zoneLabel}
+                          options={ZONA_OPTIONS}
+                          selected={draft.zoneList}
+                          onChange={(next) => setField("zoneList", next)}
+                          placeholder="Caută zonă..."
+                          requireQueryToOpen
+                          maxVisibleOptions={8}
+                          disabled={savingSection === "imobil"}
+                        />
+                      ) : (
+                        <ReadOnlyTagsField label={zoneLabel} items={activeState.zoneList} />
+                      )}
+                    </div>
+                  </div>
+            );
+
+            const renderApartamentSub = (tagId: string): React.ReactNode => {
+              switch (tagId) {
+                case "general":
+                  return generalSubSectionEl;
+                case "finisaje":
+                  return renderRoomSubSection("finisaje", "Finisaje");
+                case "mobilare":
+                  return renderRoomSubSection("mobilare", "Mobilare");
+                case "dotari":
+                  return renderRoomSubSection("dotari", "Dotări");
+                default:
+                  return null;
+              }
+            };
+
+            const apartamentSecLayout = getDescriptionSectionLayout(descriptionLayout, "apartament");
+            if (hasCustomDescriptionRows(apartamentSecLayout)) {
+              return (
+                <div className="divide-y divide-gray-200">
+                  {apartamentSecLayout.rows.map((row, rIdx) => {
+                    if (isDividerOnlyRow(row)) {
+                      return (
+                        <div key={row.id || rIdx} className="px-4 sm:px-5 py-3">
+                          <hr className="border-gray-200" />
+                        </div>
+                      );
+                    }
+                    return (
+                      <div
+                        key={row.id || rIdx}
+                        className={`grid ${getGridColsClass(row.columns.length)} divide-y md:divide-y-0 md:divide-x divide-gray-200`}
+                      >
+                        {row.columns.map((item, cIdx) => {
+                          const key = getItemKey(item, rIdx, cIdx);
+                          if (item.kind === "filler") {
+                            return <div key={key} className="min-h-[1px]" aria-hidden="true" />;
+                          }
+                          if (item.kind === "divider") {
+                            return (
+                              <div key={key} className="p-4 sm:p-5 flex items-center">
+                                <hr className="w-full border-gray-200" />
+                              </div>
+                            );
+                          }
+                          if (item.kind === "custom_text") {
+                            return (
+                              <div
+                                key={key}
+                                className="p-4 sm:p-5 text-xs text-gray-700 leading-relaxed whitespace-pre-line"
+                              >
+                                {item.customText || ""}
+                              </div>
+                            );
+                          }
+                          return (
+                            <React.Fragment key={key}>
+                              {item.tagId ? renderApartamentSub(item.tagId) : null}
+                            </React.Fragment>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            }
+
+            return (
+              <div className="divide-y divide-gray-200">
+                {/* Row 1: General (left) & Finisaje (right) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                  {generalSubSectionEl}
+                  {renderRoomSubSection("finisaje", "Finisaje")}
+                </div>
+
+                {/* Row 2: Mobilare (left) & Dotări (right) */}
+                <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-gray-200">
+                  {renderRoomSubSection("mobilare", "Mobilare")}
+                  {renderRoomSubSection("dotari", "Dotări")}
+                </div>
+              </div>
+            );
+          })()
+        ) : (
+          <div className="space-y-4">
+            {/* Modalitate achiziție (Lead/Cerere Cumpărător only; Tip achiziție acceptat moved to Preț & Condiții for property mode) */}
+            {!isPropertyMode && isCumparator && !isComercial && (
+              <InlineDetailField
+                label="Modalitate achiziție"
+                value={activeState.modalitateAchizitie || "-"}
+                editValue={draft.modalitateAchizitie}
+                isEditing={isEditingImobil}
+                onChange={(val) => setField("modalitateAchizitie", val)}
+                options={MODALITATE_ACHIZITIE_OPTIONS}
+                emptyOptionLabel="Selectează..."
+                valueClassName="font-normal text-gray-800"
+              />
+            )}
 
           {/* Categorie / Compartimentare (Apartament & Casa/Vila) */}
           {(isApartament || isCasaVila) && (
@@ -2424,7 +3576,7 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
             <ReadOnlyTagsField label={zoneLabel} items={activeState.zoneList} />
           )}
 
-          {/* Descriere (lead) / Cerințe specifice (cerere) — moved to Informații Generale for property mode */}
+          {/* Descriere (lead) / Cerințe specifice (cerere) — moved to Introducere for property mode */}
           {!isPropertyMode && (
             <InlineDetailField
               label={descriptionLabel}
@@ -2440,7 +3592,9 @@ export const CriteriaDetailSections: React.FC<CriteriaDetailSectionsProps> = ({
             />
           )}
         </div>
+        )}
       </div>
+      )}
 
       {/* SECTION 3: Informații Avansate */}
       <div

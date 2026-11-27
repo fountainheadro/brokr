@@ -2,7 +2,7 @@ export const typographyTokens = {
   fonts: {
     sans: '"Lato", sans-serif',
     title: '"Lato", sans-serif',
-    mono: '"Lato", sans-serif',
+    mono: '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
   },
   sizes: {
     xs: "11px",

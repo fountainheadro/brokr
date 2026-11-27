@@ -20,6 +20,7 @@ import {
   projectLeadToSummary,
   type LeadSummary,
 } from "./svc_lead-projection";
+import { normalizeLeadToCanonicalSpecs } from "../portals/svc_canonical-normalizer";
 
 export const CRM_TENANT_COLLECTIONS = [
   "leads",
@@ -188,9 +189,11 @@ function parseParcareCount(parcare: string): number | undefined {
 function syncLeadDerivedFields(
   target: Record<string, any>,
   patch?: Record<string, any>,
-  existingCriteria?: Record<string, any>
+  existingCriteria?: Record<string, any>,
+  options?: { isCreate?: boolean }
 ): void {
   const hasPatch = Boolean(patch && Object.keys(patch).length > 0);
+  const isCreate = Boolean(options?.isCreate);
   const p = patch || {};
   const hasExtractedPatch = Boolean(p.extractedData && typeof p.extractedData === "object");
 
@@ -265,10 +268,16 @@ function syncLeadDerivedFields(
     p["extractedData.originalTitle"] !== undefined && p["extractedData.originalTitle"] !== null
       ? String(p["extractedData.originalTitle"]).trim()
       : null;
+  const patchedIntroTitle =
+    p["extractedData.presentationSections.introducere.titlu"] !== undefined &&
+    p["extractedData.presentationSections.introducere.titlu"] !== null
+      ? String(p["extractedData.presentationSections.introducere.titlu"]).trim()
+      : null;
   const patchedNestedTitle = hasExtractedPatch
     ? (() => {
         const v =
           getNestedValue(p.extractedData, "crmData.descriere.titlu") ??
+          getNestedValue(p.extractedData, "presentationSections.introducere.titlu") ??
           getNestedValue(p.extractedData, "originalTitle");
         return v !== undefined && v !== null ? String(v).trim() : null;
       })()
@@ -279,47 +288,62 @@ function syncLeadDerivedFields(
     typeof p.criteriiFormular.propertyTitle === "string" &&
     p.criteriiFormular.propertyTitle.trim()
       ? p.criteriiFormular.propertyTitle.trim()
-      : null;
+      : p["criteriiFormular.propertyTitle"] !== undefined &&
+          p["criteriiFormular.propertyTitle"] !== null &&
+          String(p["criteriiFormular.propertyTitle"]).trim()
+        ? String(p["criteriiFormular.propertyTitle"]).trim()
+        : null;
   const syncedTitle =
     patchedTopTitle ||
     patchedCrmDotTitle ||
+    patchedIntroTitle ||
     patchedOrigTitle ||
     patchedNestedTitle ||
     patchedCriteriaTitle;
 
+  const explicitManualTitleFalse =
+    p["extractedData.titleManuallyEdited"] === false ||
+    (hasExtractedPatch && p.extractedData?.titleManuallyEdited === false);
   const patchedManualTitleFlag =
     p["extractedData.titleManuallyEdited"] === true ||
-    (hasExtractedPatch && p.extractedData?.titleManuallyEdited === true);
+    (hasExtractedPatch && p.extractedData?.titleManuallyEdited === true) ||
+    (!isCreate &&
+      !explicitManualTitleFalse &&
+      Boolean(patchedTopTitle || patchedCrmDotTitle || patchedIntroTitle || patchedOrigTitle || patchedCriteriaTitle));
 
   if (syncedTitle) {
     target.title = syncedTitle;
-    if (target.extractedData && typeof target.extractedData === "object") {
-      const ext = ensureExtracted();
-      ext.originalTitle = syncedTitle;
-      if (patchedManualTitleFlag) {
-        ext.titleManuallyEdited = true;
-      }
-      if (ext.olxMeta && typeof ext.olxMeta === "object") {
-        ext.olxMeta = { ...ext.olxMeta, originalTitle: syncedTitle };
-      }
-      if (ext.crmData && typeof ext.crmData === "object") {
-        ext.crmData = {
-          ...ext.crmData,
-          descriere: {
-            ...(ext.crmData.descriere || {}),
-            titlu: syncedTitle,
-          },
-        };
-      }
-      if (ext.presentationSections?.introducere && typeof ext.presentationSections.introducere === "object") {
-        ext.presentationSections = {
-          ...ext.presentationSections,
-          introducere: {
-            ...ext.presentationSections.introducere,
-            titlu: syncedTitle,
-          },
-        };
-      }
+    const ext = ensureExtracted();
+    ext.originalTitle = syncedTitle;
+    if (patchedManualTitleFlag) {
+      ext.titleManuallyEdited = true;
+    }
+    if (ext.olxMeta && typeof ext.olxMeta === "object") {
+      ext.olxMeta = { ...ext.olxMeta, originalTitle: syncedTitle };
+    }
+    if (ext.crmData && typeof ext.crmData === "object") {
+      ext.crmData = {
+        ...ext.crmData,
+        descriere: {
+          ...(ext.crmData.descriere || {}),
+          titlu: syncedTitle,
+        },
+      };
+    }
+    if (ext.presentationSections && typeof ext.presentationSections === "object") {
+      ext.presentationSections = {
+        ...ext.presentationSections,
+        introducere: {
+          ...(ext.presentationSections.introducere || {}),
+          titlu: syncedTitle,
+        },
+      };
+    }
+    if (target.criteriiFormular && typeof target.criteriiFormular === "object") {
+      target.criteriiFormular = {
+        ...target.criteriiFormular,
+        propertyTitle: syncedTitle,
+      };
     }
   }
 
@@ -339,10 +363,16 @@ function syncLeadDerivedFields(
     p["extractedData.markdownMarketing"] !== null
       ? String(p["extractedData.markdownMarketing"])
       : null;
+  const patchedIntroSummaryDot =
+    p["extractedData.presentationSections.introducere.summary"] !== undefined &&
+    p["extractedData.presentationSections.introducere.summary"] !== null
+      ? String(p["extractedData.presentationSections.introducere.summary"])
+      : null;
   const patchedNestedDesc = hasExtractedPatch
     ? (() => {
         const v =
           getNestedValue(p.extractedData, "crmData.descriere.continut") ??
+          getNestedValue(p.extractedData, "presentationSections.introducere.summary") ??
           getNestedValue(p.extractedData, "originalDescription");
         return v !== undefined && v !== null ? String(v) : null;
       })()
@@ -350,15 +380,33 @@ function syncLeadDerivedFields(
   const syncedDesc =
     patchedCrmDotDesc !== null
       ? patchedCrmDotDesc
-      : patchedOrigDotDesc !== null
-        ? patchedOrigDotDesc
-        : patchedMarkdownDotDesc !== null
-          ? patchedMarkdownDotDesc
-          : patchedNestedDesc;
+      : patchedIntroSummaryDot !== null
+        ? patchedIntroSummaryDot
+        : patchedOrigDotDesc !== null
+          ? patchedOrigDotDesc
+          : patchedMarkdownDotDesc !== null
+            ? patchedMarkdownDotDesc
+            : patchedNestedDesc;
+
+  const explicitManualDescFalse =
+    p["extractedData.descriptionManuallyEdited"] === false ||
+    (hasExtractedPatch && p.extractedData?.descriptionManuallyEdited === false);
+  const patchedManualDescFlag =
+    p["extractedData.descriptionManuallyEdited"] === true ||
+    (hasExtractedPatch && p.extractedData?.descriptionManuallyEdited === true) ||
+    (!isCreate &&
+      !explicitManualDescFalse &&
+      (patchedCrmDotDesc !== null ||
+        patchedIntroSummaryDot !== null ||
+        patchedOrigDotDesc !== null ||
+        patchedMarkdownDotDesc !== null));
 
   if (syncedDesc !== null) {
     const ext = ensureExtracted();
     ext.originalDescription = syncedDesc;
+    if (patchedManualDescFlag) {
+      ext.descriptionManuallyEdited = true;
+    }
     if (ext.crmData && typeof ext.crmData === "object") {
       ext.crmData = {
         ...ext.crmData,
@@ -368,17 +416,26 @@ function syncLeadDerivedFields(
         },
       };
     }
-    if (typeof ext.markdownMarketing === "string") {
+    if (typeof ext.markdownMarketing === "string" || patchedManualDescFlag) {
       ext.markdownMarketing = syncedDesc;
     }
-    if (ext.presentationSections?.introducere && typeof ext.presentationSections.introducere === "object") {
+    if (ext.presentationSections && typeof ext.presentationSections === "object") {
       ext.presentationSections = {
         ...ext.presentationSections,
         introducere: {
-          ...ext.presentationSections.introducere,
+          ...(ext.presentationSections.introducere || {}),
           summary: syncedDesc,
         },
       };
+    }
+    if (target.criteriiFormular && typeof target.criteriiFormular === "object") {
+      target.criteriiFormular = {
+        ...target.criteriiFormular,
+        requirements: syncedDesc,
+      };
+    }
+    if (typeof target.requirements === "string" || patchedManualDescFlag) {
+      target.requirements = syncedDesc;
     }
   }
 
@@ -693,6 +750,10 @@ export class CrmTenantStoreService {
     canonicalDoc: Record<string, any>,
     operation: string
   ): Promise<LeadSummary> {
+    // Phase 7: lazily maintain typed canonicalSpecs on canonical lead/property docs
+    // without touching existing string fields or bloating slim leads_summary.
+    canonicalDoc.canonicalSpecs = normalizeLeadToCanonicalSpecs(canonicalDoc);
+
     const summaryDoc = projectLeadToSummary(canonicalDoc, {
       tenantId: safeTenant,
       isSharedLead: false,
@@ -1266,7 +1327,7 @@ export class CrmTenantStoreService {
       doc.lastMovedAt = doc.lastMovedAt || now;
       doc.docVersion = 1;
       doc.deletedAt = doc.status === "Sterse" ? now : null;
-      syncLeadDerivedFields(doc);
+      syncLeadDerivedFields(doc, sanitized, undefined, { isCreate: true });
     } else if (collectionName === "contacts" && !doc.contactId) {
       doc.contactId = await this.getNextEntityId(safeTenant, "client");
     } else if (collectionName === "staff") {

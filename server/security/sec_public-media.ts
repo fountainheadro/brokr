@@ -542,6 +542,7 @@ export async function applyPublicImageProtections(
     viewerStamp: string;
     maxWidth?: number | null;
     preferWebp?: boolean;
+    skipPersistedLookup?: boolean;
   }
 ): Promise<{ buffer: Buffer; mimeType: string }> {
   const capWidth = Math.min(1600, Math.max(100, options.maxWidth || 1200));
@@ -570,16 +571,18 @@ export async function applyPublicImageProtections(
     }
 
     // Check persistent Cloud Storage before running sharp/ImageMagick/Jimp (survives cold restarts)
-    const persisted = await MediaPipelineService.getPersistedPublicShareVariant({
-      shareCode: options.propertyCode || "BROKR",
-      sourceKey: options.cacheKey,
-      width: capWidth,
-      preferWebp,
-    });
-    if (persisted && persisted.buffer.length > 0) {
-      putProtectedMemoryCache(fullCacheKey, persisted.buffer, persisted.mimeType);
-      writeDiskCachedPublicImage(fullCacheKey, persisted.buffer, persisted.mimeType);
-      return { buffer: persisted.buffer, mimeType: persisted.mimeType };
+    if (!options.skipPersistedLookup) {
+      const persisted = await MediaPipelineService.getPersistedPublicShareVariant({
+        shareCode: options.propertyCode || "BROKR",
+        sourceKey: options.cacheKey,
+        width: capWidth,
+        preferWebp,
+      });
+      if (persisted && persisted.buffer.length > 0) {
+        putProtectedMemoryCache(fullCacheKey, persisted.buffer, persisted.mimeType);
+        writeDiskCachedPublicImage(fullCacheKey, persisted.buffer, persisted.mimeType);
+        return { buffer: persisted.buffer, mimeType: persisted.mimeType };
+      }
     }
 
     let outBuffer: Buffer;

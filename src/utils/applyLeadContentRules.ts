@@ -1,6 +1,6 @@
 import type { Lead } from "../services/leadsService";
 import { automationSettingsService } from "../services/automationSettingsService";
-import { buildTitleFromAutomationRule } from "./titleAutomationEngine";
+import { buildTitleFromAutomationRule, extractTitleInputFromLead } from "./titleAutomationEngine";
 import { generateStandardAdTitle } from "./propertyTitleGenerator";
 import { getApiAuthHeaders } from "../lib/apiAuth";
 import { findAreaInText, hasRealNeighborhoodArea } from "./zoneResolutionUtils";
@@ -166,7 +166,8 @@ export async function applyLeadTitleAndDescriptionRules(params: {
   const utilitati = crmData?.utilitati || {};
 
   const sourceTitle = String(
-    extracted?.originalTitle ||
+    extracted?.crawledOriginalTitle ||
+      extracted?.originalTitle ||
       extracted?.olxMeta?.originalTitle ||
       lead.title ||
       crmData?.descriere?.titlu ||
@@ -174,7 +175,8 @@ export async function applyLeadTitleAndDescriptionRules(params: {
   ).trim();
 
   const sourceDescription = String(
-    extracted?.originalDescription ||
+    extracted?.crawledOriginalDescription ||
+      extracted?.originalDescription ||
       lead.notes ||
       crmData?.descriere?.continut ||
       ""
@@ -224,27 +226,22 @@ export async function applyLeadTitleAndDescriptionRules(params: {
 
   // Build a clean automationSource strictly from verified structured fields and the real original ad copy.
   // Never spread stale/polluted `extracted.automationSource` (which may carry old full-page HTML text or bogus stations).
-  const automationSource = {
+  const extractedLeadInput = extractTitleInputFromLead(lead, {
     transactionType,
     categoria: category,
-    camere: specs?.detalii?.camere || lead.rooms || "",
-    suprafataUtila: specs?.suprafete?.utila || (lead.usefulArea ? String(lead.usefulArea) : ""),
-    suprafataConstruita: specs?.suprafete?.construita || "",
-    etaj: specs?.detalii?.etaj || lead.floor || "",
-    etajeTotal: specs?.detalii?.totalEtaje || lead.totalFloors || "",
     zona: verifiedZone,
     oras,
+    propertyId: propertyId || lead.propertyId || "",
+    rawTitle: sourceTitle,
+    rawText: sourceDescription || sourceTitle,
+  });
+  const automationSource = {
+    ...extractedLeadInput,
     compartimentare: specs?.detalii?.compartimentare || lead.compartimentare || "",
     sistemIncalzire: Array.isArray(utilitati?.sistemIncalzire)
       ? utilitati.sistemIncalzire.join(", ")
       : lead.sursaIncalzire || "",
-    mobilat: lead.mobilare || utilitati?.dotari?.mobilat || "",
-    utilare: lead.utilare || "",
-    parcare: lead.parcare || "",
     balcoane: specs?.detalii?.balcoane || "",
-    propertyId: propertyId || lead.propertyId || "",
-    rawTitle: sourceTitle,
-    rawText: sourceDescription || sourceTitle,
   };
 
   let titleRule = automationSettingsService.getCachedTitleRule();
@@ -358,6 +355,8 @@ export async function applyLeadTitleAndDescriptionRules(params: {
         }
       : {}),
     automationSource,
+    crawledOriginalTitle: extracted?.crawledOriginalTitle || sourceTitle,
+    crawledOriginalDescription: extracted?.crawledOriginalDescription || sourceDescription,
     originalTitle: sourceTitle,
     originalDescription: sourceDescription,
     markdownMarketing: formattedDescription,

@@ -11,6 +11,7 @@ import { AiQuotaTracker } from "../../../ai/usage/svc_quota-tracker";
 import { TenantResolutionService } from "../tenancy/svc_tenant-resolution";
 import { ForbiddenError, AppError } from "../errors/app_error";
 import { logger } from "../logger/logger";
+import { TelemetryCollectorService } from "../telemetry/svc_telemetry-collector";
 
 const MAX_CONCURRENT_AI_PER_TENANT = 5;
 const activeAiRequestsByTenant = new Map<string, number>();
@@ -151,8 +152,16 @@ export class AiOrchestrator {
           tokenCount: geminiResult.outputTokens,
         });
 
-        // 7. Commit Actual AI Quota Consumption durably
+        // 7. Commit Actual AI Quota Consumption durably & record Phase 9 agency telemetry
         await QuotaService.commitAiQuotaAsync(reservationId, geminiResult.totalTokens);
+        TelemetryCollectorService.recordAiUsage({
+          tenantId,
+          model,
+          promptTokens: geminiResult.inputTokens,
+          outputTokens: geminiResult.outputTokens,
+          totalTokens: geminiResult.totalTokens,
+          requests: 1,
+        });
 
         // 8. Create Usage Audit Record
         const costEstimate = AiQuotaTracker.calculate_cost_eur(

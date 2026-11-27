@@ -11,6 +11,7 @@ import { ModuleCatalogService } from "./svc_module";
 import { TenantMembershipService } from "../tenancy/svc_tenant-membership";
 import { QuotaExceededError, NotFoundError } from "../errors/app_error";
 import { PersistentStoreService } from "../database/svc_persistent-store";
+import { StorageMetadataRepository } from "../storage/repo_storage-metadata";
 
 export interface AiQuotaReservation {
   id: string;
@@ -133,8 +134,22 @@ export class QuotaService {
     const members = TenantMembershipService.listTenantMembers(tenantId);
     const activeAgents = members.filter((m) => m.status === "active").length;
 
+    // Storage MB reflects the higher of recorded quota counter or real indexed StorageMetadataRepository bytes
+    let indexedStorageMb = 0;
+    try {
+      const files = StorageMetadataRepository.listByTenant(tenantId);
+      let totalBytes = 0;
+      for (const file of files) {
+        totalBytes += Number(file?.sizeBytes || 0);
+      }
+      indexedStorageMb = Math.round((totalBytes / (1024 * 1024)) * 100) / 100;
+    } catch {
+      indexedStorageMb = 0;
+    }
+
     return {
       ...usage,
+      storageMb: Math.max(usage.storageMb || 0, indexedStorageMb),
       agents: activeAgents,
     };
   }

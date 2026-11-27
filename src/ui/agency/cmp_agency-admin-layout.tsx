@@ -18,11 +18,13 @@ import { OrgNavigationSidebar, NavGroup } from "../organisms/common/org_navigati
 
 export interface AgencyAdminLayoutProps {
   title?: string;
+  subHeader?: React.ReactNode;
   children: React.ReactNode;
 }
 
 export const CmpAgencyAdminLayout: React.FC<AgencyAdminLayoutProps> = ({
   title = "Administrare Agenție",
+  subHeader,
   children,
 }) => {
   const navigate = useNavigate();
@@ -160,6 +162,7 @@ export const CmpAgencyAdminLayout: React.FC<AgencyAdminLayoutProps> = ({
             </div>
           </div>
         </header>
+        {subHeader}
 
         {/* Scrollable Main Area */}
         <main className="flex-1 overflow-y-auto p-6">{children}</main>
